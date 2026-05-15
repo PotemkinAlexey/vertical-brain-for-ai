@@ -4,10 +4,12 @@ from vertical_brain.core.context_lock import ContextLock
 from vertical_brain.core.models import (
     ContextBudget,
     ContextPolicy,
+    NamespaceMap,
     SearchCandidateHandle,
     SearchContextResult,
     SearchResult,
 )
+from vertical_brain.core.namespace_map import NamespaceMapBuilder
 from vertical_brain.core.search import BrainSearch
 
 
@@ -22,6 +24,20 @@ class ContextSession:
         self.store = store
         self.search = BrainSearch(store)
         self.lock = ContextLock(store)
+        self.map_builder = NamespaceMapBuilder(store)
+
+    def namespace_map(
+        self,
+        *,
+        root_path: str | None = None,
+        max_depth: int | None = None,
+        summary_max_chars: int = 240,
+    ) -> NamespaceMap:
+        return self.map_builder.build(
+            root_path=root_path,
+            max_depth=max_depth,
+            summary_max_chars=summary_max_chars,
+        )
 
     def search_locked_context(
         self,

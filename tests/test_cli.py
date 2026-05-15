@@ -210,6 +210,50 @@ def test_cli_unknown_ask_requests_clarification(monkeypatch, capsys, tmp_path):
     assert "Allowed context:" not in output
 
 
+def test_cli_map_prints_namespace_map_without_raw_chunk_content(monkeypatch, capsys, tmp_path):
+    response_file = write_llm_response(tmp_path, "ingest.json", ingest_response())
+    run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--llm-response-file",
+        str(response_file),
+        "ingest",
+        "Databricks raw note hidden from namespace map.",
+    )
+    store = JsonStore(tmp_path / "data")
+    store.update_node_gold_summary("WORK/DataArt", "Stable DataArt summary")
+
+    output = run_cli(monkeypatch, capsys, tmp_path, "map", "--path", "WORK/DataArt", "--max-depth", "1")
+
+    assert "Namespace map:" in output
+    assert "WORK/DataArt" in output
+    assert "gold: Stable DataArt summary" in output
+    assert "subtree=1" in output
+    assert "Databricks raw note hidden" not in output
+
+
+def test_cli_map_json_is_model_readable(monkeypatch, capsys, tmp_path):
+    response_file = write_llm_response(tmp_path, "ingest.json", ingest_response())
+    run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--llm-response-file",
+        str(response_file),
+        "ingest",
+        "Databricks raw note hidden from namespace map.",
+    )
+
+    output = run_cli(monkeypatch, capsys, tmp_path, "map", "--json", "--path", "WORK/DataArt")
+
+    payload = json.loads(output)
+    paths = {node["path"] for node in payload["nodes"]}
+    assert payload["root_path"] == "WORK/DataArt"
+    assert STRUCTURED_SCHEMA_PATH in paths
+    assert "Databricks raw note hidden" not in output
+
+
 def test_cli_uses_configured_data_dir(monkeypatch, capsys, tmp_path):
     response_file = write_llm_response(
         tmp_path,

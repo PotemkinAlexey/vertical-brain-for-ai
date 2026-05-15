@@ -53,6 +53,17 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--route-json", action="store_true", help="Print the query route decision as strict JSON")
     ask.add_argument("question")
 
+    namespace_map = sub.add_parser("map")
+    namespace_map.add_argument("--path", default=None, help="Limit map to a namespace branch")
+    namespace_map.add_argument("--max-depth", type=int, default=None, help="Maximum depth relative to --path")
+    namespace_map.add_argument(
+        "--summary-chars",
+        type=int,
+        default=240,
+        help="Maximum Gold summary characters per node",
+    )
+    namespace_map.add_argument("--json", action="store_true", help="Print strict JSON map")
+
     search = sub.add_parser("search")
     search.add_argument("--path", default=None, help="Limit search to a namespace branch")
     search.add_argument("--limit", type=int, default=10, help="Maximum number of results")
@@ -177,6 +188,39 @@ def main() -> None:
 
     elif args.command == "tree":
         print(store.tree_text())
+
+    elif args.command == "map":
+        namespace_map = ContextSession(store).namespace_map(
+            root_path=args.path,
+            max_depth=args.max_depth,
+            summary_max_chars=args.summary_chars,
+        )
+        if args.json:
+            print(namespace_map.to_json())
+        else:
+            print("Namespace map:")
+            if not namespace_map.nodes:
+                print("(empty map)")
+            else:
+                for node in namespace_map.nodes:
+                    indent = "  " * node.depth
+                    counts = (
+                        f"chunks={node.chunk_count}, active={node.active_chunk_count}, "
+                        f"subtree={node.subtree_chunk_count}, links={node.link_count}"
+                    )
+                    print(f"{indent}- {node.path} ({counts})")
+                    if node.gold_summary:
+                        print(f"{indent}  gold: {node.gold_summary}")
+                    if node.children:
+                        print(f"{indent}  children: {', '.join(node.children)}")
+                    if node.link_handles:
+                        for handle in node.link_handles:
+                            print(
+                                f"{indent}  link: {handle.link_id} -> {handle.target_path} "
+                                f"({handle.link_type})"
+                            )
+            if namespace_map.omitted_nodes:
+                print(f"Omitted nodes due to depth limit: {namespace_map.omitted_nodes}")
 
     elif args.command == "search":
         results = BrainSearch(store).search(

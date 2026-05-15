@@ -9,6 +9,24 @@ storage:
 vb --storage-backend sqlite ingest "New information"
 ```
 
+### Map
+
+```bash
+vb map
+vb map --path WORK/DataArt --max-depth 2
+vb map --json --summary-chars 160
+```
+
+Expected behavior:
+
+```text
+1. Show namespace paths as a model-facing map.
+2. Include child paths, chunk counts, subtree counts, Gold summaries, and link handles.
+3. Do not expose raw chunk content.
+4. Limit map scope with --path and relative depth with --max-depth.
+5. Return strict JSON when --json is set.
+```
+
 ### Ingest
 
 ```bash

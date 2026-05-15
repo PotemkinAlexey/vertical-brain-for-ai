@@ -218,6 +218,32 @@ class LockedContext(JsonSerializable):
 
 
 @dataclass
+class NamespaceMapNode(JsonSerializable):
+    path: str
+    name: str
+    parent_path: str | None
+    depth: int
+    children: list[str] = field(default_factory=list)
+    chunk_count: int = 0
+    active_chunk_count: int = 0
+    stale_chunk_count: int = 0
+    subtree_chunk_count: int = 0
+    link_count: int = 0
+    link_handles: list[LinkHandle] = field(default_factory=list)
+    gold_summary: str = ""
+    omitted_summary_chars: int = 0
+    updated_at: str = ""
+
+
+@dataclass
+class NamespaceMap(JsonSerializable):
+    root_path: str | None = None
+    nodes: list[NamespaceMapNode] = field(default_factory=list)
+    omitted_nodes: int = 0
+    summary_max_chars: int = 240
+
+
+@dataclass
 class SearchContextResult(JsonSerializable):
     query: str
     candidate_handles: list[SearchCandidateHandle] = field(default_factory=list)
