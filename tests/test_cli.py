@@ -4,6 +4,9 @@ import sys
 from vertical_brain.cli.main import main
 from vertical_brain.storage.json_store import JsonStore
 
+STRUCTURED_SCHEMA_PATH = "WORK/DataArt/Databricks/Certification/StructuredStreaming/SchemaEvolution"
+AUTO_LOADER_SCHEMA_PATH = "WORK/DataArt/Databricks/Certification/AutoLoader/SchemaEvolution"
+
 
 def run_cli(monkeypatch, capsys, tmp_path, *args):
     monkeypatch.chdir(tmp_path)
@@ -21,9 +24,9 @@ def test_cli_ingest_writes_chunk_and_tree_lists_namespace(monkeypatch, capsys, t
         "Databricks Delta schema evolution",
     )
 
-    assert "Target path: WORK/DataArt/Databricks" in output
+    assert f"Target path: {STRUCTURED_SCHEMA_PATH}" in output
     store = JsonStore(tmp_path / "data")
-    chunks = store.get_chunks_by_path("WORK/DataArt/Databricks")
+    chunks = store.get_chunks_by_path(STRUCTURED_SCHEMA_PATH)
     assert len(chunks) == 1
     assert chunks[0].content == "Databricks Delta schema evolution"
 
@@ -50,7 +53,7 @@ def test_cli_ask_prints_query_route_contract(monkeypatch, capsys, tmp_path):
         "How does Databricks schema evolution work?",
     )
 
-    assert "Target path: WORK/DataArt/Databricks" in output
+    assert f"Target path: {STRUCTURED_SCHEMA_PATH}" in output
     assert "Query type: explanation" in output
     assert "Allowed context policy: ancestors=True, peer_links=True, exclude_other_branches=True" in output
     assert "Answer:" in output
@@ -70,8 +73,8 @@ def test_cli_ingest_route_json_is_inspectable(monkeypatch, capsys, tmp_path):
 
     route_json = output.split("Route decision JSON:\n", maxsplit=1)[1].splitlines()[0]
     payload = json.loads(route_json)
-    assert payload["target_path"] == "WORK/DataArt/Databricks"
-    assert payload["peer_links"][0]["path"] == "WORK/DataArt/Databricks/AutoLoader"
+    assert payload["target_path"] == AUTO_LOADER_SCHEMA_PATH
+    assert payload["peer_links"][0]["path"] == STRUCTURED_SCHEMA_PATH
 
 
 def test_cli_unknown_ingest_asks_clarification_without_writing_chunk(monkeypatch, capsys, tmp_path):
