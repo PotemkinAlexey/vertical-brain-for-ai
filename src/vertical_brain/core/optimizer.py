@@ -6,23 +6,10 @@ from vertical_brain.core.models import Chunk, ContentType, utc_now
 from vertical_brain.storage.json_store import JsonStore
 
 
-COMPACTION_SOURCE = "optimizer:semantic_compaction"
-TOPIC_PHRASES: dict[str, tuple[str, ...]] = {
-    "schema_evolution": ("schema evolution", "mergeschema", "schemaevolutionmode"),
-    "auto_loader": ("auto loader", "autoloader", "cloudfiles"),
-    "structured_streaming": ("structured streaming", "streaming"),
-    "payments": ("payment", "payments", "pop code", "pop_codes"),
-    "citizenship": ("citizenship", "passport", "documents"),
-    "hedging": ("hedge", "hedging"),
-}
-TOPIC_PRIORITY = [
-    "schema_evolution",
-    "auto_loader",
-    "structured_streaming",
-    "payments",
-    "citizenship",
-    "hedging",
-]
+COMPACTION_SOURCE = "optimizer:namespace_compaction"
+# Avoid compacting broad roots like WORK/DataArt/Databricks; compaction belongs at deeper
+# object/topic namespaces from the documented ROOT/DOMAIN/PROJECT/OBJECT/TOPIC model.
+MIN_COMPACTION_PATH_PARTS = 5
 
 
 class SimpleOptimizer:
@@ -30,7 +17,7 @@ class SimpleOptimizer:
 
     Current behavior:
     - marks exact duplicate chunks inside a branch as stale
-    - compacts small related active chunks into Silver chunks
+    - compacts active chunks inside the same exact namespace into Silver chunks
     - creates or updates a deterministic Gold summary
     - returns a simple summary report
     """
@@ -72,7 +59,7 @@ class SimpleOptimizer:
                 f"- {node_path}: {len(node_chunks)} chunks, "
                 f"{active_count} active, {stale_count} stale, {superseded_count} superseded, "
                 f"{duplicates_marked} exact duplicates marked stale, "
-                f"{compactions_created} semantic compactions created"
+                f"{compactions_created} namespace compactions created"
             )
 
         lines.append("")
@@ -89,21 +76,21 @@ class SimpleOptimizer:
             and chunk.source != COMPACTION_SOURCE
             and not chunk.lineage
         ]
-        grouped: dict[tuple[str, str], list[Chunk]] = defaultdict(list)
+        grouped: dict[str, list[Chunk]] = defaultdict(list)
         for chunk in active_chunks:
-            topic_key = self._semantic_topic_key(chunk)
-            if topic_key:
-                grouped[(chunk.node_path, topic_key)].append(chunk)
+            if len(chunk.node_path.split("/")) < MIN_COMPACTION_PATH_PARTS:
+                continue
+            grouped[chunk.node_path].append(chunk)
 
         compaction_count_by_path: dict[str, int] = defaultdict(int)
-        for (node_path, topic_key), chunks in sorted(grouped.items()):
+        for node_path, chunks in sorted(grouped.items()):
             if len(chunks) < 2:
                 continue
 
             lineage = [chunk.id for chunk in chunks]
             compacted_chunk = Chunk(
                 node_path=node_path,
-                content=self._build_silver_compaction(topic_key, chunks),
+                content=self._build_silver_compaction(node_path, chunks),
                 layer="silver",
                 content_type=self._dominant_content_type(chunks),
                 source=COMPACTION_SOURCE,
@@ -120,16 +107,9 @@ class SimpleOptimizer:
             compaction_count_by_path[node_path] += 1
         return compaction_count_by_path
 
-    def _semantic_topic_key(self, chunk: Chunk) -> str | None:
-        lowered = chunk.content.lower()
-        for topic in TOPIC_PRIORITY:
-            if any(phrase in lowered for phrase in TOPIC_PHRASES[topic]):
-                return topic
-        return None
-
-    def _build_silver_compaction(self, topic_key: str, chunks: list[Chunk]) -> str:
+    def _build_silver_compaction(self, node_path: str, chunks: list[Chunk]) -> str:
         lines = [
-            f"Compacted Silver summary for topic: {topic_key.replace('_', ' ')}.",
+            f"Compacted Silver summary for namespace: {node_path}.",
             "Facts:",
         ]
         for chunk in chunks:

@@ -58,21 +58,26 @@ def test_optimizer_compacts_related_active_chunks_and_preserves_lineage(tmp_path
     chunks = store.get_chunks_by_path(
         "WORK/DataArt/Databricks/Certification/StructuredStreaming/SchemaEvolution"
     )
-    compacted = [chunk for chunk in chunks if chunk.source == "optimizer:semantic_compaction"]
+    compacted = [chunk for chunk in chunks if chunk.source == "optimizer:namespace_compaction"]
     originals = [chunk for chunk in chunks if chunk.id in {first.id, second.id}]
     assert len(compacted) == 1
     assert compacted[0].layer == "silver"
     assert compacted[0].status == "active"
     assert compacted[0].lineage == [first.id, second.id]
+    assert (
+        "Compacted Silver summary for namespace: "
+        "WORK/DataArt/Databricks/Certification/StructuredStreaming/SchemaEvolution."
+        in compacted[0].content
+    )
     assert {chunk.status for chunk in originals} == {"superseded"}
-    assert "1 semantic compactions created" in report
+    assert "1 namespace compactions created" in report
 
     unrelated = store.get_chunks_by_path("WORK/DataArt/Databricks/Certification/AutoLoader")
     assert len(unrelated) == 1
     assert unrelated[0].status == "active"
 
 
-def test_optimizer_semantic_compaction_is_idempotent(tmp_path):
+def test_optimizer_namespace_compaction_is_idempotent(tmp_path):
     store = JsonStore(tmp_path)
     path = "WORK/DataArt/Databricks/Certification/StructuredStreaming/SchemaEvolution"
     store.save_chunk(Chunk(node_path=path, content="Schema evolution uses mergeSchema."))
@@ -83,18 +88,28 @@ def test_optimizer_semantic_compaction_is_idempotent(tmp_path):
     optimizer.optimize_branch(path)
 
     chunks = store.get_chunks_by_path(path)
-    assert len([chunk for chunk in chunks if chunk.source == "optimizer:semantic_compaction"]) == 1
+    assert len([chunk for chunk in chunks if chunk.source == "optimizer:namespace_compaction"]) == 1
 
 
-def test_optimizer_does_not_compact_without_explicit_topic_match(tmp_path):
+def test_optimizer_does_not_compact_across_namespaces(tmp_path):
     store = JsonStore(tmp_path)
-    path = "WORK/DataArt/Databricks/Misc"
-    store.save_chunk(Chunk(node_path=path, content="Credentials should be stored in the password manager."))
-    store.save_chunk(Chunk(node_path=path, content="Meeting notes should be reviewed every Friday."))
+    branch = "WORK/DataArt/Databricks/Misc"
+    store.save_chunk(
+        Chunk(
+            node_path=f"{branch}/Credentials",
+            content="Credentials should be stored in the password manager.",
+        )
+    )
+    store.save_chunk(
+        Chunk(
+            node_path=f"{branch}/Meetings",
+            content="Meeting notes should be reviewed every Friday.",
+        )
+    )
 
-    report = SimpleOptimizer(store).optimize_branch(path)
+    report = SimpleOptimizer(store).optimize_branch(branch)
 
-    chunks = store.get_chunks_by_path(path)
-    assert len([chunk for chunk in chunks if chunk.source == "optimizer:semantic_compaction"]) == 0
+    chunks = store.get_chunks_by_path(branch, include_children=True)
+    assert len([chunk for chunk in chunks if chunk.source == "optimizer:namespace_compaction"]) == 0
     assert {chunk.status for chunk in chunks} == {"active"}
-    assert "0 semantic compactions created" in report
+    assert "0 namespace compactions created" in report
