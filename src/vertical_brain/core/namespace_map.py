@@ -25,7 +25,7 @@ class NamespaceMapBuilder:
 
         map_nodes: list[NamespaceMapNode] = []
         for node in sorted(visible_nodes, key=lambda item: item.path):
-            gold_summary, omitted_summary_chars = _truncate(node.gold_summary, summary_max_chars)
+            gold_summary, omitted_summary_chars = _truncate(" | ".join(node.gold_aspects), summary_max_chars)
             map_nodes.append(
                 NamespaceMapNode(
                     path=node.path,

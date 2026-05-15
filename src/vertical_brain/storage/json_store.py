@@ -106,16 +106,17 @@ class JsonStore:
                 return chunk
         raise ValueError(f"Chunk not found: {chunk.id}")
 
-    def update_node_gold_summary(self, path: str, summary: str) -> Node:
+    def append_node_gold_aspect(self, path: str, aspect: str) -> Node:
         self.ensure_node(path)
         nodes = self._read(self.nodes_file)
         for index, row in enumerate(nodes):
             if row["path"] == path:
-                row["gold_summary"] = summary
+                row = self._migrate_node_row(row)
+                row["gold_aspects"].append(aspect)
                 row["updated_at"] = utc_now()
                 nodes[index] = row
                 self._write(self.nodes_file, nodes)
-                self._write_gold_summary_markdown(path, summary)
+                self._write_gold_aspects_markdown(path, row["gold_aspects"])
                 return Node(**row)
         raise ValueError(f"Node not found: {path}")
 
@@ -123,19 +124,26 @@ class JsonStore:
         parts = path.split("/")
         return self.gold_dir.joinpath(*parts).with_suffix(".md")
 
-    def _write_gold_summary_markdown(self, path: str, summary: str) -> None:
+    def _write_gold_aspects_markdown(self, path: str, aspects: list[str]) -> None:
         file = self.gold_summary_path(path)
         file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_text(f"# {path}\n\n{summary}\n", encoding="utf-8")
+        content = "\n".join(f"- {a}" for a in aspects)
+        file.write_text(f"# {path}\n\n{content}\n", encoding="utf-8")
 
     def get_node(self, path: str) -> Node | None:
         existing = next((row for row in self._read(self.nodes_file) if row["path"] == path), None)
         if existing is None:
             return None
-        return Node(**existing)
+        return Node(**self._migrate_node_row(existing))
 
     def list_nodes(self) -> list[Node]:
-        return [Node(**row) for row in self._read(self.nodes_file)]
+        return [Node(**self._migrate_node_row(row)) for row in self._read(self.nodes_file)]
+
+    def _migrate_node_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        if "gold_summary" in row and "gold_aspects" not in row:
+            old = row.pop("gold_summary")
+            row["gold_aspects"] = [old] if old else []
+        return row
 
     def list_chunks(self) -> list[Chunk]:
         return [Chunk(**row) for row in self._read(self.chunks_file)]

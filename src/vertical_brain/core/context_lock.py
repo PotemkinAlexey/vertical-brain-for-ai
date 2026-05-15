@@ -34,26 +34,26 @@ class ContextLock:
         if policy.include_ancestors:
             for ancestor_path in self.store.get_ancestors(target_path):
                 ancestor = self.store.get_node(ancestor_path)
-                if ancestor and ancestor.gold_summary:
+                if ancestor and ancestor.gold_aspects:
                     omitted_items += self._append_with_budget(
                         items,
                         ContextItem(
                             path=ancestor.path,
-                            layer="gold_summary",
-                            content=ancestor.gold_summary,
+                            layer="gold",
+                            content=" | ".join(ancestor.gold_aspects),
                             source="node",
                         ),
                         budget,
                     )
 
         target = self.store.get_node(target_path)
-        if policy.include_target and target and target.gold_summary:
+        if policy.include_target and target and target.gold_aspects:
             omitted_items += self._append_with_budget(
                 items,
                 ContextItem(
                     path=target.path,
-                    layer="gold_summary",
-                    content=target.gold_summary,
+                    layer="gold",
+                    content=" | ".join(target.gold_aspects),
                     source="node",
                 ),
                 budget,

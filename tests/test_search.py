@@ -54,7 +54,7 @@ def test_search_excludes_stale_chunks_by_default(tmp_path, store_class):
 @pytest.mark.parametrize("store_class", [JsonStore, SQLiteStore])
 def test_search_finds_gold_summaries(tmp_path, store_class):
     store = store_class(tmp_path)
-    store.update_node_gold_summary(
+    store.append_node_gold_aspect(
         "WORK/DataArt/Databricks",
         "Canonical schema evolution summary for Databricks certification.",
     )

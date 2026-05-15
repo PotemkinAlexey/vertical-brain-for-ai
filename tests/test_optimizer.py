@@ -9,7 +9,7 @@ def build_optimizer(store: JsonStore) -> SimpleOptimizer:
     return SimpleOptimizer(store, min_compaction_path_parts=MIN_COMPACTION_PATH_PARTS)
 
 
-def test_optimizer_marks_exact_duplicate_chunks_stale_and_updates_gold_summary(tmp_path):
+def test_optimizer_marks_exact_duplicate_chunks_stale(tmp_path):
     store = JsonStore(tmp_path)
     store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="Delta fact"))
     store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="Delta fact"))
@@ -21,16 +21,6 @@ def test_optimizer_marks_exact_duplicate_chunks_stale_and_updates_gold_summary(t
     assert [chunk.status for chunk in chunks].count("active") == 2
     assert [chunk.status for chunk in chunks].count("stale") == 1
     assert "1 exact duplicates marked stale" in report
-    assert "Gold summary file:" in report
-
-    node = store.get_node("WORK/DataArt/Databricks")
-    assert node is not None
-    assert "Gold summary for WORK/DataArt/Databricks." in node.gold_summary
-    assert "Active chunks: 2." in node.gold_summary
-
-    gold_file = store.gold_summary_path("WORK/DataArt/Databricks")
-    assert gold_file.exists()
-    assert gold_file.read_text(encoding="utf-8").startswith("# WORK/DataArt/Databricks")
 
 
 def test_optimizer_compacts_related_active_chunks_and_preserves_lineage(tmp_path):

@@ -72,12 +72,12 @@ def test_save_link_does_not_duplicate_same_relationship(tmp_path):
     assert store.get_link(first.id) == first
 
 
-def test_gold_summary_update_writes_json_field_and_markdown_file(tmp_path):
+def test_gold_aspect_append_writes_json_field_and_markdown_file(tmp_path):
     store = JsonStore(tmp_path)
 
-    node = store.update_node_gold_summary("WORK/DataArt", "Stable DataArt summary")
+    node = store.append_node_gold_aspect("WORK/DataArt", "Stable DataArt summary")
 
-    assert node.gold_summary == "Stable DataArt summary"
+    assert node.gold_aspects == ["Stable DataArt summary"]
     gold_file = store.gold_summary_path("WORK/DataArt")
     assert gold_file.exists()
-    assert gold_file.read_text(encoding="utf-8") == "# WORK/DataArt\n\nStable DataArt summary\n"
+    assert gold_file.read_text(encoding="utf-8") == "# WORK/DataArt\n\n- Stable DataArt summary\n"

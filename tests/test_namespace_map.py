@@ -9,7 +9,7 @@ from vertical_brain.storage.sqlite_store import SQLiteStore
 @pytest.mark.parametrize("store_class", [JsonStore, SQLiteStore])
 def test_namespace_map_exposes_structure_counts_and_summaries_without_chunk_content(tmp_path, store_class):
     store = store_class(tmp_path)
-    store.update_node_gold_summary("WORK/DataArt", "Stable DataArt summary")
+    store.append_node_gold_aspect("WORK/DataArt", "Stable DataArt summary")
     store.save_chunk(
         Chunk(
             node_path="WORK/DataArt/Databricks",
@@ -56,7 +56,7 @@ def test_namespace_map_exposes_structure_counts_and_summaries_without_chunk_cont
 
 def test_namespace_map_respects_relative_depth_limit_and_summary_budget(tmp_path):
     store = JsonStore(tmp_path)
-    store.update_node_gold_summary("WORK/DataArt", "A" * 20)
+    store.append_node_gold_aspect("WORK/DataArt", "A" * 20)
     store.ensure_node("WORK/DataArt/Databricks/Certification/SchemaEvolution")
 
     namespace_map = ContextSession(store).namespace_map(

@@ -8,7 +8,7 @@ from vertical_brain.storage.sqlite_store import SQLiteStore
 
 def test_context_session_uses_search_as_navigation_to_locked_context(tmp_path):
     store = JsonStore(tmp_path)
-    store.update_node_gold_summary("WORK/DataArt", "DataArt ancestor summary")
+    store.append_node_gold_aspect("WORK/DataArt", "DataArt ancestor summary")
     store.save_chunk(
         Chunk(
             node_path="WORK/DataArt/Databricks/StructuredStreaming",
