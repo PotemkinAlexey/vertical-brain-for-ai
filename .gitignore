@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+.idea/
+data/chunks.json
+data/links.json
+data/nodes.json
