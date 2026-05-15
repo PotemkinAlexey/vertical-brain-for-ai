@@ -1,18 +1,27 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from vertical_brain.core.context_lock import ContextLock
 from vertical_brain.core.models import Chunk, Link
 from vertical_brain.core.optimizer import SimpleOptimizer
-from vertical_brain.core.router import MockRouter
+from vertical_brain.core.router import ModelRouter, NamespaceModel
 from vertical_brain.llm.mock_llm import MockLLM
 from vertical_brain.storage.json_store import JsonStore
+
+
+DEFAULT_MODEL_FILE = Path(__file__).resolve().parents[3] / "data" / "namespaces" / "model.json"
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vb", description="Vertical Brain MVP CLI")
     parser.add_argument("--data-dir", default="data", help="Directory for local JSON storage")
+    parser.add_argument(
+        "--model-file",
+        default=str(DEFAULT_MODEL_FILE),
+        help="Namespace model JSON used for routing and policies",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     ingest = sub.add_parser("ingest")
@@ -36,7 +45,8 @@ def main() -> None:
     args = parser.parse_args()
 
     store = JsonStore(args.data_dir)
-    router = MockRouter()
+    namespace_model = NamespaceModel.load(args.model_file)
+    router = ModelRouter(namespace_model)
 
     if args.command == "ingest":
         decision = router.route_ingest(args.text)
@@ -48,7 +58,7 @@ def main() -> None:
             print("Route decision JSON:")
             print(decision.to_json())
 
-        if decision.action == "ask_clarification":
+        if router.requires_clarification(decision):
             print("Clarification needed: provide a more specific domain or namespace hint.")
             return
 
@@ -95,7 +105,7 @@ def main() -> None:
         if args.route_json:
             print("Route decision JSON:")
             print(decision.to_json())
-        if decision.confidence < 0.65:
+        if router.requires_clarification(decision):
             print("Clarification needed: provide a more specific domain or namespace hint.")
             return
         print(
@@ -119,7 +129,10 @@ def main() -> None:
         print(store.tree_text())
 
     elif args.command == "optimize":
-        optimizer = SimpleOptimizer(store)
+        optimizer = SimpleOptimizer(
+            store,
+            min_compaction_path_parts=int(namespace_model.optimizer["min_compaction_path_parts"]),
+        )
         print(optimizer.optimize_branch(args.path))
 
 

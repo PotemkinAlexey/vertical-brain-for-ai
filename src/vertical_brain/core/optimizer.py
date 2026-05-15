@@ -7,9 +7,6 @@ from vertical_brain.storage.json_store import JsonStore
 
 
 COMPACTION_SOURCE = "optimizer:namespace_compaction"
-# Avoid compacting broad roots like WORK/DataArt/Databricks; compaction belongs at deeper
-# object/topic namespaces from the documented ROOT/DOMAIN/PROJECT/OBJECT/TOPIC model.
-MIN_COMPACTION_PATH_PARTS = 5
 
 
 class SimpleOptimizer:
@@ -22,8 +19,9 @@ class SimpleOptimizer:
     - returns a simple summary report
     """
 
-    def __init__(self, store: JsonStore):
+    def __init__(self, store: JsonStore, min_compaction_path_parts: int):
         self.store = store
+        self.min_compaction_path_parts = min_compaction_path_parts
 
     def optimize_branch(self, path: str) -> str:
         chunks = self.store.get_chunks_by_path(path, include_children=True)
@@ -78,7 +76,7 @@ class SimpleOptimizer:
         ]
         grouped: dict[str, list[Chunk]] = defaultdict(list)
         for chunk in active_chunks:
-            if len(chunk.node_path.split("/")) < MIN_COMPACTION_PATH_PARTS:
+            if len(chunk.node_path.split("/")) < self.min_compaction_path_parts:
                 continue
             grouped[chunk.node_path].append(chunk)
 

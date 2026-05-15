@@ -1,0 +1,200 @@
+{
+  "routing": {
+    "clarification_threshold": 0.65,
+    "default_route": {
+      "target_path": "INBOX/Unclassified",
+      "content_type": "note",
+      "layer": "bronze",
+      "action": "ask_clarification",
+      "confidence": 0.4,
+      "reasoning_summary": "No model rule matched."
+    },
+    "content_type_rules": [
+      {
+        "content_type": "correction",
+        "match": {
+          "any": ["correction", "instead", "not ", " use ", "should"]
+        }
+      },
+      {
+        "content_type": "decision",
+        "match": {
+          "any": ["decided", "decision"]
+        }
+      },
+      {
+        "content_type": "question",
+        "match": {
+          "any": ["?"]
+        }
+      }
+    ],
+    "query_type_rules": [
+      {
+        "query_type": "comparison",
+        "match": {
+          "any": ["compare", "difference", " vs "]
+        }
+      },
+      {
+        "query_type": "summary",
+        "match": {
+          "any": ["summarize", "summary"]
+        }
+      },
+      {
+        "query_type": "explanation",
+        "match": {
+          "starts_with": ["how ", "why ", "what "]
+        }
+      },
+      {
+        "query_type": "lookup",
+        "match": {
+          "ends_with": ["?"]
+        }
+      }
+    ],
+    "rules": [
+      {
+        "id": "databricks_auto_loader_schema_evolution",
+        "target_path": "WORK/DataArt/Databricks/Certification/AutoLoader/SchemaEvolution",
+        "layer": "silver",
+        "action": "append_and_optimize",
+        "confidence": 0.9,
+        "match": {
+          "all": ["schema evolution"],
+          "any": ["auto loader", "autoloader", "cloudfiles"]
+        },
+        "peer_links": [
+          {
+            "path": "WORK/DataArt/Databricks/Certification/StructuredStreaming/SchemaEvolution",
+            "reason": "Auto Loader schema evolution is approved as a comparison peer for Delta streaming sink schema evolution."
+          }
+        ],
+        "reasoning_summary": "Model rule databricks_auto_loader_schema_evolution matched."
+      },
+      {
+        "id": "databricks_delta_streaming_schema_evolution",
+        "target_path": "WORK/DataArt/Databricks/Certification/StructuredStreaming/SchemaEvolution",
+        "layer": "silver",
+        "action": "append_and_optimize",
+        "confidence": 0.9,
+        "match": {
+          "all": ["schema evolution"],
+          "any": ["structured streaming", "streaming", "delta", "sink", "mergeschema"]
+        },
+        "peer_links": [
+          {
+            "path": "WORK/DataArt/Databricks/Certification/AutoLoader/SchemaEvolution",
+            "reason": "Delta streaming sink schema evolution is approved as a comparison peer for Auto Loader schema evolution."
+          }
+        ],
+        "stale_candidates": [
+          {
+            "path": "WORK/DataArt/Databricks/Certification/StructuredStreaming/SchemaEvolution",
+            "reason": "Older notes may confuse cloudFiles schema evolution settings with Delta sink writes."
+          }
+        ],
+        "reasoning_summary": "Model rule databricks_delta_streaming_schema_evolution matched."
+      },
+      {
+        "id": "databricks_schema_evolution",
+        "target_path": "WORK/DataArt/Databricks/Certification/StructuredStreaming/SchemaEvolution",
+        "layer": "silver",
+        "action": "append_and_optimize",
+        "confidence": 0.8,
+        "match": {
+          "all": ["schema evolution"]
+        },
+        "peer_links": [
+          {
+            "path": "WORK/DataArt/Databricks/Certification/AutoLoader/SchemaEvolution",
+            "reason": "Generic Databricks schema evolution inputs keep Auto Loader as an approved peer."
+          }
+        ],
+        "reasoning_summary": "Model rule databricks_schema_evolution matched."
+      },
+      {
+        "id": "databricks_auto_loader",
+        "target_path": "WORK/DataArt/Databricks/Certification/AutoLoader",
+        "content_type": "fact",
+        "layer": "silver",
+        "action": "append_and_optimize",
+        "confidence": 0.85,
+        "match": {
+          "any": ["auto loader", "autoloader", "cloudfiles"]
+        },
+        "reasoning_summary": "Model rule databricks_auto_loader matched."
+      },
+      {
+        "id": "databricks_structured_streaming",
+        "target_path": "WORK/DataArt/Databricks/Certification/StructuredStreaming",
+        "content_type": "fact",
+        "layer": "silver",
+        "action": "append_and_optimize",
+        "confidence": 0.85,
+        "match": {
+          "any": ["structured streaming", "streaming"]
+        },
+        "reasoning_summary": "Model rule databricks_structured_streaming matched."
+      },
+      {
+        "id": "databricks_certification",
+        "target_path": "WORK/DataArt/Databricks/Certification",
+        "content_type": "fact",
+        "layer": "silver",
+        "action": "append_and_optimize",
+        "confidence": 0.8,
+        "match": {
+          "any": ["certification", "exam"]
+        },
+        "reasoning_summary": "Model rule databricks_certification matched."
+      },
+      {
+        "id": "databricks_default",
+        "target_path": "WORK/DataArt/Databricks",
+        "content_type": "fact",
+        "layer": "silver",
+        "action": "append_and_optimize",
+        "confidence": 0.75,
+        "match": {
+          "any": ["databricks", "delta", "spark", "mergeschema"]
+        },
+        "reasoning_summary": "Model rule databricks_default matched."
+      },
+      {
+        "id": "dbt",
+        "target_path": "WORK/Stack/dbt",
+        "content_type": "decision",
+        "layer": "silver",
+        "action": "append_and_optimize",
+        "confidence": 0.8,
+        "match": {
+          "any": ["dbt"]
+        },
+        "reasoning_summary": "Model rule dbt matched."
+      },
+      {
+        "id": "trading",
+        "target_path": "TRADING",
+        "content_type": "note",
+        "layer": "bronze",
+        "action": "append_bronze",
+        "confidence": 0.7,
+        "match": {
+          "any": ["trading", "bot", "hedge"]
+        },
+        "reasoning_summary": "Model rule trading matched."
+      }
+    ]
+  },
+  "context_policy": {
+    "include_ancestors": true,
+    "include_peer_links": true,
+    "exclude_other_branches": true
+  },
+  "optimizer": {
+    "min_compaction_path_parts": 5
+  }
+}

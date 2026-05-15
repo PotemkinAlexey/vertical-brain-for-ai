@@ -54,6 +54,12 @@ Use an isolated storage directory when experimenting:
 vb --data-dir .vb-dev-data ingest "dbt staging models are ephemeral in this project."
 ```
 
+Use a custom namespace model when changing routing behavior:
+
+```bash
+vb --model-file data/namespaces/model.json ingest "Databricks Delta schema evolution uses mergeSchema."
+```
+
 Inspect router decisions as strict JSON:
 
 ```bash
@@ -61,7 +67,7 @@ vb ingest --route-json "Databricks Auto Loader schema evolution"
 vb ask --route-json "How does Databricks schema evolution work?"
 ```
 
-If the router confidence is below `0.65`, the CLI asks for clarification instead of writing low-quality knowledge into the store.
+If router confidence is below the namespace model threshold, the CLI asks for clarification instead of writing low-quality knowledge into the store.
 
 ## Tests
 
@@ -96,6 +102,7 @@ MVP core implemented:
 - CLI ingest / ask / tree / optimize
 - local JSON storage
 - root namespace bootstrap from `data/namespaces/root.json`
+- model-driven routing and policy from `data/namespaces/model.json`
 - route decision JSON serialization
 - context locking with ancestors, target node, and explicit peer links
 - exact duplicate stale marking

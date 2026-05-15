@@ -2,6 +2,12 @@ from vertical_brain.core.models import Chunk
 from vertical_brain.core.optimizer import SimpleOptimizer
 from vertical_brain.storage.json_store import JsonStore
 
+MIN_COMPACTION_PATH_PARTS = 5
+
+
+def build_optimizer(store: JsonStore) -> SimpleOptimizer:
+    return SimpleOptimizer(store, min_compaction_path_parts=MIN_COMPACTION_PATH_PARTS)
+
 
 def test_optimizer_marks_exact_duplicate_chunks_stale_and_updates_gold_summary(tmp_path):
     store = JsonStore(tmp_path)
@@ -9,7 +15,7 @@ def test_optimizer_marks_exact_duplicate_chunks_stale_and_updates_gold_summary(t
     store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="Delta fact"))
     store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="Streaming fact"))
 
-    report = SimpleOptimizer(store).optimize_branch("WORK/DataArt/Databricks")
+    report = build_optimizer(store).optimize_branch("WORK/DataArt/Databricks")
 
     chunks = store.get_chunks_by_path("WORK/DataArt/Databricks")
     assert [chunk.status for chunk in chunks].count("active") == 2
@@ -51,7 +57,7 @@ def test_optimizer_compacts_related_active_chunks_and_preserves_lineage(tmp_path
         )
     )
 
-    report = SimpleOptimizer(store).optimize_branch(
+    report = build_optimizer(store).optimize_branch(
         "WORK/DataArt/Databricks/Certification/StructuredStreaming"
     )
 
@@ -83,7 +89,7 @@ def test_optimizer_namespace_compaction_is_idempotent(tmp_path):
     store.save_chunk(Chunk(node_path=path, content="Schema evolution uses mergeSchema."))
     store.save_chunk(Chunk(node_path=path, content="Schema evolution applies to Delta writes."))
 
-    optimizer = SimpleOptimizer(store)
+    optimizer = build_optimizer(store)
     optimizer.optimize_branch(path)
     optimizer.optimize_branch(path)
 
@@ -107,7 +113,7 @@ def test_optimizer_does_not_compact_across_namespaces(tmp_path):
         )
     )
 
-    report = SimpleOptimizer(store).optimize_branch(branch)
+    report = build_optimizer(store).optimize_branch(branch)
 
     chunks = store.get_chunks_by_path(branch, include_children=True)
     assert len([chunk for chunk in chunks if chunk.source == "optimizer:namespace_compaction"]) == 0
