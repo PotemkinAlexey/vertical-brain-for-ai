@@ -77,6 +77,31 @@ def test_cli_ingest_route_json_is_inspectable(monkeypatch, capsys, tmp_path):
     assert payload["peer_links"][0]["path"] == STRUCTURED_SCHEMA_PATH
 
 
+def test_cli_ingest_prints_stale_candidates_without_mutating_old_chunks(monkeypatch, capsys, tmp_path):
+    run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "ingest",
+        "Databricks Delta schema evolution",
+    )
+
+    output = run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "ingest",
+        "For Delta streaming sink schema evolution use mergeSchema=true",
+    )
+
+    assert "Stale candidates:" in output
+    assert f"- {STRUCTURED_SCHEMA_PATH}:" in output
+    store = JsonStore(tmp_path / "data")
+    chunks = store.get_chunks_by_path(STRUCTURED_SCHEMA_PATH)
+    assert len(chunks) == 2
+    assert {chunk.status for chunk in chunks} == {"active"}
+
+
 def test_cli_unknown_ingest_asks_clarification_without_writing_chunk(monkeypatch, capsys, tmp_path):
     output = run_cli(monkeypatch, capsys, tmp_path, "ingest", "random note")
 

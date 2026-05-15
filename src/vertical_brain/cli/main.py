@@ -75,6 +75,10 @@ def main() -> None:
             print("Peer links:")
             for peer in decision.peer_links:
                 print(f"- {peer.path}: {peer.reason}")
+        if decision.stale_candidates:
+            print("Stale candidates:")
+            for candidate in decision.stale_candidates:
+                print(f"- {candidate.path}: {candidate.reason}")
 
     elif args.command == "ask":
         decision = router.route_query(args.question)

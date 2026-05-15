@@ -48,6 +48,29 @@ def test_peer_paths_are_available_from_both_sides(tmp_path):
     ]
 
 
+def test_save_link_does_not_duplicate_same_relationship(tmp_path):
+    store = JsonStore(tmp_path)
+    link = Link(
+        source_path="WORK/DataArt/Databricks",
+        target_path="WORK/DataArt/Databricks/AutoLoader",
+        link_type="peer",
+        reason="Related Databricks ingestion concepts.",
+    )
+
+    first = store.save_link(link)
+    second = store.save_link(
+        Link(
+            source_path=link.source_path,
+            target_path=link.target_path,
+            link_type=link.link_type,
+            reason="Repeated route decision.",
+        )
+    )
+
+    assert first.id == second.id
+    assert len(store.list_links()) == 1
+
+
 def test_gold_summary_update_writes_json_field_and_markdown_file(tmp_path):
     store = JsonStore(tmp_path)
 

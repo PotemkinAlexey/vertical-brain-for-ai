@@ -80,6 +80,18 @@ class JsonStore:
         self.ensure_node(link.source_path)
         self.ensure_node(link.target_path)
         links = self._read(self.links_file)
+        existing = next(
+            (
+                row
+                for row in links
+                if row["source_path"] == link.source_path
+                and row["target_path"] == link.target_path
+                and row["link_type"] == link.link_type
+            ),
+            None,
+        )
+        if existing:
+            return Link(**existing)
         links.append(asdict(link))
         self._write(self.links_file, links)
         return link
