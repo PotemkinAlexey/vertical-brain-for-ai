@@ -31,3 +31,14 @@ def test_peer_paths_are_available_from_both_sides(tmp_path):
     assert store.get_peer_paths("WORK/DataArt/Databricks/AutoLoader") == [
         "WORK/DataArt/Databricks"
     ]
+
+
+def test_gold_summary_update_writes_json_field_and_markdown_file(tmp_path):
+    store = JsonStore(tmp_path)
+
+    node = store.update_node_gold_summary("WORK/DataArt", "Stable DataArt summary")
+
+    assert node.gold_summary == "Stable DataArt summary"
+    gold_file = store.gold_summary_path("WORK/DataArt")
+    assert gold_file.exists()
+    assert gold_file.read_text(encoding="utf-8") == "# WORK/DataArt\n\nStable DataArt summary\n"

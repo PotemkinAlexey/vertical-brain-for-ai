@@ -20,3 +20,7 @@ def test_optimizer_marks_exact_duplicate_chunks_stale_and_updates_gold_summary(t
     assert node is not None
     assert "Gold summary placeholder for WORK/DataArt/Databricks." in node.gold_summary
     assert "Active chunks: 2." in node.gold_summary
+
+    gold_file = store.gold_summary_path("WORK/DataArt/Databricks")
+    assert gold_file.exists()
+    assert gold_file.read_text(encoding="utf-8").startswith("# WORK/DataArt/Databricks")

@@ -15,6 +15,8 @@ class JsonStore:
         self.nodes_file = self.root / "nodes.json"
         self.chunks_file = self.root / "chunks.json"
         self.links_file = self.root / "links.json"
+        self.gold_dir = self.root / "gold"
+        self.gold_dir.mkdir(parents=True, exist_ok=True)
 
         for file in [self.nodes_file, self.chunks_file, self.links_file]:
             if not file.exists():
@@ -89,8 +91,18 @@ class JsonStore:
                 row["updated_at"] = utc_now()
                 nodes[index] = row
                 self._write(self.nodes_file, nodes)
+                self._write_gold_summary_markdown(path, summary)
                 return Node(**row)
         raise ValueError(f"Node not found: {path}")
+
+    def gold_summary_path(self, path: str) -> Path:
+        parts = path.split("/")
+        return self.gold_dir.joinpath(*parts).with_suffix(".md")
+
+    def _write_gold_summary_markdown(self, path: str, summary: str) -> None:
+        file = self.gold_summary_path(path)
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(f"# {path}\n\n{summary}\n", encoding="utf-8")
 
     def get_node(self, path: str) -> Node | None:
         existing = next((row for row in self._read(self.nodes_file) if row["path"] == path), None)
