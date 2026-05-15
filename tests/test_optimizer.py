@@ -15,6 +15,7 @@ def test_optimizer_marks_exact_duplicate_chunks_stale_and_updates_gold_summary(t
     assert [chunk.status for chunk in chunks].count("active") == 2
     assert [chunk.status for chunk in chunks].count("stale") == 1
     assert "1 exact duplicates marked stale" in report
+    assert "Gold summary file:" in report
 
     node = store.get_node("WORK/DataArt/Databricks")
     assert node is not None

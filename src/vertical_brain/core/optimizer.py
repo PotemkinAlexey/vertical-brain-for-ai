@@ -53,6 +53,7 @@ class SimpleOptimizer:
 
         lines.append("")
         lines.append("Gold summary placeholder updated.")
+        lines.append(f"Gold summary file: {self.store.gold_summary_path(path).as_posix()}")
         lines.append("TODO: semantic compaction.")
         return "\n".join(lines)
 

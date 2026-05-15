@@ -137,3 +137,17 @@ def test_cli_uses_configured_data_dir(monkeypatch, capsys, tmp_path):
     store = JsonStore(tmp_path / "brain-data")
     assert len(store.get_chunks_by_path("WORK/Stack/dbt")) == 1
     assert not (tmp_path / "data" / "chunks.json").exists()
+
+
+def test_cli_optimize_marks_duplicates_and_reports_gold_file(monkeypatch, capsys, tmp_path):
+    run_cli(monkeypatch, capsys, tmp_path, "ingest", "Databricks Delta schema evolution")
+    run_cli(monkeypatch, capsys, tmp_path, "ingest", "Databricks Delta schema evolution")
+
+    output = run_cli(monkeypatch, capsys, tmp_path, "optimize", STRUCTURED_SCHEMA_PATH)
+
+    assert "1 exact duplicates marked stale" in output
+    assert "Gold summary file:" in output
+    store = JsonStore(tmp_path / "data")
+    chunks = store.get_chunks_by_path(STRUCTURED_SCHEMA_PATH)
+    assert [chunk.status for chunk in chunks].count("stale") == 1
+    assert store.gold_summary_path(STRUCTURED_SCHEMA_PATH).exists()
