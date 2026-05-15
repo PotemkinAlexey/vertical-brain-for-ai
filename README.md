@@ -59,6 +59,12 @@ Use an isolated storage directory when experimenting:
 vb --data-dir .vb-dev-data ingest "dbt staging models are ephemeral in this project."
 ```
 
+Use SQLite when you need transactional local storage:
+
+```bash
+vb --storage-backend sqlite ingest "Models should write through validated operation batches."
+```
+
 Use a custom storage model when changing the format contract:
 
 ```bash
@@ -132,6 +138,7 @@ MVP core implemented:
 
 - CLI ingest / ask / tree / optimize
 - local JSON storage
+- local SQLite storage with transaction support for operation batches
 - root namespace bootstrap from `data/namespaces/root.json`
 - LLM-driven routing through strict JSON contracts from `data/namespaces/model.json`
 - first-class `StorageOperation` execution

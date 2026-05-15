@@ -15,6 +15,7 @@ from vertical_brain.core.operations import (
 from vertical_brain.core.router import LLMRouter, StorageModel
 from vertical_brain.llm.mock_llm import MockLLM
 from vertical_brain.storage.json_store import JsonStore
+from vertical_brain.storage.sqlite_store import SQLiteStore
 
 
 DEFAULT_MODEL_FILE = Path(__file__).resolve().parents[3] / "data" / "namespaces" / "model.json"
@@ -22,7 +23,13 @@ DEFAULT_MODEL_FILE = Path(__file__).resolve().parents[3] / "data" / "namespaces"
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vb", description="Vertical Brain MVP CLI")
-    parser.add_argument("--data-dir", default="data", help="Directory for local JSON storage")
+    parser.add_argument("--data-dir", default="data", help="Directory for local storage")
+    parser.add_argument(
+        "--storage-backend",
+        choices=["json", "sqlite"],
+        default="json",
+        help="Storage backend to use",
+    )
     parser.add_argument(
         "--model-file",
         default=str(DEFAULT_MODEL_FILE),
@@ -62,7 +69,11 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    store = JsonStore(args.data_dir)
+    store = (
+        SQLiteStore(args.data_dir)
+        if args.storage_backend == "sqlite"
+        else JsonStore(args.data_dir)
+    )
     storage_model = StorageModel.load(args.model_file)
     llm = MockLLM.from_response_file(args.llm_response_file) if args.llm_response_file else MockLLM()
     router = LLMRouter(llm, storage_model)

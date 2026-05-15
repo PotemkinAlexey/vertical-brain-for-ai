@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import nullcontext
 from typing import Any, get_args
 
 from vertical_brain.core.models import (
@@ -45,8 +46,13 @@ class StorageOperationExecutor:
         if not validation.valid:
             raise ValueError(self._format_validation_errors(validation))
 
+        transaction = getattr(self.store, "transaction", None)
+        context = transaction() if callable(transaction) else nullcontext()
+        with context:
+            results = [self._apply_validated(operation) for operation in batch.operations]
+
         return OperationBatchResult(
-            results=[self._apply_validated(operation) for operation in batch.operations],
+            results=results,
             status="applied",
             validation=validation,
         )

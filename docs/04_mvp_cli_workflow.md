@@ -2,6 +2,13 @@
 
 ## Commands
 
+The default backend is JSON. SQLite can be selected for transactional local
+storage:
+
+```bash
+vb --storage-backend sqlite ingest "New information"
+```
+
 ### Ingest
 
 ```bash

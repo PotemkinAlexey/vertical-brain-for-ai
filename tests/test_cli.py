@@ -3,6 +3,7 @@ import sys
 
 from vertical_brain.cli.main import main
 from vertical_brain.storage.json_store import JsonStore
+from vertical_brain.storage.sqlite_store import SQLiteStore
 
 STRUCTURED_SCHEMA_PATH = "WORK/DataArt/Databricks/Certification/StructuredStreaming/SchemaEvolution"
 AUTO_LOADER_SCHEMA_PATH = "WORK/DataArt/Databricks/Certification/AutoLoader/SchemaEvolution"
@@ -318,3 +319,27 @@ def test_cli_operation_apply_writes_operation_batch(monkeypatch, capsys, tmp_pat
     chunks = store.get_chunks_by_path("WORK/Vertical/Node")
     assert len(chunks) == 1
     assert chunks[0].content == "Applied protocol note."
+
+
+def test_cli_can_use_sqlite_storage_backend(monkeypatch, capsys, tmp_path):
+    response_file = write_llm_response(tmp_path, "ingest.json", ingest_response())
+
+    output = run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--storage-backend",
+        "sqlite",
+        "--llm-response-file",
+        str(response_file),
+        "ingest",
+        "Databricks SQLite-backed fact",
+    )
+
+    assert f"Target path: {STRUCTURED_SCHEMA_PATH}" in output
+    assert (tmp_path / "data" / "vertical_brain.sqlite").exists()
+    assert not (tmp_path / "data" / "chunks.json").exists()
+    store = SQLiteStore(tmp_path / "data")
+    chunks = store.get_chunks_by_path(STRUCTURED_SCHEMA_PATH)
+    assert len(chunks) == 1
+    assert chunks[0].content == "Databricks SQLite-backed fact"
