@@ -4,8 +4,8 @@ import argparse
 from pathlib import Path
 
 from vertical_brain.core.context_lock import ContextLock
-from vertical_brain.core.models import Chunk, Link
 from vertical_brain.core.optimizer import SimpleOptimizer
+from vertical_brain.core.operations import StorageOperationExecutor, operation_from_route_decision
 from vertical_brain.core.router import LLMRouter, StorageModel
 from vertical_brain.llm.mock_llm import MockLLM
 from vertical_brain.storage.json_store import JsonStore
@@ -69,24 +69,8 @@ def main() -> None:
             print("Clarification needed: provide a more specific domain or namespace hint.")
             return
 
-        chunk = Chunk(
-            node_path=decision.target_path,
-            content=args.text,
-            layer=decision.layer,
-            content_type=decision.content_type,
-            confidence=decision.confidence,
-        )
-        store.save_chunk(chunk)
-
-        for peer in decision.peer_links:
-            store.save_link(
-                Link(
-                    source_path=decision.target_path,
-                    target_path=peer.path,
-                    link_type="peer",
-                    reason=peer.reason,
-                )
-            )
+        operation = operation_from_route_decision(decision, args.text)
+        StorageOperationExecutor(store).apply(operation)
 
         if decision.peer_links:
             print("Peer links:")

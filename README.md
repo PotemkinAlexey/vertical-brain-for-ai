@@ -2,16 +2,16 @@
 
 **Vertical Brain** is a personal context lakehouse.
 
-It stores knowledge in isolated vertical namespaces, routes every new input into the deepest relevant partition, prevents cross-domain context leakage, and continuously compacts raw notes into stable knowledge summaries.
+It stores knowledge in isolated vertical namespaces, accepts strict storage operations from models, prevents cross-domain context leakage, and continuously compacts raw notes into stable knowledge summaries.
 
 ## Core idea
 
-Vertical Brain is not a generic chatbot memory.
+Vertical Brain is not a generic chatbot memory and it is not the model.
 
 It is a controlled knowledge storage engine with:
 
 - strict namespace isolation
-- vertical context routing
+- vertical context storage operations
 - Bronze / Silver / Gold knowledge layers
 - peer-links between controlled sibling nodes
 - stale context detection
@@ -107,6 +107,7 @@ MVP core implemented:
 - local JSON storage
 - root namespace bootstrap from `data/namespaces/root.json`
 - LLM-driven routing through strict JSON contracts from `data/namespaces/model.json`
+- first-class `StorageOperation` execution
 - route decision JSON serialization
 - context locking with ancestors, target node, and explicit peer links
 - exact duplicate stale marking

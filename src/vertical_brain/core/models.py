@@ -11,6 +11,14 @@ Layer = Literal["bronze", "silver", "gold"]
 ContentType = Literal["fact", "correction", "decision", "question", "note", "code", "artifact"]
 ChunkStatus = Literal["active", "stale", "legacy", "superseded", "contradicted", "uncertain"]
 QueryType = Literal["explanation", "lookup", "comparison", "summary", "unknown"]
+OperationType = Literal[
+    "create_node",
+    "append_chunk",
+    "create_link",
+    "mark_stale",
+    "supersede_chunk",
+    "update_gold_summary",
+]
 Action = Literal[
     "append_bronze",
     "append_silver",
@@ -69,6 +77,50 @@ class Link:
     reason: str
     id: str = field(default_factory=lambda: str(uuid4()))
     created_at: str = field(default_factory=utc_now)
+
+
+@dataclass
+class ChunkInput:
+    content: str
+    layer: Layer = "bronze"
+    content_type: ContentType = "note"
+    source: str = "model"
+    confidence: float = 1.0
+    lineage: list[str] = field(default_factory=list)
+
+
+@dataclass
+class LinkInput:
+    target_path: str
+    link_type: str
+    reason: str
+
+
+@dataclass
+class StaleCandidateInput:
+    path: str
+    reason: str
+
+
+@dataclass
+class StorageOperation(JsonSerializable):
+    operation: OperationType
+    target_path: str
+    chunk: ChunkInput | None = None
+    links: list[LinkInput] = field(default_factory=list)
+    stale_candidates: list[StaleCandidateInput] = field(default_factory=list)
+    confidence: float = 1.0
+    reasoning_summary: str = ""
+
+
+@dataclass
+class OperationResult(JsonSerializable):
+    operation: OperationType
+    target_path: str
+    chunk_id: str | None = None
+    link_ids: list[str] = field(default_factory=list)
+    stale_candidates: list[StaleCandidateInput] = field(default_factory=list)
+    status: str = "applied"
 
 
 @dataclass

@@ -53,7 +53,8 @@ created_at
 
 ## RouteDecision
 
-Structured output from the router.
+Compatibility adapter output from a model routing step. A RouteDecision should be
+converted into a StorageOperation before mutating storage.
 
 Fields:
 
@@ -67,6 +68,26 @@ stale_candidates
 confidence
 reasoning_summary
 ```
+
+## StorageOperation
+
+Primary write contract returned by a model or produced by an adapter.
+
+Fields:
+
+```text
+operation: create_node | append_chunk | create_link | mark_stale | supersede_chunk | update_gold_summary
+target_path
+chunk
+links
+stale_candidates
+confidence
+reasoning_summary
+```
+
+`append_chunk` writes an atomic chunk to a vertical namespace and may create
+explicit horizontal links. Stale candidates are surfaced but are not applied
+automatically.
 
 ## Allowed actions
 
