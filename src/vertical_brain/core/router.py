@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from vertical_brain.core.models import RouteDecision, PeerLinkCandidate
+from vertical_brain.core.models import (
+    AllowedContext,
+    PeerLinkCandidate,
+    QueryRouteDecision,
+    QueryType,
+    RouteDecision,
+)
 
 
 class MockRouter:
@@ -62,5 +68,28 @@ class MockRouter:
             reasoning_summary="No strong route found.",
         )
 
-    def route_query(self, question: str) -> RouteDecision:
-        return self.route_ingest(question)
+    def route_query(self, question: str) -> QueryRouteDecision:
+        ingest_like_decision = self.route_ingest(question)
+        return QueryRouteDecision(
+            target_path=ingest_like_decision.target_path,
+            allowed_context=AllowedContext(
+                include_ancestors=True,
+                include_peer_links=True,
+                exclude_other_branches=True,
+            ),
+            query_type=self._infer_query_type(question),
+            confidence=ingest_like_decision.confidence,
+            reasoning_summary=ingest_like_decision.reasoning_summary.replace("Matched", "Query matched"),
+        )
+
+    def _infer_query_type(self, question: str) -> QueryType:
+        lowered = question.lower()
+        if "compare" in lowered or "difference" in lowered or " vs " in lowered:
+            return "comparison"
+        if "summarize" in lowered or "summary" in lowered:
+            return "summary"
+        if lowered.startswith(("how ", "why ", "what ")):
+            return "explanation"
+        if lowered.endswith("?"):
+            return "lookup"
+        return "unknown"

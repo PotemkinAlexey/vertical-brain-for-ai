@@ -9,6 +9,7 @@ from uuid import uuid4
 Layer = Literal["bronze", "silver", "gold"]
 ContentType = Literal["fact", "correction", "decision", "question", "note", "code", "artifact"]
 ChunkStatus = Literal["active", "stale", "legacy", "superseded", "contradicted", "uncertain"]
+QueryType = Literal["explanation", "lookup", "comparison", "summary", "unknown"]
 Action = Literal[
     "append_bronze",
     "append_silver",
@@ -80,5 +81,21 @@ class RouteDecision:
     action: Action
     peer_links: list[PeerLinkCandidate] = field(default_factory=list)
     stale_candidates: list[StaleCandidate] = field(default_factory=list)
+    confidence: float = 1.0
+    reasoning_summary: str = ""
+
+
+@dataclass
+class AllowedContext:
+    include_ancestors: bool = True
+    include_peer_links: bool = True
+    exclude_other_branches: bool = True
+
+
+@dataclass
+class QueryRouteDecision:
+    target_path: str
+    allowed_context: AllowedContext = field(default_factory=AllowedContext)
+    query_type: QueryType = "lookup"
     confidence: float = 1.0
     reasoning_summary: str = ""

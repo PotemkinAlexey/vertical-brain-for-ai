@@ -16,13 +16,19 @@ class ContextLock:
     def __init__(self, store: JsonStore):
         self.store = store
 
-    def build_context(self, target_path: str) -> list[str]:
+    def build_context(
+        self,
+        target_path: str,
+        include_ancestors: bool = True,
+        include_peer_links: bool = True,
+    ) -> list[str]:
         context: list[str] = []
 
-        for ancestor_path in self.store.get_ancestors(target_path):
-            ancestor = self.store.get_node(ancestor_path)
-            if ancestor and ancestor.gold_summary:
-                context.append(f"[{ancestor.path}][gold_summary] {ancestor.gold_summary}")
+        if include_ancestors:
+            for ancestor_path in self.store.get_ancestors(target_path):
+                ancestor = self.store.get_node(ancestor_path)
+                if ancestor and ancestor.gold_summary:
+                    context.append(f"[{ancestor.path}][gold_summary] {ancestor.gold_summary}")
 
         target = self.store.get_node(target_path)
         if target and target.gold_summary:
@@ -30,8 +36,9 @@ class ContextLock:
 
         self._append_active_chunks(context, target_path)
 
-        for peer_path in self.store.get_peer_paths(target_path):
-            self._append_active_chunks(context, peer_path, label_prefix="peer:")
+        if include_peer_links:
+            for peer_path in self.store.get_peer_paths(target_path):
+                self._append_active_chunks(context, peer_path, label_prefix="peer:")
 
         return context
 

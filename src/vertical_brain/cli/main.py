@@ -67,9 +67,21 @@ def main() -> None:
     elif args.command == "ask":
         decision = router.route_query(args.question)
         lock = ContextLock(store)
-        context = lock.build_context(decision.target_path)
+        context = lock.build_context(
+            decision.target_path,
+            include_ancestors=decision.allowed_context.include_ancestors,
+            include_peer_links=decision.allowed_context.include_peer_links,
+        )
 
         print(f"Target path: {decision.target_path}")
+        print(f"Query type: {decision.query_type}")
+        print(f"Confidence: {decision.confidence}")
+        print(
+            "Allowed context policy: "
+            f"ancestors={decision.allowed_context.include_ancestors}, "
+            f"peer_links={decision.allowed_context.include_peer_links}, "
+            f"exclude_other_branches={decision.allowed_context.exclude_other_branches}"
+        )
         print("Allowed context:")
         if not context:
             print("(no context found)")

@@ -17,3 +17,14 @@ def test_unknown_route():
     router = MockRouter()
     decision = router.route_ingest("random note")
     assert decision.target_path == "INBOX/Unclassified"
+
+
+def test_query_route_uses_ask_contract():
+    router = MockRouter()
+    decision = router.route_query("How does Databricks schema evolution work?")
+
+    assert decision.target_path == "WORK/DataArt/Databricks"
+    assert decision.query_type == "explanation"
+    assert decision.allowed_context.include_ancestors is True
+    assert decision.allowed_context.include_peer_links is True
+    assert decision.allowed_context.exclude_other_branches is True
