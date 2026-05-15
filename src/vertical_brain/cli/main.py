@@ -5,7 +5,8 @@ import json
 from pathlib import Path
 
 from vertical_brain.core.context_lock import ContextLock
-from vertical_brain.core.models import ContextPolicy
+from vertical_brain.core.json_schema import format_json_schema_errors, validate_json_schema
+from vertical_brain.core.models import ContextPolicy, OperationBatchResult
 from vertical_brain.core.optimizer import SimpleOptimizer
 from vertical_brain.core.operations import (
     StorageOperationExecutor,
@@ -163,6 +164,12 @@ def main() -> None:
         payload = json.loads(Path(args.file).read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("Operation file must contain a JSON object")
+        schema_validation = validate_json_schema(payload, storage_model.storage_operation_payload_schema)
+        if not schema_validation.valid:
+            if args.operation_command == "dry-run":
+                print(OperationBatchResult(status="invalid", validation=schema_validation).to_json())
+                return
+            raise ValueError(format_json_schema_errors(schema_validation))
         batch = operation_batch_from_dict(payload)
         executor = StorageOperationExecutor(store)
         result = executor.dry_run_batch(batch) if args.operation_command == "dry-run" else executor.apply_batch(batch)

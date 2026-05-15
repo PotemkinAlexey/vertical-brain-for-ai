@@ -32,6 +32,158 @@
       "reasoning_summary"
     ]
   },
+  "storage_operation_contract": {
+    "payload_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/storage_operation"
+        },
+        {
+          "$ref": "#/$defs/storage_operation_batch"
+        }
+      ],
+      "$defs": {
+        "storage_operation_batch": {
+          "type": "object",
+          "required": ["operations"],
+          "additionalProperties": false,
+          "properties": {
+            "operations": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/storage_operation"
+              }
+            },
+            "reasoning_summary": {
+              "type": "string"
+            }
+          }
+        },
+        "storage_operation": {
+          "type": "object",
+          "required": ["operation", "target_path"],
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "type": "string",
+              "enum": [
+                "create_node",
+                "append_chunk",
+                "create_link",
+                "mark_stale",
+                "supersede_chunk",
+                "update_gold_summary"
+              ]
+            },
+            "target_path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "chunk": {
+              "$ref": "#/$defs/chunk_input"
+            },
+            "links": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/link_input"
+              }
+            },
+            "stale_candidates": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/stale_candidate_input"
+              }
+            },
+            "chunk_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "gold_summary": {
+              "type": "string"
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "reasoning_summary": {
+              "type": "string"
+            }
+          }
+        },
+        "chunk_input": {
+          "type": "object",
+          "required": ["content"],
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "type": "string",
+              "minLength": 1
+            },
+            "layer": {
+              "type": "string",
+              "enum": ["bronze", "silver", "gold"]
+            },
+            "content_type": {
+              "type": "string",
+              "enum": ["fact", "correction", "decision", "question", "note", "code", "artifact"]
+            },
+            "source": {
+              "type": "string"
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "lineage": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "link_input": {
+          "type": "object",
+          "required": ["target_path", "link_type", "reason"],
+          "additionalProperties": false,
+          "properties": {
+            "target_path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "link_type": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "stale_candidate_input": {
+          "type": "object",
+          "required": ["path", "reason"],
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    }
+  },
   "storage_files": {
     "nodes": "nodes.json",
     "chunks": "chunks.json",

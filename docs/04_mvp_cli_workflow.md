@@ -91,8 +91,9 @@ Expected behavior:
 
 ```text
 1. Read a StorageOperation or StorageOperationBatch JSON object.
-2. Validate protocol invariants.
-3. For dry-run, return validation and planned result without writing.
-4. For apply, validate the full batch before the first write.
-5. Return strict JSON with operation results and validation status.
+2. Validate JSON shape against the operation schema in model.json.
+3. Validate protocol invariants against current storage state.
+4. For dry-run, return validation and planned result without writing.
+5. For apply, validate the full batch before the first write.
+6. Return strict JSON with operation results and validation status.
 ```

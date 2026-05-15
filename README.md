@@ -71,7 +71,10 @@ Use a custom storage model when changing the format contract:
 vb --model-file data/namespaces/model.json tree
 ```
 
-`model.json` describes storage and routing contracts only. It does not contain domain routing rules; route decisions are strict JSON returned by the configured model provider. For local tests, `--llm-response-file` can inject a canned provider response.
+`model.json` describes storage, routing, and operation JSON contracts only. It
+does not contain domain routing rules; route decisions are strict JSON returned
+by the configured model provider. For local tests, `--llm-response-file` can
+inject a canned provider response.
 
 Inspect router decisions as strict JSON:
 
@@ -82,9 +85,11 @@ vb ask --route-json "How does Databricks schema evolution work?"
 
 If router confidence is below the namespace model threshold, the CLI asks for clarification instead of writing low-quality knowledge into the store.
 
-Models can also emit first-class storage operations directly. `dry-run` validates
-the operation or batch without mutating storage; `apply` prevalidates the full
-batch before any write:
+Models can also emit first-class storage operations directly. The CLI validates
+the incoming JSON against the operation schema from `model.json`, then runs
+semantic validation against storage state. `dry-run` validates the operation or
+batch without mutating storage; `apply` prevalidates the full batch before any
+write:
 
 ```json
 {
@@ -143,6 +148,7 @@ MVP core implemented:
 - LLM-driven routing through strict JSON contracts from `data/namespaces/model.json`
 - first-class `StorageOperation` execution
 - `StorageOperationBatch` optimization for many variants into one canonical chunk
+- JSON Schema validation for model-emitted operation payloads
 - operation validation, dry-run, and batch preflight before writes
 - route decision JSON serialization
 - locked context capsules with budget and horizontal link handles

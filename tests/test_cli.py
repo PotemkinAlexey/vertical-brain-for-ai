@@ -1,6 +1,8 @@
 import json
 import sys
 
+import pytest
+
 from vertical_brain.cli.main import main
 from vertical_brain.storage.json_store import JsonStore
 from vertical_brain.storage.sqlite_store import SQLiteStore
@@ -343,3 +345,52 @@ def test_cli_can_use_sqlite_storage_backend(monkeypatch, capsys, tmp_path):
     chunks = store.get_chunks_by_path(STRUCTURED_SCHEMA_PATH)
     assert len(chunks) == 1
     assert chunks[0].content == "Databricks SQLite-backed fact"
+
+
+def test_cli_operation_dry_run_reports_schema_errors(monkeypatch, capsys, tmp_path):
+    operation_file = tmp_path / "invalid_operation.json"
+    operation_file.write_text(
+        json.dumps(
+            {
+                "operation": "append_chunk",
+                "target_path": "WORK/Vertical/Node",
+                "chunk": {
+                    "content": "Valid content.",
+                    "made_up": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = run_cli(monkeypatch, capsys, tmp_path, "operation", "dry-run", str(operation_file))
+
+    payload = json.loads(output)
+    assert payload["status"] == "invalid"
+    assert payload["validation"]["valid"] is False
+    assert any(issue["path"] == "$.chunk.made_up" for issue in payload["validation"]["issues"])
+    store = JsonStore(tmp_path / "data")
+    assert store.get_chunks_by_path("WORK/Vertical/Node") == []
+
+
+def test_cli_operation_apply_rejects_schema_errors(monkeypatch, capsys, tmp_path):
+    operation_file = tmp_path / "invalid_operation.json"
+    operation_file.write_text(
+        json.dumps(
+            {
+                "operation": "append_chunk",
+                "target_path": "WORK/Vertical/Node",
+                "chunk": {
+                    "content": "Valid content.",
+                    "made_up": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="made_up"):
+        run_cli(monkeypatch, capsys, tmp_path, "operation", "apply", str(operation_file))
+
+    store = JsonStore(tmp_path / "data")
+    assert store.get_chunks_by_path("WORK/Vertical/Node") == []

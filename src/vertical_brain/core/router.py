@@ -48,6 +48,10 @@ class StorageModel:
     def query_route_decision_fields(self) -> list[str]:
         return list(self.payload["routing_contract"]["query_route_decision_fields"])
 
+    @property
+    def storage_operation_payload_schema(self) -> dict[str, Any]:
+        return dict(self.payload["storage_operation_contract"]["payload_schema"])
+
 
 class LLMRouter:
     """Routes inputs by asking a model for strict JSON decisions."""
