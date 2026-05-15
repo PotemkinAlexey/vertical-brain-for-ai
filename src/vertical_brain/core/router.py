@@ -2,147 +2,148 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from vertical_brain.core.models import (
-    Action,
     AllowedContext,
-    ContentType,
-    Layer,
     PeerLinkCandidate,
     QueryRouteDecision,
-    QueryType,
     RouteDecision,
     StaleCandidate,
 )
 
 
-class NamespaceModel:
+class LLMProvider(Protocol):
+    def complete(self, prompt: str) -> str:
+        ...
+
+
+class StorageModel:
+    """Storage and contract format metadata loaded from model.json."""
+
     def __init__(self, payload: dict[str, Any]):
         self.payload = payload
 
     @classmethod
-    def load(cls, path: str | Path) -> NamespaceModel:
+    def load(cls, path: str | Path) -> StorageModel:
         return cls(json.loads(Path(path).read_text(encoding="utf-8")))
 
     @property
-    def routing(self) -> dict[str, Any]:
-        return self.payload.get("routing", {})
+    def namespace_path_shape(self) -> list[str]:
+        return list(self.payload["namespace_path_shape"])
 
     @property
-    def rules(self) -> list[dict[str, Any]]:
-        return self.routing.get("rules", [])
-
-    @property
-    def default_route(self) -> dict[str, Any]:
-        return self.routing["default_route"]
-
-    @property
-    def content_type_rules(self) -> list[dict[str, Any]]:
-        return self.routing.get("content_type_rules", [])
-
-    @property
-    def query_type_rules(self) -> list[dict[str, Any]]:
-        return self.routing.get("query_type_rules", [])
+    def min_compaction_path_parts(self) -> int:
+        return len(self.namespace_path_shape)
 
     @property
     def clarification_threshold(self) -> float:
-        return float(self.routing["clarification_threshold"])
+        return float(self.payload["routing_contract"]["clarification_threshold"])
 
     @property
-    def context_policy(self) -> dict[str, bool]:
-        return self.payload.get("context_policy", {})
+    def route_decision_fields(self) -> list[str]:
+        return list(self.payload["routing_contract"]["route_decision_fields"])
 
     @property
-    def optimizer(self) -> dict[str, Any]:
-        return self.payload.get("optimizer", {})
+    def query_route_decision_fields(self) -> list[str]:
+        return list(self.payload["routing_contract"]["query_route_decision_fields"])
 
 
-class ModelRouter:
-    """Routes inputs by executing the namespace model, not by owning domain knowledge."""
+class LLMRouter:
+    """Routes inputs by asking a model for strict JSON decisions."""
 
-    def __init__(self, model: NamespaceModel):
-        self.model = model
+    def __init__(self, llm: LLMProvider, storage_model: StorageModel):
+        self.llm = llm
+        self.storage_model = storage_model
 
-    def route_ingest(self, text: str) -> RouteDecision:
-        lowered = text.lower()
-        for rule in self.model.rules:
-            if self._matches(rule.get("match", {}), lowered):
-                return self._route_decision_from_rule(rule, lowered)
-        return self._route_decision_from_rule(self.model.default_route, lowered)
-
-    def route_query(self, question: str) -> QueryRouteDecision:
-        ingest_like_decision = self.route_ingest(question)
-        context_policy = self.model.context_policy
-        return QueryRouteDecision(
-            target_path=ingest_like_decision.target_path,
-            allowed_context=AllowedContext(
-                include_ancestors=context_policy.get("include_ancestors", True),
-                include_peer_links=context_policy.get("include_peer_links", True),
-                exclude_other_branches=context_policy.get("exclude_other_branches", True),
-            ),
-            query_type=self._infer_query_type(question.lower()),
-            confidence=ingest_like_decision.confidence,
-            reasoning_summary=ingest_like_decision.reasoning_summary,
+    def route_ingest(self, text: str, known_namespaces: list[str] | None = None) -> RouteDecision:
+        payload = self._complete_json(
+            self._build_prompt(
+                mode="ingest",
+                text=text,
+                known_namespaces=known_namespaces or [],
+                required_fields=self.storage_model.route_decision_fields,
+            )
         )
+        return self._route_decision_from_payload(payload)
+
+    def route_query(self, question: str, known_namespaces: list[str] | None = None) -> QueryRouteDecision:
+        payload = self._complete_json(
+            self._build_prompt(
+                mode="ask",
+                text=question,
+                known_namespaces=known_namespaces or [],
+                required_fields=self.storage_model.query_route_decision_fields,
+            )
+        )
+        return self._query_route_decision_from_payload(payload)
 
     def requires_clarification(self, decision: RouteDecision | QueryRouteDecision) -> bool:
         action = getattr(decision, "action", None)
-        return action == "ask_clarification" or decision.confidence < self.model.clarification_threshold
+        return action == "ask_clarification" or decision.confidence < self.storage_model.clarification_threshold
 
-    def _route_decision_from_rule(self, rule: dict[str, Any], lowered: str) -> RouteDecision:
+    def _build_prompt(
+        self,
+        mode: str,
+        text: str,
+        known_namespaces: list[str],
+        required_fields: list[str],
+    ) -> str:
+        payload = {
+            "mode": mode,
+            "namespace_path_shape": self.storage_model.namespace_path_shape,
+            "known_namespaces": known_namespaces,
+            "required_fields": required_fields,
+            "input": text,
+            "instruction": "Return one strict JSON object and no prose.",
+        }
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+    def _complete_json(self, prompt: str) -> dict[str, Any]:
+        raw = self.llm.complete(prompt)
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("LLM router returned invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("LLM router must return a JSON object")
+        return payload
+
+    def _route_decision_from_payload(self, payload: dict[str, Any]) -> RouteDecision:
+        self._require_fields(payload, self.storage_model.route_decision_fields)
         return RouteDecision(
-            target_path=rule["target_path"],
-            content_type=self._content_type_for(rule, lowered),
-            layer=self._layer(rule),
-            action=self._action(rule),
+            target_path=payload["target_path"],
+            content_type=payload["content_type"],
+            layer=payload["layer"],
+            action=payload["action"],
             peer_links=[
                 PeerLinkCandidate(path=peer["path"], reason=peer["reason"])
-                for peer in rule.get("peer_links", [])
+                for peer in payload.get("peer_links", [])
             ],
             stale_candidates=[
                 StaleCandidate(path=candidate["path"], reason=candidate["reason"])
-                for candidate in rule.get("stale_candidates", [])
+                for candidate in payload.get("stale_candidates", [])
             ],
-            confidence=float(rule["confidence"]),
-            reasoning_summary=rule["reasoning_summary"],
+            confidence=float(payload["confidence"]),
+            reasoning_summary=payload["reasoning_summary"],
         )
 
-    def _content_type_for(self, rule: dict[str, Any], lowered: str) -> ContentType:
-        if "content_type" in rule:
-            return rule["content_type"]
-        for content_type_rule in self.model.content_type_rules:
-            if self._matches(content_type_rule.get("match", {}), lowered):
-                return content_type_rule["content_type"]
-        return "fact"
+    def _query_route_decision_from_payload(self, payload: dict[str, Any]) -> QueryRouteDecision:
+        self._require_fields(payload, self.storage_model.query_route_decision_fields)
+        allowed_context = payload["allowed_context"]
+        return QueryRouteDecision(
+            target_path=payload["target_path"],
+            allowed_context=AllowedContext(
+                include_ancestors=allowed_context["include_ancestors"],
+                include_peer_links=allowed_context["include_peer_links"],
+                exclude_other_branches=allowed_context["exclude_other_branches"],
+            ),
+            query_type=payload["query_type"],
+            confidence=float(payload["confidence"]),
+            reasoning_summary=payload["reasoning_summary"],
+        )
 
-    def _infer_query_type(self, lowered: str) -> QueryType:
-        for query_type_rule in self.model.query_type_rules:
-            if self._matches(query_type_rule.get("match", {}), lowered):
-                return query_type_rule["query_type"]
-        return "unknown"
-
-    def _matches(self, match: dict[str, Any], lowered: str) -> bool:
-        all_terms = [term.lower() for term in match.get("all", [])]
-        any_terms = [term.lower() for term in match.get("any", [])]
-        none_terms = [term.lower() for term in match.get("none", [])]
-        starts_with = [term.lower() for term in match.get("starts_with", [])]
-        ends_with = [term.lower() for term in match.get("ends_with", [])]
-
-        if all_terms and not all(term in lowered for term in all_terms):
-            return False
-        if any_terms and not any(term in lowered for term in any_terms):
-            return False
-        if none_terms and any(term in lowered for term in none_terms):
-            return False
-        if starts_with and not any(lowered.startswith(term) for term in starts_with):
-            return False
-        if ends_with and not any(lowered.endswith(term) for term in ends_with):
-            return False
-        return any([all_terms, any_terms, none_terms, starts_with, ends_with])
-
-    def _layer(self, rule: dict[str, Any]) -> Layer:
-        return rule["layer"]
-
-    def _action(self, rule: dict[str, Any]) -> Action:
-        return rule["action"]
+    def _require_fields(self, payload: dict[str, Any], fields: list[str]) -> None:
+        missing_fields = [field for field in fields if field not in payload]
+        if missing_fields:
+            raise ValueError(f"LLM router response missing fields: {', '.join(missing_fields)}")

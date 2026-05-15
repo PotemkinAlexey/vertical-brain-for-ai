@@ -48,17 +48,21 @@ vb ingest "Databricks Delta schema evolution uses mergeSchema."
 vb ask "How does Databricks schema evolution work?"
 ```
 
+The current local runner uses a mock provider. Without a real model provider or `--llm-response-file`, routing returns a clarification response instead of guessing.
+
 Use an isolated storage directory when experimenting:
 
 ```bash
 vb --data-dir .vb-dev-data ingest "dbt staging models are ephemeral in this project."
 ```
 
-Use a custom namespace model when changing routing behavior:
+Use a custom storage model when changing the format contract:
 
 ```bash
-vb --model-file data/namespaces/model.json ingest "Databricks Delta schema evolution uses mergeSchema."
+vb --model-file data/namespaces/model.json tree
 ```
+
+`model.json` describes storage and routing contracts only. It does not contain domain routing rules; route decisions are strict JSON returned by the configured model provider. For local tests, `--llm-response-file` can inject a canned provider response.
 
 Inspect router decisions as strict JSON:
 
@@ -102,7 +106,7 @@ MVP core implemented:
 - CLI ingest / ask / tree / optimize
 - local JSON storage
 - root namespace bootstrap from `data/namespaces/root.json`
-- model-driven routing and policy from `data/namespaces/model.json`
+- LLM-driven routing through strict JSON contracts from `data/namespaces/model.json`
 - route decision JSON serialization
 - context locking with ancestors, target node, and explicit peer links
 - exact duplicate stale marking

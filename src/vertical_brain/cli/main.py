@@ -6,7 +6,7 @@ from pathlib import Path
 from vertical_brain.core.context_lock import ContextLock
 from vertical_brain.core.models import Chunk, Link
 from vertical_brain.core.optimizer import SimpleOptimizer
-from vertical_brain.core.router import ModelRouter, NamespaceModel
+from vertical_brain.core.router import LLMRouter, StorageModel
 from vertical_brain.llm.mock_llm import MockLLM
 from vertical_brain.storage.json_store import JsonStore
 
@@ -20,7 +20,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--model-file",
         default=str(DEFAULT_MODEL_FILE),
-        help="Namespace model JSON used for routing and policies",
+        help="Storage model JSON used for contracts and format metadata",
+    )
+    parser.add_argument(
+        "--llm-response-file",
+        default=None,
+        help="Read strict JSON route response from a file instead of a provider",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -45,11 +50,13 @@ def main() -> None:
     args = parser.parse_args()
 
     store = JsonStore(args.data_dir)
-    namespace_model = NamespaceModel.load(args.model_file)
-    router = ModelRouter(namespace_model)
+    storage_model = StorageModel.load(args.model_file)
+    llm = MockLLM.from_response_file(args.llm_response_file) if args.llm_response_file else MockLLM()
+    router = LLMRouter(llm, storage_model)
+    known_namespaces = [node.path for node in store.list_nodes()]
 
     if args.command == "ingest":
-        decision = router.route_ingest(args.text)
+        decision = router.route_ingest(args.text, known_namespaces=known_namespaces)
         print(f"Target path: {decision.target_path}")
         print(f"Action: {decision.action}")
         print(f"Layer: {decision.layer}")
@@ -91,7 +98,7 @@ def main() -> None:
                 print(f"- {candidate.path}: {candidate.reason}")
 
     elif args.command == "ask":
-        decision = router.route_query(args.question)
+        decision = router.route_query(args.question, known_namespaces=known_namespaces)
         lock = ContextLock(store)
         context = lock.build_context(
             decision.target_path,
@@ -131,7 +138,7 @@ def main() -> None:
     elif args.command == "optimize":
         optimizer = SimpleOptimizer(
             store,
-            min_compaction_path_parts=int(namespace_model.optimizer["min_compaction_path_parts"]),
+            min_compaction_path_parts=storage_model.min_compaction_path_parts,
         )
         print(optimizer.optimize_branch(args.path))
 

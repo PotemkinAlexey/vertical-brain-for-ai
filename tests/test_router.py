@@ -1,38 +1,75 @@
 import json
 from pathlib import Path
 
-from vertical_brain.core.router import ModelRouter, NamespaceModel
+import pytest
+
+from vertical_brain.core.router import LLMRouter, StorageModel
+from vertical_brain.llm.mock_llm import MockLLM
 
 STRUCTURED_SCHEMA_PATH = "WORK/DataArt/Databricks/Certification/StructuredStreaming/SchemaEvolution"
 AUTO_LOADER_SCHEMA_PATH = "WORK/DataArt/Databricks/Certification/AutoLoader/SchemaEvolution"
 MODEL_FILE = Path(__file__).resolve().parents[1] / "data" / "namespaces" / "model.json"
 
 
-def build_router() -> ModelRouter:
-    return ModelRouter(NamespaceModel.load(MODEL_FILE))
+def build_router(*responses: dict) -> LLMRouter:
+    return LLMRouter(
+        MockLLM([json.dumps(response) for response in responses]),
+        StorageModel.load(MODEL_FILE),
+    )
 
 
-def test_databricks_route():
-    router = build_router()
+def test_storage_model_file_is_contract_not_routing_data():
+    payload = json.loads(MODEL_FILE.read_text(encoding="utf-8"))
+
+    assert "routing_contract" in payload
+    assert "routing" not in payload
+    assert "rules" not in payload
+
+
+def ingest_response(**overrides):
+    payload = {
+        "target_path": STRUCTURED_SCHEMA_PATH,
+        "content_type": "fact",
+        "layer": "silver",
+        "action": "append_and_optimize",
+        "peer_links": [],
+        "stale_candidates": [],
+        "confidence": 0.9,
+        "reasoning_summary": "Model selected the route.",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def query_response(**overrides):
+    payload = {
+        "target_path": STRUCTURED_SCHEMA_PATH,
+        "allowed_context": {
+            "include_ancestors": True,
+            "include_peer_links": True,
+            "exclude_other_branches": True,
+        },
+        "query_type": "explanation",
+        "confidence": 0.9,
+        "reasoning_summary": "Model selected the query route.",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_ingest_route_comes_from_llm_response():
+    router = build_router(ingest_response())
+
     decision = router.route_ingest("Databricks Delta schema evolution")
+
     assert decision.target_path == STRUCTURED_SCHEMA_PATH
+    assert decision.layer == "silver"
+    assert decision.action == "append_and_optimize"
 
 
-def test_dbt_route():
-    router = build_router()
-    decision = router.route_ingest("dbt ephemeral staging model")
-    assert decision.target_path == "WORK/Stack/dbt"
+def test_query_route_comes_from_llm_response():
+    router = build_router(query_response())
 
-
-def test_unknown_route():
-    router = build_router()
-    decision = router.route_ingest("random note")
-    assert decision.target_path == "INBOX/Unclassified"
-    assert decision.action == "ask_clarification"
-
-
-def test_query_route_uses_ask_contract():
-    router = build_router()
     decision = router.route_query("How does Databricks schema evolution work?")
 
     assert decision.target_path == STRUCTURED_SCHEMA_PATH
@@ -43,7 +80,19 @@ def test_query_route_uses_ask_contract():
 
 
 def test_route_decisions_serialize_to_strict_json():
-    router = build_router()
+    router = build_router(
+        ingest_response(
+            target_path=AUTO_LOADER_SCHEMA_PATH,
+            peer_links=[
+                {
+                    "path": STRUCTURED_SCHEMA_PATH,
+                    "reason": "Model approved this comparison peer.",
+                }
+            ],
+        ),
+        query_response(),
+    )
+
     ingest_decision = router.route_ingest("Databricks Auto Loader schema evolution")
     query_decision = router.route_query("How does Databricks schema evolution work?")
 
@@ -55,8 +104,25 @@ def test_route_decisions_serialize_to_strict_json():
     assert query_payload["allowed_context"]["exclude_other_branches"] is True
 
 
-def test_delta_streaming_schema_evolution_adds_peer_link_and_stale_candidate():
-    router = build_router()
+def test_ingest_route_preserves_peer_links_and_stale_candidates_from_model():
+    router = build_router(
+        ingest_response(
+            content_type="correction",
+            peer_links=[
+                {
+                    "path": AUTO_LOADER_SCHEMA_PATH,
+                    "reason": "Model approved this peer.",
+                }
+            ],
+            stale_candidates=[
+                {
+                    "path": STRUCTURED_SCHEMA_PATH,
+                    "reason": "Model identified this stale candidate.",
+                }
+            ],
+        )
+    )
+
     decision = router.route_ingest("For Delta streaming sink schema evolution use mergeSchema=true")
 
     assert decision.target_path == STRUCTURED_SCHEMA_PATH
@@ -65,48 +131,18 @@ def test_delta_streaming_schema_evolution_adds_peer_link_and_stale_candidate():
     assert decision.stale_candidates[0].path == STRUCTURED_SCHEMA_PATH
 
 
-def test_router_behavior_comes_from_namespace_model(tmp_path):
-    model_file = tmp_path / "model.json"
-    model_file.write_text(
-        json.dumps(
-            {
-                "routing": {
-                    "clarification_threshold": 0.65,
-                    "default_route": {
-                        "target_path": "INBOX/Unclassified",
-                        "content_type": "note",
-                        "layer": "bronze",
-                        "action": "ask_clarification",
-                        "confidence": 0.4,
-                        "reasoning_summary": "No rule matched.",
-                    },
-                    "rules": [
-                        {
-                            "id": "custom_namespace",
-                            "target_path": "WORK/Custom/Namespace",
-                            "content_type": "fact",
-                            "layer": "silver",
-                            "action": "append_silver",
-                            "confidence": 0.99,
-                            "match": {"any": ["custom-token"]},
-                            "reasoning_summary": "Custom model rule matched.",
-                        }
-                    ],
-                },
-                "context_policy": {
-                    "include_ancestors": False,
-                    "include_peer_links": False,
-                    "exclude_other_branches": True,
-                },
-                "optimizer": {"min_compaction_path_parts": 7},
-            }
-        ),
-        encoding="utf-8",
-    )
+def test_unknown_route_defaults_to_clarification_without_provider_data():
+    router = LLMRouter(MockLLM(), StorageModel.load(MODEL_FILE))
 
-    router = ModelRouter(NamespaceModel.load(model_file))
-    decision = router.route_query("custom-token question?")
+    decision = router.route_ingest("random note")
 
-    assert decision.target_path == "WORK/Custom/Namespace"
-    assert decision.allowed_context.include_ancestors is False
-    assert decision.allowed_context.include_peer_links is False
+    assert decision.target_path == "INBOX/Unclassified"
+    assert decision.action == "ask_clarification"
+    assert router.requires_clarification(decision) is True
+
+
+def test_router_rejects_missing_required_fields():
+    router = build_router({"target_path": "WORK/Incomplete"})
+
+    with pytest.raises(ValueError, match="missing fields"):
+        router.route_ingest("anything")

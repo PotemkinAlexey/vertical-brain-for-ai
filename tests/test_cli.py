@@ -8,6 +8,43 @@ STRUCTURED_SCHEMA_PATH = "WORK/DataArt/Databricks/Certification/StructuredStream
 AUTO_LOADER_SCHEMA_PATH = "WORK/DataArt/Databricks/Certification/AutoLoader/SchemaEvolution"
 
 
+def ingest_response(**overrides):
+    payload = {
+        "target_path": STRUCTURED_SCHEMA_PATH,
+        "content_type": "fact",
+        "layer": "silver",
+        "action": "append_and_optimize",
+        "peer_links": [],
+        "stale_candidates": [],
+        "confidence": 0.9,
+        "reasoning_summary": "Model selected the route.",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def query_response(**overrides):
+    payload = {
+        "target_path": STRUCTURED_SCHEMA_PATH,
+        "allowed_context": {
+            "include_ancestors": True,
+            "include_peer_links": True,
+            "exclude_other_branches": True,
+        },
+        "query_type": "explanation",
+        "confidence": 0.9,
+        "reasoning_summary": "Model selected the query route.",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def write_llm_response(tmp_path, name, payload):
+    response_file = tmp_path / name
+    response_file.write_text(json.dumps(payload), encoding="utf-8")
+    return response_file
+
+
 def run_cli(monkeypatch, capsys, tmp_path, *args):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["vb", *args])
@@ -16,10 +53,13 @@ def run_cli(monkeypatch, capsys, tmp_path, *args):
 
 
 def test_cli_ingest_writes_chunk_and_tree_lists_namespace(monkeypatch, capsys, tmp_path):
+    response_file = write_llm_response(tmp_path, "ingest.json", ingest_response())
     output = run_cli(
         monkeypatch,
         capsys,
         tmp_path,
+        "--llm-response-file",
+        str(response_file),
         "ingest",
         "Databricks Delta schema evolution",
     )
@@ -37,18 +77,24 @@ def test_cli_ingest_writes_chunk_and_tree_lists_namespace(monkeypatch, capsys, t
 
 
 def test_cli_ask_prints_query_route_contract(monkeypatch, capsys, tmp_path):
+    ingest_response_file = write_llm_response(tmp_path, "ingest.json", ingest_response())
     run_cli(
         monkeypatch,
         capsys,
         tmp_path,
+        "--llm-response-file",
+        str(ingest_response_file),
         "ingest",
         "Databricks Delta schema evolution",
     )
 
+    query_response_file = write_llm_response(tmp_path, "query.json", query_response())
     output = run_cli(
         monkeypatch,
         capsys,
         tmp_path,
+        "--llm-response-file",
+        str(query_response_file),
         "ask",
         "How does Databricks schema evolution work?",
     )
@@ -62,10 +108,25 @@ def test_cli_ask_prints_query_route_contract(monkeypatch, capsys, tmp_path):
 
 
 def test_cli_ingest_route_json_is_inspectable(monkeypatch, capsys, tmp_path):
+    response_file = write_llm_response(
+        tmp_path,
+        "ingest_auto_loader.json",
+        ingest_response(
+            target_path=AUTO_LOADER_SCHEMA_PATH,
+            peer_links=[
+                {
+                    "path": STRUCTURED_SCHEMA_PATH,
+                    "reason": "Model approved this peer.",
+                }
+            ],
+        ),
+    )
     output = run_cli(
         monkeypatch,
         capsys,
         tmp_path,
+        "--llm-response-file",
+        str(response_file),
         "ingest",
         "--route-json",
         "Databricks Auto Loader schema evolution",
@@ -78,18 +139,42 @@ def test_cli_ingest_route_json_is_inspectable(monkeypatch, capsys, tmp_path):
 
 
 def test_cli_ingest_prints_stale_candidates_without_mutating_old_chunks(monkeypatch, capsys, tmp_path):
+    first_response_file = write_llm_response(tmp_path, "first_ingest.json", ingest_response())
     run_cli(
         monkeypatch,
         capsys,
         tmp_path,
+        "--llm-response-file",
+        str(first_response_file),
         "ingest",
         "Databricks Delta schema evolution",
     )
 
+    second_response_file = write_llm_response(
+        tmp_path,
+        "second_ingest.json",
+        ingest_response(
+            content_type="correction",
+            peer_links=[
+                {
+                    "path": AUTO_LOADER_SCHEMA_PATH,
+                    "reason": "Model approved this peer.",
+                }
+            ],
+            stale_candidates=[
+                {
+                    "path": STRUCTURED_SCHEMA_PATH,
+                    "reason": "Model identified this stale candidate.",
+                }
+            ],
+        ),
+    )
     output = run_cli(
         monkeypatch,
         capsys,
         tmp_path,
+        "--llm-response-file",
+        str(second_response_file),
         "ingest",
         "For Delta streaming sink schema evolution use mergeSchema=true",
     )
@@ -117,18 +202,28 @@ def test_cli_unknown_ask_requests_clarification(monkeypatch, capsys, tmp_path):
     route_json = output.split("Route decision JSON:\n", maxsplit=1)[1].splitlines()[0]
     payload = json.loads(route_json)
     assert payload["target_path"] == "INBOX/Unclassified"
-    assert payload["confidence"] == 0.4
+    assert payload["confidence"] == 0.0
     assert "Clarification needed:" in output
     assert "Allowed context:" not in output
 
 
 def test_cli_uses_configured_data_dir(monkeypatch, capsys, tmp_path):
+    response_file = write_llm_response(
+        tmp_path,
+        "dbt_ingest.json",
+        ingest_response(
+            target_path="WORK/Stack/dbt",
+            content_type="decision",
+        ),
+    )
     output = run_cli(
         monkeypatch,
         capsys,
         tmp_path,
         "--data-dir",
         "brain-data",
+        "--llm-response-file",
+        str(response_file),
         "ingest",
         "dbt ephemeral staging model",
     )
@@ -140,8 +235,25 @@ def test_cli_uses_configured_data_dir(monkeypatch, capsys, tmp_path):
 
 
 def test_cli_optimize_marks_duplicates_and_reports_gold_file(monkeypatch, capsys, tmp_path):
-    run_cli(monkeypatch, capsys, tmp_path, "ingest", "Databricks Delta schema evolution")
-    run_cli(monkeypatch, capsys, tmp_path, "ingest", "Databricks Delta schema evolution")
+    response_file = write_llm_response(tmp_path, "ingest.json", ingest_response())
+    run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--llm-response-file",
+        str(response_file),
+        "ingest",
+        "Databricks Delta schema evolution",
+    )
+    run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--llm-response-file",
+        str(response_file),
+        "ingest",
+        "Databricks Delta schema evolution",
+    )
 
     output = run_cli(monkeypatch, capsys, tmp_path, "optimize", STRUCTURED_SCHEMA_PATH)
 
