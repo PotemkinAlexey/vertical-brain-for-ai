@@ -72,3 +72,20 @@ Expected behavior:
 4. Produce updated Silver blocks.
 5. Update Gold summary.
 ```
+
+### Operation
+
+```bash
+vb operation dry-run operation.json
+vb operation apply operation.json
+```
+
+Expected behavior:
+
+```text
+1. Read a StorageOperation or StorageOperationBatch JSON object.
+2. Validate protocol invariants.
+3. For dry-run, return validation and planned result without writing.
+4. For apply, validate the full batch before the first write.
+5. Return strict JSON with operation results and validation status.
+```

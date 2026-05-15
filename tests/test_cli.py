@@ -263,3 +263,58 @@ def test_cli_optimize_marks_duplicates_and_reports_gold_file(monkeypatch, capsys
     chunks = store.get_chunks_by_path(STRUCTURED_SCHEMA_PATH)
     assert [chunk.status for chunk in chunks].count("stale") == 1
     assert store.gold_summary_path(STRUCTURED_SCHEMA_PATH).exists()
+
+
+def test_cli_operation_dry_run_does_not_mutate_store(monkeypatch, capsys, tmp_path):
+    operation_file = tmp_path / "operation.json"
+    operation_file.write_text(
+        json.dumps(
+            {
+                "operation": "append_chunk",
+                "target_path": "WORK/Vertical/Node",
+                "chunk": {"content": "Protocol dry-run note."},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = run_cli(monkeypatch, capsys, tmp_path, "operation", "dry-run", str(operation_file))
+
+    payload = json.loads(output)
+    assert payload["status"] == "dry_run"
+    assert payload["validation"]["valid"] is True
+    store = JsonStore(tmp_path / "data")
+    assert store.get_chunks_by_path("WORK/Vertical/Node") == []
+
+
+def test_cli_operation_apply_writes_operation_batch(monkeypatch, capsys, tmp_path):
+    operation_file = tmp_path / "operation_batch.json"
+    operation_file.write_text(
+        json.dumps(
+            {
+                "operations": [
+                    {
+                        "operation": "append_chunk",
+                        "target_path": "WORK/Vertical/Node",
+                        "chunk": {
+                            "content": "Applied protocol note.",
+                            "layer": "silver",
+                            "content_type": "fact",
+                        },
+                    }
+                ],
+                "reasoning_summary": "Model emitted one storage operation.",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = run_cli(monkeypatch, capsys, tmp_path, "operation", "apply", str(operation_file))
+
+    payload = json.loads(output)
+    assert payload["status"] == "applied"
+    assert payload["validation"]["valid"] is True
+    store = JsonStore(tmp_path / "data")
+    chunks = store.get_chunks_by_path("WORK/Vertical/Node")
+    assert len(chunks) == 1
+    assert chunks[0].content == "Applied protocol note."

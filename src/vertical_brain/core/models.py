@@ -123,6 +123,19 @@ class StorageOperationBatch(JsonSerializable):
 
 
 @dataclass
+class ValidationIssue(JsonSerializable):
+    path: str
+    message: str
+    severity: str = "error"
+
+
+@dataclass
+class ValidationResult(JsonSerializable):
+    valid: bool = True
+    issues: list[ValidationIssue] = field(default_factory=list)
+
+
+@dataclass
 class OperationResult(JsonSerializable):
     operation: OperationType
     target_path: str
@@ -130,12 +143,14 @@ class OperationResult(JsonSerializable):
     link_ids: list[str] = field(default_factory=list)
     stale_candidates: list[StaleCandidateInput] = field(default_factory=list)
     status: str = "applied"
+    validation: ValidationResult | None = None
 
 
 @dataclass
 class OperationBatchResult(JsonSerializable):
     results: list[OperationResult] = field(default_factory=list)
     status: str = "applied"
+    validation: ValidationResult | None = None
 
 
 @dataclass

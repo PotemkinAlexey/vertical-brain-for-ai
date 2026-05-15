@@ -27,6 +27,8 @@ vb ingest "New information"
 vb ask "Question"
 vb tree
 vb optimize WORK/DataArt/Databricks
+vb operation dry-run operation.json
+vb operation apply operation.json
 ```
 
 ## Local usage
@@ -38,6 +40,7 @@ PYTHONPATH=src python -m vertical_brain.cli.main ingest "Databricks Auto Loader 
 PYTHONPATH=src python -m vertical_brain.cli.main ask "How does Databricks schema evolution work?"
 PYTHONPATH=src python -m vertical_brain.cli.main tree
 PYTHONPATH=src python -m vertical_brain.cli.main optimize WORK/DataArt/Databricks
+PYTHONPATH=src python -m vertical_brain.cli.main operation dry-run operation.json
 ```
 
 Or install the CLI entrypoint:
@@ -72,6 +75,27 @@ vb ask --route-json "How does Databricks schema evolution work?"
 ```
 
 If router confidence is below the namespace model threshold, the CLI asks for clarification instead of writing low-quality knowledge into the store.
+
+Models can also emit first-class storage operations directly. `dry-run` validates
+the operation or batch without mutating storage; `apply` prevalidates the full
+batch before any write:
+
+```json
+{
+  "operations": [
+    {
+      "operation": "append_chunk",
+      "target_path": "WORK/VerticalBrain/Protocol",
+      "chunk": {
+        "content": "Models write context through validated storage operations.",
+        "layer": "silver",
+        "content_type": "fact"
+      }
+    }
+  ],
+  "reasoning_summary": "Persist protocol knowledge."
+}
+```
 
 ## Tests
 
@@ -112,6 +136,7 @@ MVP core implemented:
 - LLM-driven routing through strict JSON contracts from `data/namespaces/model.json`
 - first-class `StorageOperation` execution
 - `StorageOperationBatch` optimization for many variants into one canonical chunk
+- operation validation, dry-run, and batch preflight before writes
 - route decision JSON serialization
 - locked context capsules with budget and horizontal link handles
 - exact duplicate stale marking

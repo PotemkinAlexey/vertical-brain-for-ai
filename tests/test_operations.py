@@ -1,3 +1,5 @@
+import pytest
+
 from vertical_brain.core.models import (
     Chunk,
     ChunkInput,
@@ -97,3 +99,91 @@ def test_operation_batch_appends_canonical_chunk_and_supersedes_variants(tmp_pat
     assert len(canonical) == 1
     assert canonical[0].lineage == [first.id, second.id]
     assert {chunk.status for chunk in originals} == {"superseded"}
+
+
+def test_dry_run_reports_valid_operation_without_mutating_store(tmp_path):
+    store = JsonStore(tmp_path)
+    operation = StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/Vertical/Node",
+        chunk=ChunkInput(content="Dry-run only."),
+    )
+
+    result = StorageOperationExecutor(store).dry_run(operation)
+
+    assert result.status == "dry_run"
+    assert result.validation is not None
+    assert result.validation.valid is True
+    assert store.get_chunks_by_path("WORK/Vertical/Node") == []
+
+
+def test_validation_rejects_invalid_append_chunk_without_mutating_store(tmp_path):
+    store = JsonStore(tmp_path)
+    operation = StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/Vertical/Node",
+        chunk=ChunkInput(content="", layer="unknown"),
+    )
+    executor = StorageOperationExecutor(store)
+
+    validation = executor.validate(operation)
+
+    assert validation.valid is False
+    assert {issue.path for issue in validation.issues} == {
+        "operation.chunk.content",
+        "operation.chunk.layer",
+    }
+    with pytest.raises(ValueError, match="chunk content must be non-empty"):
+        executor.apply(operation)
+    assert store.get_chunks_by_path("WORK/Vertical/Node") == []
+
+
+def test_batch_prevalidation_prevents_partial_mutation(tmp_path):
+    store = JsonStore(tmp_path)
+    existing = store.save_chunk(Chunk(node_path="WORK/Other/Node", content="Existing chunk."))
+    batch = StorageOperationBatch(
+        operations=[
+            StorageOperation(
+                operation="append_chunk",
+                target_path="WORK/Vertical/Node",
+                chunk=ChunkInput(content="Should not be written."),
+            ),
+            StorageOperation(
+                operation="supersede_chunk",
+                target_path="WORK/Vertical/Node",
+                chunk_ids=[existing.id],
+            ),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="does not belong"):
+        StorageOperationExecutor(store).apply_batch(batch)
+
+    assert store.get_chunks_by_path("WORK/Vertical/Node") == []
+    assert store.get_chunks_by_path("WORK/Other/Node")[0].status == "active"
+
+
+def test_dry_run_batch_returns_invalid_result_without_mutating_store(tmp_path):
+    store = JsonStore(tmp_path)
+    batch = StorageOperationBatch(
+        operations=[
+            StorageOperation(
+                operation="append_chunk",
+                target_path="WORK/Vertical/Node",
+                chunk=ChunkInput(content="Valid first operation."),
+            ),
+            StorageOperation(
+                operation="create_link",
+                target_path="WORK/Vertical/Node",
+                links=[],
+            ),
+        ]
+    )
+
+    result = StorageOperationExecutor(store).dry_run_batch(batch)
+
+    assert result.status == "invalid"
+    assert result.validation is not None
+    assert result.validation.valid is False
+    assert result.results == []
+    assert store.get_chunks_by_path("WORK/Vertical/Node") == []

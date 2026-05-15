@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from vertical_brain.core.context_lock import ContextLock
 from vertical_brain.core.models import ContextPolicy
 from vertical_brain.core.optimizer import SimpleOptimizer
-from vertical_brain.core.operations import StorageOperationExecutor, operation_from_route_decision
+from vertical_brain.core.operations import (
+    StorageOperationExecutor,
+    operation_batch_from_dict,
+    operation_from_route_decision,
+)
 from vertical_brain.core.router import LLMRouter, StorageModel
 from vertical_brain.llm.mock_llm import MockLLM
 from vertical_brain.storage.json_store import JsonStore
@@ -42,6 +47,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     optimize = sub.add_parser("optimize")
     optimize.add_argument("path")
+
+    operation = sub.add_parser("operation")
+    operation_sub = operation.add_subparsers(dest="operation_command", required=True)
+    operation_dry_run = operation_sub.add_parser("dry-run")
+    operation_dry_run.add_argument("file", help="JSON file containing a StorageOperation or StorageOperationBatch")
+    operation_apply = operation_sub.add_parser("apply")
+    operation_apply.add_argument("file", help="JSON file containing a StorageOperation or StorageOperationBatch")
 
     return parser
 
@@ -135,6 +147,15 @@ def main() -> None:
             min_compaction_path_parts=storage_model.min_compaction_path_parts,
         )
         print(optimizer.optimize_branch(args.path))
+
+    elif args.command == "operation":
+        payload = json.loads(Path(args.file).read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("Operation file must contain a JSON object")
+        batch = operation_batch_from_dict(payload)
+        executor = StorageOperationExecutor(store)
+        result = executor.dry_run_batch(batch) if args.operation_command == "dry-run" else executor.apply_batch(batch)
+        print(result.to_json())
 
 
 if __name__ == "__main__":
