@@ -145,6 +145,8 @@ class SQLiteStore:
 
             parent_path = "/".join(parts[: index - 1]) or None
             node = Node(path=node_path, name=parts[index - 1], parent_path=parent_path)
+            row = asdict(node)
+            row["gold_summary"] = json.dumps(row.pop("gold_aspects"))
             self.conn.execute(
                 """
                 INSERT INTO nodes (
@@ -154,7 +156,7 @@ class SQLiteStore:
                     :id, :path, :name, :parent_path, :node_type, :gold_summary, :created_at, :updated_at
                 )
                 """,
-                asdict(node),
+                row,
             )
             target = node if node_path == path else target
 
@@ -237,45 +239,57 @@ class SQLiteStore:
         self._commit_if_needed()
         return chunk
 
-    def update_node_gold_summary(self, path: str, summary: str) -> Node:
+    def append_node_gold_aspect(self, path: str, aspect: str) -> Node:
         self.ensure_node(path)
-        updated_at = utc_now()
-        cursor = self.conn.execute(
-            """
-            UPDATE nodes
-            SET gold_summary = ?, updated_at = ?
-            WHERE path = ?
-            """,
-            (summary, updated_at, path),
-        )
-        if cursor.rowcount == 0:
-            raise ValueError(f"Node not found: {path}")
-        self._index_gold_summary(path, summary)
-        self._commit_if_needed()
-        self._write_gold_summary_markdown(path, summary)
         node = self.get_node(path)
         if node is None:
             raise ValueError(f"Node not found: {path}")
+        new_aspects = node.gold_aspects + [aspect]
+        updated_at = utc_now()
+        cursor = self.conn.execute(
+            "UPDATE nodes SET gold_summary = ?, updated_at = ? WHERE path = ?",
+            (json.dumps(new_aspects), updated_at, path),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Node not found: {path}")
+        self._index_gold_aspects(path, new_aspects)
+        self._commit_if_needed()
+        self._write_gold_aspects_markdown(path, new_aspects)
+        node.gold_aspects = new_aspects
+        node.updated_at = updated_at
         return node
 
     def gold_summary_path(self, path: str) -> Path:
         parts = path.split("/")
         return self.gold_dir.joinpath(*parts).with_suffix(".md")
 
-    def _write_gold_summary_markdown(self, path: str, summary: str) -> None:
+    def _write_gold_aspects_markdown(self, path: str, aspects: list[str]) -> None:
         file = self.gold_summary_path(path)
         file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_text(f"# {path}\n\n{summary}\n", encoding="utf-8")
+        content = "\n".join(f"- {a}" for a in aspects)
+        file.write_text(f"# {path}\n\n{content}\n", encoding="utf-8")
 
     def get_node(self, path: str) -> Node | None:
         row = self.conn.execute("SELECT * FROM nodes WHERE path = ?", (path,)).fetchone()
         if row is None:
             return None
-        return Node(**dict(row))
+        return Node(**self._node_data_from_row(row))
 
     def list_nodes(self) -> list[Node]:
         rows = self.conn.execute("SELECT * FROM nodes ORDER BY rowid").fetchall()
-        return [Node(**dict(row)) for row in rows]
+        return [Node(**self._node_data_from_row(row)) for row in rows]
+
+    def _node_data_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        data = dict(row)
+        raw = data.pop("gold_summary", "[]")
+        try:
+            aspects = json.loads(raw)
+            if not isinstance(aspects, list):
+                aspects = [raw] if raw else []
+        except (json.JSONDecodeError, TypeError):
+            aspects = [raw] if raw else []
+        data["gold_aspects"] = aspects
+        return data
 
     def list_chunks(self) -> list[Chunk]:
         rows = self.conn.execute("SELECT * FROM chunks ORDER BY rowid").fetchall()
@@ -423,7 +437,7 @@ class SQLiteStore:
         for chunk in self.list_chunks():
             self._index_chunk(chunk)
         for node in self.list_nodes():
-            self._index_gold_summary(node.path, node.gold_summary)
+            self._index_gold_aspects(node.path, node.gold_aspects)
         self._commit_if_needed()
 
     def _get_link_by_relationship(self, source_path: str, target_path: str, link_type: str) -> Link | None:
@@ -478,7 +492,7 @@ class SQLiteStore:
             ),
         )
 
-    def _index_gold_summary(self, path: str, summary: str) -> None:
+    def _index_gold_aspects(self, path: str, aspects: list[str]) -> None:
         if not self._fts_enabled:
             return
 
@@ -486,7 +500,8 @@ class SQLiteStore:
             "DELETE FROM search_index WHERE record_type = 'gold' AND record_id = ?",
             (path,),
         )
-        if not summary.strip():
+        content = " | ".join(aspects)
+        if not content.strip():
             return
         self.conn.execute(
             """
@@ -510,6 +525,6 @@ class SQLiteStore:
                 "summary",
                 "active",
                 "gold",
-                summary,
+                content,
             ),
         )

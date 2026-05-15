@@ -58,7 +58,7 @@ def test_storage_operation_schema_rejects_unknown_fields_and_bad_enums():
     messages = [issue.message for issue in validation.issues]
     assert validation.valid is False
     assert "must match exactly one allowed schema" in messages
-    assert "must be one of: create_node, append_chunk, create_link, mark_stale, supersede_chunk, update_gold_summary" in messages
+    assert "must be one of: create_node, append_chunk, create_link, mark_stale, supersede_chunk, append_gold_aspect" in messages
     assert "is not allowed" in messages
 
 

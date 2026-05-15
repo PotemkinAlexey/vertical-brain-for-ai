@@ -128,9 +128,9 @@ class StorageOperationExecutor:
             self._update_chunk_status(operation, "superseded")
             return OperationResult(operation=operation.operation, target_path=operation.target_path)
 
-        if operation.operation == "update_gold_summary":
-            assert operation.gold_summary is not None
-            self.store.update_node_gold_summary(operation.target_path, operation.gold_summary)
+        if operation.operation == "append_gold_aspect":
+            assert operation.gold_aspect is not None
+            self.store.append_node_gold_aspect(operation.target_path, operation.gold_aspect)
             return OperationResult(operation=operation.operation, target_path=operation.target_path)
 
         raise ValueError(f"Unsupported storage operation: {operation.operation}")
@@ -211,12 +211,12 @@ class StorageOperationExecutor:
             self._validate_chunk_ids(operation, path=f"{path}.chunk_ids", issues=issues)
             return
 
-        if operation.operation == "update_gold_summary":
-            if not isinstance(operation.gold_summary, str) or not operation.gold_summary.strip():
+        if operation.operation == "append_gold_aspect":
+            if not isinstance(operation.gold_aspect, str) or not operation.gold_aspect.strip():
                 issues.append(
                     ValidationIssue(
-                        path=f"{path}.gold_summary",
-                        message="update_gold_summary requires non-empty gold_summary",
+                        path=f"{path}.gold_aspect",
+                        message="append_gold_aspect requires non-empty gold_aspect",
                     )
                 )
             return
@@ -345,7 +345,7 @@ def operation_from_dict(payload: Mapping[str, Any]) -> StorageOperation:
         "links",
         "stale_candidates",
         "chunk_ids",
-        "gold_summary",
+        "gold_aspect",
         "confidence",
         "reasoning_summary",
     }
@@ -364,7 +364,7 @@ def operation_from_dict(payload: Mapping[str, Any]) -> StorageOperation:
         links=[_link_input_from_dict(link) for link in links_payload],
         stale_candidates=[_stale_candidate_from_dict(candidate) for candidate in stale_payload],
         chunk_ids=[_string_item(chunk_id, "chunk_ids") for chunk_id in _list_value(payload, "chunk_ids", default=[])],
-        gold_summary=payload.get("gold_summary"),
+        gold_aspect=payload.get("gold_aspect"),
         confidence=_number_value(payload, "confidence", default=1.0),
         reasoning_summary=_string_value(payload, "reasoning_summary", default=""),
     )

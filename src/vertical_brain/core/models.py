@@ -18,7 +18,7 @@ OperationType = Literal[
     "create_link",
     "mark_stale",
     "supersede_chunk",
-    "update_gold_summary",
+    "append_gold_aspect",
 ]
 Action = Literal[
     "append_bronze",
@@ -50,7 +50,7 @@ class Node:
     id: str = field(default_factory=lambda: str(uuid4()))
     parent_path: str | None = None
     node_type: str = "default"
-    gold_summary: str = ""
+    gold_aspects: list[str] = field(default_factory=list)
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
 
@@ -111,7 +111,7 @@ class StorageOperation(JsonSerializable):
     links: list[LinkInput] = field(default_factory=list)
     stale_candidates: list[StaleCandidateInput] = field(default_factory=list)
     chunk_ids: list[str] = field(default_factory=list)
-    gold_summary: str | None = None
+    gold_aspect: str | None = None
     confidence: float = 1.0
     reasoning_summary: str = ""
 

@@ -222,7 +222,7 @@ def test_cli_map_prints_namespace_map_without_raw_chunk_content(monkeypatch, cap
         "Databricks raw note hidden from namespace map.",
     )
     store = JsonStore(tmp_path / "data")
-    store.update_node_gold_summary("WORK/DataArt", "Stable DataArt summary")
+    store.append_node_gold_aspect("WORK/DataArt", "Stable DataArt summary")
 
     output = run_cli(monkeypatch, capsys, tmp_path, "map", "--path", "WORK/DataArt", "--max-depth", "1")
 
@@ -305,11 +305,9 @@ def test_cli_optimize_marks_duplicates_and_reports_gold_file(monkeypatch, capsys
     output = run_cli(monkeypatch, capsys, tmp_path, "optimize", STRUCTURED_SCHEMA_PATH)
 
     assert "1 exact duplicates marked stale" in output
-    assert "Gold summary file:" in output
     store = JsonStore(tmp_path / "data")
     chunks = store.get_chunks_by_path(STRUCTURED_SCHEMA_PATH)
     assert [chunk.status for chunk in chunks].count("stale") == 1
-    assert store.gold_summary_path(STRUCTURED_SCHEMA_PATH).exists()
 
 
 def test_cli_operation_dry_run_does_not_mutate_store(monkeypatch, capsys, tmp_path):

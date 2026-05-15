@@ -85,7 +85,8 @@ def lexical_search(
         )
 
     for node in nodes:
-        if not node.gold_summary.strip():
+        gold_text = " | ".join(node.gold_aspects)
+        if not gold_text.strip():
             continue
         if not _path_in_scope(node.path, root_path):
             continue
@@ -94,7 +95,7 @@ def lexical_search(
             query=normalized_query,
             terms=terms,
             path=node.path,
-            text=node.gold_summary,
+            text=gold_text,
         )
         if score <= 0:
             continue
@@ -103,7 +104,7 @@ def lexical_search(
                 path=node.path,
                 source="gold",
                 score=float(score),
-                snippet=make_snippet(node.gold_summary, terms),
+                snippet=make_snippet(gold_text, terms),
                 layer="gold",
                 content_type="summary",
                 status="active",

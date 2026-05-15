@@ -50,7 +50,6 @@ class SimpleOptimizer:
         compaction_count_by_path = self._compact_related_chunks(path)
 
         updated_chunks = self.store.get_chunks_by_path(path, include_children=True)
-        self.store.update_node_gold_summary(path, self._build_gold_summary(path, updated_chunks))
 
         lines = [f"Optimize report for {path}", ""]
         for node_path, node_chunks in sorted(self._group_by_node(updated_chunks).items()):
@@ -66,9 +65,6 @@ class SimpleOptimizer:
                 f"{compactions_created} namespace compactions created"
             )
 
-        lines.append("")
-        lines.append("Gold summary updated.")
-        lines.append(f"Gold summary file: {self.store.gold_summary_path(path).as_posix()}")
         return "\n".join(lines)
 
     def _compact_related_chunks(self, path: str) -> dict[str, int]:
@@ -146,17 +142,3 @@ class SimpleOptimizer:
             grouped[chunk.node_path].append(chunk)
         return grouped
 
-    def _build_gold_summary(self, path: str, chunks: list[Chunk]) -> str:
-        active_chunks = [chunk for chunk in chunks if chunk.status == "active"]
-        if not active_chunks:
-            return f"Gold summary for {path}.\nNo active chunks under this branch yet."
-
-        grouped = self._group_by_node(active_chunks)
-        lines = [
-            f"Gold summary for {path}.",
-            f"Active chunks: {len(active_chunks)}.",
-            "Covered nodes:",
-        ]
-        for node_path, node_chunks in sorted(grouped.items()):
-            lines.append(f"- {node_path}: {len(node_chunks)} active chunks")
-        return "\n".join(lines)

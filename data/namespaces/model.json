@@ -10,7 +10,7 @@
       "links",
       "stale_candidates",
       "chunk_ids",
-      "gold_summary",
+      "gold_aspect",
       "confidence",
       "reasoning_summary"
     ],
@@ -73,7 +73,7 @@
                 "create_link",
                 "mark_stale",
                 "supersede_chunk",
-                "update_gold_summary"
+                "append_gold_aspect"
               ]
             },
             "target_path": {
@@ -101,7 +101,7 @@
                 "type": "string"
               }
             },
-            "gold_summary": {
+            "gold_aspect": {
               "type": "string"
             },
             "confidence": {
