@@ -7,6 +7,7 @@ from pathlib import Path
 from vertical_brain.core.context_lock import ContextLock
 from vertical_brain.core.context_session import ContextSession
 from vertical_brain.core.embedding_router import EmbeddingRouter
+from vertical_brain.core.embedding_search import EmbeddingSearch
 from vertical_brain.core.json_schema import format_json_schema_errors, validate_json_schema
 from vertical_brain.core.models import ContextPolicy, OperationBatchResult
 from vertical_brain.core.optimizer import SimpleOptimizer
@@ -70,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--path", default=None, help="Limit search to a namespace branch")
     search.add_argument("--limit", type=int, default=10, help="Maximum number of results")
     search.add_argument("--include-stale", action="store_true", help="Include stale and superseded chunks")
+    search.add_argument("--semantic", action="store_true", help="Use embedding-based semantic search")
+    search.add_argument("--threshold", type=float, default=0.0, help="Minimum similarity score (semantic mode)")
+    search.add_argument("--embedding-url", default=None, help="OpenAI-compatible embeddings endpoint URL")
+    search.add_argument("--embedding-model", default="nomic-embed-text", help="Embedding model name")
+    search.add_argument("--embedding-api-key", default="", help="API key for the embedding endpoint")
     search.add_argument("query")
 
     context = sub.add_parser("context")
@@ -249,12 +255,30 @@ def main() -> None:
                 print(f"Omitted nodes due to depth limit: {namespace_map.omitted_nodes}")
 
     elif args.command == "search":
-        results = BrainSearch(store).search(
-            args.query,
-            root_path=args.path,
-            limit=args.limit,
-            include_stale=args.include_stale,
-        )
+        if args.semantic:
+            provider = (
+                HttpEmbeddingProvider(
+                    url=args.embedding_url,
+                    model=args.embedding_model,
+                    api_key=args.embedding_api_key,
+                )
+                if args.embedding_url
+                else MockEmbeddingProvider()
+            )
+            results = EmbeddingSearch(store, provider).search(
+                args.query,
+                root_path=args.path,
+                limit=args.limit,
+                include_stale=args.include_stale,
+                threshold=args.threshold,
+            )
+        else:
+            results = BrainSearch(store).search(
+                args.query,
+                root_path=args.path,
+                limit=args.limit,
+                include_stale=args.include_stale,
+            )
         print("Search results:")
         if not results:
             print("(no results)")
