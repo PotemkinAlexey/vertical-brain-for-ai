@@ -9,6 +9,8 @@
       "chunk",
       "links",
       "stale_candidates",
+      "chunk_ids",
+      "gold_summary",
       "confidence",
       "reasoning_summary"
     ],

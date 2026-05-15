@@ -5,10 +5,13 @@ from vertical_brain.core.models import (
     ChunkInput,
     Link,
     LinkInput,
+    OperationBatchResult,
     OperationResult,
     RouteDecision,
     StaleCandidateInput,
     StorageOperation,
+    StorageOperationBatch,
+    utc_now,
 )
 from vertical_brain.storage.json_store import JsonStore
 
@@ -38,7 +41,35 @@ class StorageOperationExecutor:
                 stale_candidates=operation.stale_candidates,
             )
 
+        if operation.operation == "create_link":
+            links = [
+                self.store.save_link(self._link_from_input(operation.target_path, link_input))
+                for link_input in operation.links
+            ]
+            return OperationResult(
+                operation=operation.operation,
+                target_path=operation.target_path,
+                link_ids=[link.id for link in links],
+            )
+
+        if operation.operation == "mark_stale":
+            self._update_chunk_status(operation, "stale")
+            return OperationResult(operation=operation.operation, target_path=operation.target_path)
+
+        if operation.operation == "supersede_chunk":
+            self._update_chunk_status(operation, "superseded")
+            return OperationResult(operation=operation.operation, target_path=operation.target_path)
+
+        if operation.operation == "update_gold_summary":
+            if operation.gold_summary is None:
+                raise ValueError("update_gold_summary operation requires gold_summary")
+            self.store.update_node_gold_summary(operation.target_path, operation.gold_summary)
+            return OperationResult(operation=operation.operation, target_path=operation.target_path)
+
         raise ValueError(f"Unsupported storage operation: {operation.operation}")
+
+    def apply_batch(self, batch: StorageOperationBatch) -> OperationBatchResult:
+        return OperationBatchResult(results=[self.apply(operation) for operation in batch.operations])
 
     def _chunk_from_input(self, target_path: str, chunk_input: ChunkInput) -> Chunk:
         return Chunk(
@@ -58,6 +89,21 @@ class StorageOperationExecutor:
             link_type=link_input.link_type,
             reason=link_input.reason,
         )
+
+    def _update_chunk_status(self, operation: StorageOperation, status: str) -> None:
+        if not operation.chunk_ids:
+            raise ValueError(f"{operation.operation} operation requires chunk_ids")
+
+        chunks_by_id = {chunk.id: chunk for chunk in self.store.list_chunks()}
+        for chunk_id in operation.chunk_ids:
+            chunk = chunks_by_id.get(chunk_id)
+            if chunk is None:
+                raise ValueError(f"Chunk not found: {chunk_id}")
+            if chunk.node_path != operation.target_path:
+                raise ValueError(f"Chunk {chunk_id} does not belong to {operation.target_path}")
+            chunk.status = status
+            chunk.updated_at = utc_now()
+            self.store.update_chunk(chunk)
 
 
 def operation_from_route_decision(decision: RouteDecision, content: str) -> StorageOperation:

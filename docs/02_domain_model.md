@@ -81,6 +81,8 @@ target_path
 chunk
 links
 stale_candidates
+chunk_ids
+gold_summary
 confidence
 reasoning_summary
 ```
@@ -88,6 +90,20 @@ reasoning_summary
 `append_chunk` writes an atomic chunk to a vertical namespace and may create
 explicit horizontal links. Stale candidates are surfaced but are not applied
 automatically.
+
+## StorageOperationBatch
+
+Primary optimization contract for many related writes.
+
+Fields:
+
+```text
+operations
+reasoning_summary
+```
+
+Optimizers use batches to collapse many active variants into one canonical
+Silver chunk, then supersede the original chunks while preserving lineage.
 
 ## Allowed actions
 

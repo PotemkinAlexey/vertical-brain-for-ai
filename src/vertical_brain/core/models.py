@@ -110,7 +110,15 @@ class StorageOperation(JsonSerializable):
     chunk: ChunkInput | None = None
     links: list[LinkInput] = field(default_factory=list)
     stale_candidates: list[StaleCandidateInput] = field(default_factory=list)
+    chunk_ids: list[str] = field(default_factory=list)
+    gold_summary: str | None = None
     confidence: float = 1.0
+    reasoning_summary: str = ""
+
+
+@dataclass
+class StorageOperationBatch(JsonSerializable):
+    operations: list[StorageOperation] = field(default_factory=list)
     reasoning_summary: str = ""
 
 
@@ -121,6 +129,12 @@ class OperationResult(JsonSerializable):
     chunk_id: str | None = None
     link_ids: list[str] = field(default_factory=list)
     stale_candidates: list[StaleCandidateInput] = field(default_factory=list)
+    status: str = "applied"
+
+
+@dataclass
+class OperationBatchResult(JsonSerializable):
+    results: list[OperationResult] = field(default_factory=list)
     status: str = "applied"
 
 

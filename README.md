@@ -111,6 +111,7 @@ MVP core implemented:
 - root namespace bootstrap from `data/namespaces/root.json`
 - LLM-driven routing through strict JSON contracts from `data/namespaces/model.json`
 - first-class `StorageOperation` execution
+- `StorageOperationBatch` optimization for many variants into one canonical chunk
 - route decision JSON serialization
 - locked context capsules with budget and horizontal link handles
 - exact duplicate stale marking

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from vertical_brain.core.models import Chunk, ContentType, utc_now
+from vertical_brain.core.models import Chunk, ChunkInput, ContentType, StorageOperation, StorageOperationBatch
+from vertical_brain.core.operations import StorageOperationExecutor
 from vertical_brain.storage.json_store import JsonStore
 
 
@@ -34,9 +35,14 @@ class SimpleOptimizer:
 
             key = (chunk.node_path, chunk.content)
             if key in seen:
-                chunk.status = "stale"
-                chunk.updated_at = utc_now()
-                self.store.update_chunk(chunk)
+                StorageOperationExecutor(self.store).apply(
+                    StorageOperation(
+                        operation="mark_stale",
+                        target_path=chunk.node_path,
+                        chunk_ids=[chunk.id],
+                        reasoning_summary="Exact duplicate marked stale during optimize.",
+                    )
+                )
                 duplicate_count_by_path[chunk.node_path] += 1
             else:
                 seen[key] = chunk.id
@@ -86,21 +92,32 @@ class SimpleOptimizer:
                 continue
 
             lineage = [chunk.id for chunk in chunks]
-            compacted_chunk = Chunk(
-                node_path=node_path,
-                content=self._build_silver_compaction(node_path, chunks),
-                layer="silver",
-                content_type=self._dominant_content_type(chunks),
-                source=COMPACTION_SOURCE,
-                confidence=min(chunk.confidence for chunk in chunks),
-                lineage=lineage,
+            batch = StorageOperationBatch(
+                operations=[
+                    StorageOperation(
+                        operation="append_chunk",
+                        target_path=node_path,
+                        chunk=ChunkInput(
+                            content=self._build_silver_compaction(node_path, chunks),
+                            layer="silver",
+                            content_type=self._dominant_content_type(chunks),
+                            source=COMPACTION_SOURCE,
+                            confidence=min(chunk.confidence for chunk in chunks),
+                            lineage=lineage,
+                        ),
+                        confidence=min(chunk.confidence for chunk in chunks),
+                        reasoning_summary="Canonical namespace variant created from active chunk variants.",
+                    ),
+                    StorageOperation(
+                        operation="supersede_chunk",
+                        target_path=node_path,
+                        chunk_ids=lineage,
+                        reasoning_summary="Original variants superseded by canonical namespace compaction.",
+                    ),
+                ],
+                reasoning_summary="Many active variants collapsed into one canonical Silver chunk.",
             )
-            self.store.save_chunk(compacted_chunk)
-
-            for chunk in chunks:
-                chunk.status = "superseded"
-                chunk.updated_at = utc_now()
-                self.store.update_chunk(chunk)
+            StorageOperationExecutor(self.store).apply_batch(batch)
 
             compaction_count_by_path[node_path] += 1
         return compaction_count_by_path
