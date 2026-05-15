@@ -29,6 +29,7 @@ vb ask "Question"
 vb map
 vb search "Question or keyword"
 vb context search "Question or keyword"
+vb context expand <link_id>
 vb tree
 vb optimize WORK/DataArt/Databricks
 vb operation dry-run operation.json
@@ -45,6 +46,7 @@ PYTHONPATH=src python -m vertical_brain.cli.main ask "How does Databricks schema
 PYTHONPATH=src python -m vertical_brain.cli.main map --path WORK/DataArt
 PYTHONPATH=src python -m vertical_brain.cli.main search --path WORK/DataArt "mergeSchema"
 PYTHONPATH=src python -m vertical_brain.cli.main context search --path WORK/DataArt "mergeSchema"
+PYTHONPATH=src python -m vertical_brain.cli.main context expand <link_id>
 PYTHONPATH=src python -m vertical_brain.cli.main tree
 PYTHONPATH=src python -m vertical_brain.cli.main optimize WORK/DataArt/Databricks
 PYTHONPATH=src python -m vertical_brain.cli.main operation dry-run operation.json
@@ -149,18 +151,20 @@ counts, Gold summaries, and link handles without raw chunk content. Use
 `vb search` to inspect ranked matches. Use `vb context search` for model-facing
 retrieval: search returns candidate handles, then Vertical Brain opens bounded
 locked context capsules for selected paths. Raw search snippets are not treated
-as model context.
+as model context. Use `vb context expand <link_id>` to explicitly open a
+horizontal link handle as a separate locked context.
 
 ## Project status
 
 MVP core implemented:
 
-- CLI ingest / ask / map / search / context search / tree / optimize
+- CLI ingest / ask / map / search / context search / context expand / tree / optimize
 - local JSON storage
 - local SQLite storage with transaction support for operation batches
 - SQLite FTS search index with JSON lexical fallback
 - model-facing namespace map without raw chunk content
 - model-facing search-to-locked-context session
+- explicit horizontal link expansion into separate locked context
 - root namespace bootstrap from `data/namespaces/root.json`
 - LLM-driven routing through strict JSON contracts from `data/namespaces/model.json`
 - first-class `StorageOperation` execution

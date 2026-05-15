@@ -218,6 +218,16 @@ class LockedContext(JsonSerializable):
 
 
 @dataclass
+class LinkExpansionResult(JsonSerializable):
+    link_id: str
+    source_path: str
+    expanded_path: str
+    link_type: str
+    reason: str
+    locked_context: LockedContext
+
+
+@dataclass
 class NamespaceMapNode(JsonSerializable):
     path: str
     name: str

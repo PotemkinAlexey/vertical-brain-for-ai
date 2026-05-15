@@ -98,6 +98,23 @@ Expected behavior:
 5. Keep horizontal links as handles unless link expansion is explicitly requested.
 ```
 
+### Context Expand
+
+```bash
+vb context expand <link_id> --from-path WORK/DataArt/Databricks
+vb context expand <link_id> --json --items-per-context 4
+```
+
+Expected behavior:
+
+```text
+1. Resolve the horizontal link by id.
+2. If --from-path is provided, verify the link is connected to that path.
+3. Open the other side as a separate locked context.
+4. Keep links in the expanded context as handles unless link expansion is explicitly requested.
+5. Return strict JSON when --json is set.
+```
+
 ### Tree
 
 ```bash

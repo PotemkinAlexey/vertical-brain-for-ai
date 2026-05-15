@@ -143,6 +143,12 @@ class JsonStore:
     def list_links(self) -> list[Link]:
         return [Link(**row) for row in self._read(self.links_file)]
 
+    def get_link(self, link_id: str) -> Link | None:
+        existing = next((row for row in self._read(self.links_file) if row["id"] == link_id), None)
+        if existing is None:
+            return None
+        return Link(**existing)
+
     def get_peer_links(self, path: str) -> list[Link]:
         return [
             link

@@ -515,6 +515,120 @@ def test_cli_context_search_json_omits_raw_search_snippets(monkeypatch, capsys, 
     assert "schema evolution locked target fact" in payload["locked_contexts"][0]["items"][0]["content"]
 
 
+def test_cli_context_expand_opens_link_target_as_locked_context(monkeypatch, capsys, tmp_path):
+    auto_loader_response_file = write_llm_response(
+        tmp_path,
+        "auto_loader.json",
+        ingest_response(target_path=AUTO_LOADER_SCHEMA_PATH),
+    )
+    run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--llm-response-file",
+        str(auto_loader_response_file),
+        "ingest",
+        "Auto Loader expanded target context.",
+    )
+    structured_response_file = write_llm_response(
+        tmp_path,
+        "structured.json",
+        ingest_response(
+            peer_links=[
+                {
+                    "path": AUTO_LOADER_SCHEMA_PATH,
+                    "reason": "Model approved this peer.",
+                }
+            ]
+        ),
+    )
+    run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--llm-response-file",
+        str(structured_response_file),
+        "ingest",
+        "Structured Streaming source context should stay locked.",
+    )
+    store = JsonStore(tmp_path / "data")
+    link_id = store.get_peer_links(STRUCTURED_SCHEMA_PATH)[0].id
+
+    output = run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "context",
+        "expand",
+        link_id,
+        "--from-path",
+        STRUCTURED_SCHEMA_PATH,
+    )
+
+    assert f"Expanded link: {link_id}" in output
+    assert f"Expanded path: {AUTO_LOADER_SCHEMA_PATH}" in output
+    assert "Auto Loader expanded target context." in output
+    assert "Structured Streaming source context should stay locked." not in output
+
+
+def test_cli_context_expand_json_is_model_readable(monkeypatch, capsys, tmp_path):
+    auto_loader_response_file = write_llm_response(
+        tmp_path,
+        "auto_loader.json",
+        ingest_response(target_path=AUTO_LOADER_SCHEMA_PATH),
+    )
+    run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--llm-response-file",
+        str(auto_loader_response_file),
+        "ingest",
+        "Auto Loader JSON expanded context.",
+    )
+    structured_response_file = write_llm_response(
+        tmp_path,
+        "structured.json",
+        ingest_response(
+            peer_links=[
+                {
+                    "path": AUTO_LOADER_SCHEMA_PATH,
+                    "reason": "Model approved this peer.",
+                }
+            ]
+        ),
+    )
+    run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--llm-response-file",
+        str(structured_response_file),
+        "ingest",
+        "Structured Streaming linked source context.",
+    )
+    store = JsonStore(tmp_path / "data")
+    link_id = store.get_peer_links(STRUCTURED_SCHEMA_PATH)[0].id
+
+    output = run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "context",
+        "expand",
+        link_id,
+        "--from-path",
+        STRUCTURED_SCHEMA_PATH,
+        "--json",
+    )
+
+    payload = json.loads(output)
+    assert payload["link_id"] == link_id
+    assert payload["expanded_path"] == AUTO_LOADER_SCHEMA_PATH
+    assert payload["locked_context"]["target_path"] == AUTO_LOADER_SCHEMA_PATH
+    assert payload["locked_context"]["items"][0]["content"] == "Auto Loader JSON expanded context."
+
+
 def test_cli_operation_dry_run_reports_schema_errors(monkeypatch, capsys, tmp_path):
     operation_file = tmp_path / "invalid_operation.json"
     operation_file.write_text(

@@ -86,6 +86,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     context_search.add_argument("--json", action="store_true", help="Print strict JSON result")
     context_search.add_argument("query")
+    context_expand = context_sub.add_parser("expand")
+    context_expand.add_argument("link_id")
+    context_expand.add_argument("--from-path", default=None, help="Path from which this link handle was exposed")
+    context_expand.add_argument("--items-per-context", type=int, default=6, help="Maximum items in expanded context")
+    context_expand.add_argument("--no-ancestors", action="store_true", help="Do not include ancestor Gold summaries")
+    context_expand.add_argument(
+        "--link-expansion",
+        choices=["handles_only", "expanded", "none"],
+        default="handles_only",
+        help="How to expose horizontal links in expanded locked context",
+    )
+    context_expand.add_argument("--json", action="store_true", help="Print strict JSON result")
 
     sub.add_parser("tree")
 
@@ -285,6 +297,37 @@ def main() -> None:
                             print(f"Omitted items due to budget: {locked_context.omitted_items}")
                 if result.omitted_candidates:
                     print(f"Omitted candidate paths: {result.omitted_candidates}")
+        elif args.context_command == "expand":
+            result = ContextSession(store).expand_link(
+                args.link_id,
+                from_path=args.from_path,
+                items_per_context=args.items_per_context,
+                include_ancestors=not args.no_ancestors,
+                link_expansion=args.link_expansion,
+            )
+            if args.json:
+                print(result.to_json())
+            else:
+                print(f"Expanded link: {result.link_id}")
+                print(f"Source path: {result.source_path}")
+                print(f"Expanded path: {result.expanded_path}")
+                print(f"Link type: {result.link_type}")
+                print(f"Reason: {result.reason}")
+                print("Locked context:")
+                if not result.locked_context.items:
+                    print("- (no context items)")
+                else:
+                    for item in result.locked_context.items:
+                        print(f"- [{item.path}][{item.layer}] {item.content}")
+                if result.locked_context.link_handles:
+                    print("Available link handles:")
+                    for handle in result.locked_context.link_handles:
+                        print(
+                            f"- {handle.link_id} -> {handle.target_path} "
+                            f"({handle.link_type}): {handle.reason}"
+                        )
+                if result.locked_context.omitted_items:
+                    print(f"Omitted items due to budget: {result.locked_context.omitted_items}")
 
     elif args.command == "optimize":
         optimizer = SimpleOptimizer(

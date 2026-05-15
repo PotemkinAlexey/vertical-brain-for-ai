@@ -285,6 +285,12 @@ class SQLiteStore:
         rows = self.conn.execute("SELECT * FROM links ORDER BY rowid").fetchall()
         return [Link(**dict(row)) for row in rows]
 
+    def get_link(self, link_id: str) -> Link | None:
+        row = self.conn.execute("SELECT * FROM links WHERE id = ?", (link_id,)).fetchone()
+        if row is None:
+            return None
+        return Link(**dict(row))
+
     def get_peer_links(self, path: str) -> list[Link]:
         rows = self.conn.execute(
             """

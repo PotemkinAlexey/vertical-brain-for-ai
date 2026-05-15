@@ -65,6 +65,7 @@ def test_sqlite_store_persists_chunks_links_and_gold_summary(tmp_path):
     assert stored_chunk.id == chunk.id
     assert stored_chunk.lineage == ["source-a", "source-b"]
     assert repeated.id == link.id
+    assert store.get_link(link.id) == link
     assert store.get_peer_paths("WORK/DataArt/Databricks") == ["WORK/DataArt/Databricks/AutoLoader"]
     assert node.gold_summary == "Stable summary"
     assert store.gold_summary_path("WORK/DataArt/Databricks").read_text(encoding="utf-8") == (

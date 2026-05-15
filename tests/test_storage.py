@@ -69,6 +69,7 @@ def test_save_link_does_not_duplicate_same_relationship(tmp_path):
 
     assert first.id == second.id
     assert len(store.list_links()) == 1
+    assert store.get_link(first.id) == first
 
 
 def test_gold_summary_update_writes_json_field_and_markdown_file(tmp_path):
