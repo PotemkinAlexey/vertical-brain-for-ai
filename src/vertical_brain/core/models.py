@@ -11,6 +11,7 @@ Layer = Literal["bronze", "silver", "gold"]
 ContentType = Literal["fact", "correction", "decision", "question", "note", "code", "artifact"]
 ChunkStatus = Literal["active", "stale", "legacy", "superseded", "contradicted", "uncertain"]
 QueryType = Literal["explanation", "lookup", "comparison", "summary", "unknown"]
+LinkExpansionPolicy = Literal["handles_only", "expanded", "none"]
 OperationType = Literal[
     "create_node",
     "append_chunk",
@@ -121,6 +122,47 @@ class OperationResult(JsonSerializable):
     link_ids: list[str] = field(default_factory=list)
     stale_candidates: list[StaleCandidateInput] = field(default_factory=list)
     status: str = "applied"
+
+
+@dataclass
+class ContextBudget:
+    max_items: int = 12
+
+
+@dataclass
+class ContextPolicy:
+    include_ancestors: bool = True
+    include_target: bool = True
+    link_expansion: LinkExpansionPolicy = "handles_only"
+
+
+@dataclass
+class ContextItem:
+    path: str
+    layer: str
+    content: str
+    source: str = "chunk"
+
+
+@dataclass
+class LinkHandle:
+    link_id: str
+    target_path: str
+    link_type: str
+    reason: str
+
+
+@dataclass
+class LockedContext(JsonSerializable):
+    target_path: str
+    items: list[ContextItem] = field(default_factory=list)
+    link_handles: list[LinkHandle] = field(default_factory=list)
+    budget: ContextBudget = field(default_factory=ContextBudget)
+    policy: ContextPolicy = field(default_factory=ContextPolicy)
+    omitted_items: int = 0
+
+    def as_prompt_lines(self) -> list[str]:
+        return [f"[{item.path}][{item.layer}] {item.content}" for item in self.items]
 
 
 @dataclass

@@ -1,20 +1,102 @@
 from __future__ import annotations
 
+from vertical_brain.core.models import (
+    ContextBudget,
+    ContextItem,
+    ContextPolicy,
+    LinkHandle,
+    LockedContext,
+)
 from vertical_brain.storage.json_store import JsonStore
 
 
 class ContextLock:
-    """Builds allowed context for a query.
+    """Builds a bounded vertical context capsule for a model.
 
-    MVP behavior:
-    - include ancestor Gold summaries
-    - include target path chunks
-    - include explicitly linked peer node chunks
-    - exclude all other branches
+    Horizontal links are handles by default. Their content is not expanded into
+    the prompt unless the caller explicitly asks for expanded links.
     """
 
     def __init__(self, store: JsonStore):
         self.store = store
+
+    def open_locked_context(
+        self,
+        target_path: str,
+        policy: ContextPolicy | None = None,
+        budget: ContextBudget | None = None,
+    ) -> LockedContext:
+        policy = policy or ContextPolicy()
+        budget = budget or ContextBudget()
+        items: list[ContextItem] = []
+        omitted_items = 0
+
+        if policy.include_ancestors:
+            for ancestor_path in self.store.get_ancestors(target_path):
+                ancestor = self.store.get_node(ancestor_path)
+                if ancestor and ancestor.gold_summary:
+                    omitted_items += self._append_with_budget(
+                        items,
+                        ContextItem(
+                            path=ancestor.path,
+                            layer="gold_summary",
+                            content=ancestor.gold_summary,
+                            source="node",
+                        ),
+                        budget,
+                    )
+
+        target = self.store.get_node(target_path)
+        if policy.include_target and target and target.gold_summary:
+            omitted_items += self._append_with_budget(
+                items,
+                ContextItem(
+                    path=target.path,
+                    layer="gold_summary",
+                    content=target.gold_summary,
+                    source="node",
+                ),
+                budget,
+            )
+
+        if policy.include_target:
+            for chunk in self.store.get_chunks_by_path(target_path):
+                if chunk.status == "active":
+                    omitted_items += self._append_with_budget(
+                        items,
+                        ContextItem(
+                            path=chunk.node_path,
+                            layer=chunk.layer,
+                            content=chunk.content,
+                            source="chunk",
+                        ),
+                        budget,
+                    )
+
+        link_handles = self._link_handles(target_path) if policy.link_expansion != "none" else []
+        if policy.link_expansion == "expanded":
+            for handle in link_handles:
+                for chunk in self.store.get_chunks_by_path(handle.target_path):
+                    if chunk.status == "active":
+                        omitted_items += self._append_with_budget(
+                            items,
+                            ContextItem(
+                                path=chunk.node_path,
+                                layer=f"linked:{chunk.layer}",
+                                content=chunk.content,
+                                source="linked_chunk",
+                            ),
+                            budget,
+                        )
+
+        return LockedContext(
+            target_path=target_path,
+            items=items,
+            link_handles=link_handles,
+            budget=budget,
+            policy=policy,
+            omitted_items=omitted_items,
+        )
 
     def build_context(
         self,
@@ -22,32 +104,38 @@ class ContextLock:
         include_ancestors: bool = True,
         include_peer_links: bool = True,
     ) -> list[str]:
-        context: list[str] = []
+        link_expansion = "expanded" if include_peer_links else "none"
+        locked_context = self.open_locked_context(
+            target_path,
+            policy=ContextPolicy(
+                include_ancestors=include_ancestors,
+                include_target=True,
+                link_expansion=link_expansion,
+            ),
+        )
+        return locked_context.as_prompt_lines()
 
-        if include_ancestors:
-            for ancestor_path in self.store.get_ancestors(target_path):
-                ancestor = self.store.get_node(ancestor_path)
-                if ancestor and ancestor.gold_summary:
-                    context.append(f"[{ancestor.path}][gold_summary] {ancestor.gold_summary}")
-
-        target = self.store.get_node(target_path)
-        if target and target.gold_summary:
-            context.append(f"[{target.path}][gold_summary] {target.gold_summary}")
-
-        self._append_active_chunks(context, target_path)
-
-        if include_peer_links:
-            for peer_path in self.store.get_peer_paths(target_path):
-                self._append_active_chunks(context, peer_path, label_prefix="peer:")
-
-        return context
-
-    def _append_active_chunks(
+    def _append_with_budget(
         self,
-        context: list[str],
-        path: str,
-        label_prefix: str = "",
-    ) -> None:
-        for chunk in self.store.get_chunks_by_path(path):
-            if chunk.status == "active":
-                context.append(f"[{chunk.node_path}][{label_prefix}{chunk.layer}] {chunk.content}")
+        items: list[ContextItem],
+        item: ContextItem,
+        budget: ContextBudget,
+    ) -> int:
+        if len(items) >= budget.max_items:
+            return 1
+        items.append(item)
+        return 0
+
+    def _link_handles(self, target_path: str) -> list[LinkHandle]:
+        handles: list[LinkHandle] = []
+        for link in self.store.get_peer_links(target_path):
+            peer_path = link.target_path if link.source_path == target_path else link.source_path
+            handles.append(
+                LinkHandle(
+                    link_id=link.id,
+                    target_path=peer_path,
+                    link_type=link.link_type,
+                    reason=link.reason,
+                )
+            )
+        return handles

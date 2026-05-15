@@ -96,8 +96,11 @@ Do not retrieve from the whole knowledge base.
 Always:
 
 ```text
-CLASSIFY QUERY → LOCK TARGET VERTICAL → RETRIEVE ONLY ALLOWED CONTEXT → ANSWER
+MAP FIRST → LOCK TARGET VERTICAL → READ BOUNDED CONTEXT → EXPAND LINKS ONLY ON REQUEST → ANSWER
 ```
+
+Horizontal links are handles by default. Their target content is not included in
+the prompt unless a caller explicitly requests link expansion.
 
 ## Project status
 
@@ -109,7 +112,7 @@ MVP core implemented:
 - LLM-driven routing through strict JSON contracts from `data/namespaces/model.json`
 - first-class `StorageOperation` execution
 - route decision JSON serialization
-- context locking with ancestors, target node, and explicit peer links
+- locked context capsules with budget and horizontal link handles
 - exact duplicate stale marking
 - namespace-bounded compaction into Silver chunks
 - deterministic Gold summary artifacts

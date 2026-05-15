@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from vertical_brain.core.context_lock import ContextLock
+from vertical_brain.core.models import ContextPolicy
 from vertical_brain.core.optimizer import SimpleOptimizer
 from vertical_brain.core.operations import StorageOperationExecutor, operation_from_route_decision
 from vertical_brain.core.router import LLMRouter, StorageModel
@@ -84,10 +85,13 @@ def main() -> None:
     elif args.command == "ask":
         decision = router.route_query(args.question, known_namespaces=known_namespaces)
         lock = ContextLock(store)
-        context = lock.build_context(
+        locked_context = lock.open_locked_context(
             decision.target_path,
-            include_ancestors=decision.allowed_context.include_ancestors,
-            include_peer_links=decision.allowed_context.include_peer_links,
+            policy=ContextPolicy(
+                include_ancestors=decision.allowed_context.include_ancestors,
+                include_target=True,
+                link_expansion="handles_only" if decision.allowed_context.include_peer_links else "none",
+            ),
         )
 
         print(f"Target path: {decision.target_path}")
@@ -106,15 +110,21 @@ def main() -> None:
             f"exclude_other_branches={decision.allowed_context.exclude_other_branches}"
         )
         print("Allowed context:")
-        if not context:
+        if not locked_context.items:
             print("(no context found)")
         else:
-            for item in context:
-                print(f"- {item}")
+            for item in locked_context.items:
+                print(f"- [{item.path}][{item.layer}] {item.content}")
+        if locked_context.link_handles:
+            print("Available link handles:")
+            for handle in locked_context.link_handles:
+                print(f"- {handle.link_id} -> {handle.target_path} ({handle.link_type}): {handle.reason}")
+        if locked_context.omitted_items:
+            print(f"Omitted items due to budget: {locked_context.omitted_items}")
 
         print("")
         print("Answer:")
-        print(MockLLM().answer_from_context(args.question, context))
+        print(MockLLM().answer_from_context(args.question, locked_context.as_prompt_lines()))
 
     elif args.command == "tree":
         print(store.tree_text())

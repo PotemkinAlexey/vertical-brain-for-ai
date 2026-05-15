@@ -62,9 +62,11 @@ The read path must avoid global context pollution.
 
 ```text
 Question
-→ classify target vertical
-→ lock unrelated branches
-→ retrieve target node + ancestors + approved peer-links
+→ inspect namespace map
+→ lock target vertical
+→ retrieve bounded target context + ancestor summaries
+→ expose horizontal links as handles
+→ expand a link only when explicitly requested
 → answer
 ```
 
