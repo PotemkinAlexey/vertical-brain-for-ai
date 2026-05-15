@@ -84,3 +84,17 @@ def test_optimizer_semantic_compaction_is_idempotent(tmp_path):
 
     chunks = store.get_chunks_by_path(path)
     assert len([chunk for chunk in chunks if chunk.source == "optimizer:semantic_compaction"]) == 1
+
+
+def test_optimizer_does_not_compact_without_explicit_topic_match(tmp_path):
+    store = JsonStore(tmp_path)
+    path = "WORK/DataArt/Databricks/Misc"
+    store.save_chunk(Chunk(node_path=path, content="Credentials should be stored in the password manager."))
+    store.save_chunk(Chunk(node_path=path, content="Meeting notes should be reviewed every Friday."))
+
+    report = SimpleOptimizer(store).optimize_branch(path)
+
+    chunks = store.get_chunks_by_path(path)
+    assert len([chunk for chunk in chunks if chunk.source == "optimizer:semantic_compaction"]) == 0
+    assert {chunk.status for chunk in chunks} == {"active"}
+    assert "0 semantic compactions created" in report

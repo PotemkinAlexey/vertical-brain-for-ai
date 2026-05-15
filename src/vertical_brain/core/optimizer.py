@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 
 from vertical_brain.core.models import Chunk, ContentType, utc_now
@@ -8,27 +7,6 @@ from vertical_brain.storage.json_store import JsonStore
 
 
 COMPACTION_SOURCE = "optimizer:semantic_compaction"
-GENERIC_TOKENS = {
-    "about",
-    "and",
-    "are",
-    "dataart",
-    "databricks",
-    "delta",
-    "fact",
-    "for",
-    "from",
-    "into",
-    "note",
-    "should",
-    "spark",
-    "the",
-    "this",
-    "use",
-    "uses",
-    "with",
-    "work",
-}
 TOPIC_PHRASES: dict[str, tuple[str, ...]] = {
     "schema_evolution": ("schema evolution", "mergeschema", "schemaevolutionmode"),
     "auto_loader": ("auto loader", "autoloader", "cloudfiles"),
@@ -147,16 +125,7 @@ class SimpleOptimizer:
         for topic in TOPIC_PRIORITY:
             if any(phrase in lowered for phrase in TOPIC_PHRASES[topic]):
                 return topic
-
-        tokens = [
-            token
-            for token in re.findall(r"[a-z0-9_]+", lowered)
-            if len(token) > 2 and token not in GENERIC_TOKENS
-        ]
-        unique_tokens = sorted(set(tokens))
-        if len(unique_tokens) < 2:
-            return None
-        return "+".join(unique_tokens[:3])
+        return None
 
     def _build_silver_compaction(self, topic_key: str, chunks: list[Chunk]) -> str:
         lines = [
