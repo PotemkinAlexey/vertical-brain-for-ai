@@ -29,6 +29,46 @@ vb tree
 vb optimize WORK/DataArt/Databricks
 ```
 
+## Local usage
+
+Run directly from the repository:
+
+```bash
+PYTHONPATH=src python -m vertical_brain.cli.main ingest "Databricks Auto Loader uses Spark Structured Streaming."
+PYTHONPATH=src python -m vertical_brain.cli.main ask "How does Databricks schema evolution work?"
+PYTHONPATH=src python -m vertical_brain.cli.main tree
+PYTHONPATH=src python -m vertical_brain.cli.main optimize WORK/DataArt/Databricks
+```
+
+Or install the CLI entrypoint:
+
+```bash
+python -m pip install -e .
+vb ingest "Databricks Delta schema evolution uses mergeSchema."
+vb ask "How does Databricks schema evolution work?"
+```
+
+Use an isolated storage directory when experimenting:
+
+```bash
+vb --data-dir .vb-dev-data ingest "dbt staging models are ephemeral in this project."
+```
+
+Inspect router decisions as strict JSON:
+
+```bash
+vb ingest --route-json "Databricks Auto Loader schema evolution"
+vb ask --route-json "How does Databricks schema evolution work?"
+```
+
+If the router confidence is below `0.65`, the CLI asks for clarification instead of writing low-quality knowledge into the store.
+
+## Tests
+
+```bash
+python -m pytest -q
+```
+
 ## MVP scope
 
 Version `0.1` should use simple local storage first:
@@ -51,4 +91,12 @@ CLASSIFY QUERY → LOCK TARGET VERTICAL → RETRIEVE ONLY ALLOWED CONTEXT → AN
 
 ## Project status
 
-Initial architecture scaffold for Codex.
+MVP core implemented:
+
+- CLI ingest / ask / tree / optimize
+- local JSON storage
+- route decision JSON serialization
+- context locking with ancestors, target node, and explicit peer links
+- exact duplicate stale marking
+- deterministic Gold summary placeholder
+- context-bound MVP answerer

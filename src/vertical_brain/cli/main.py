@@ -12,12 +12,15 @@ from vertical_brain.storage.json_store import JsonStore
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vb", description="Vertical Brain MVP CLI")
+    parser.add_argument("--data-dir", default="data", help="Directory for local JSON storage")
     sub = parser.add_subparsers(dest="command", required=True)
 
     ingest = sub.add_parser("ingest")
+    ingest.add_argument("--route-json", action="store_true", help="Print the route decision as strict JSON")
     ingest.add_argument("text")
 
     ask = sub.add_parser("ask")
+    ask.add_argument("--route-json", action="store_true", help="Print the query route decision as strict JSON")
     ask.add_argument("question")
 
     sub.add_parser("tree")
@@ -32,11 +35,23 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    store = JsonStore()
+    store = JsonStore(args.data_dir)
     router = MockRouter()
 
     if args.command == "ingest":
         decision = router.route_ingest(args.text)
+        print(f"Target path: {decision.target_path}")
+        print(f"Action: {decision.action}")
+        print(f"Layer: {decision.layer}")
+        print(f"Confidence: {decision.confidence}")
+        if args.route_json:
+            print("Route decision JSON:")
+            print(decision.to_json())
+
+        if decision.action == "ask_clarification":
+            print("Clarification needed: provide a more specific domain or namespace hint.")
+            return
+
         chunk = Chunk(
             node_path=decision.target_path,
             content=args.text,
@@ -56,10 +71,6 @@ def main() -> None:
                 )
             )
 
-        print(f"Target path: {decision.target_path}")
-        print(f"Action: {decision.action}")
-        print(f"Layer: {decision.layer}")
-        print(f"Confidence: {decision.confidence}")
         if decision.peer_links:
             print("Peer links:")
             for peer in decision.peer_links:
@@ -77,6 +88,12 @@ def main() -> None:
         print(f"Target path: {decision.target_path}")
         print(f"Query type: {decision.query_type}")
         print(f"Confidence: {decision.confidence}")
+        if args.route_json:
+            print("Route decision JSON:")
+            print(decision.to_json())
+        if decision.confidence < 0.65:
+            print("Clarification needed: provide a more specific domain or namespace hint.")
+            return
         print(
             "Allowed context policy: "
             f"ancestors={decision.allowed_context.include_ancestors}, "

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 
@@ -23,6 +24,14 @@ Action = Literal[
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+class JsonSerializable:
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), ensure_ascii=False, sort_keys=True)
 
 
 @dataclass
@@ -74,7 +83,7 @@ class StaleCandidate:
 
 
 @dataclass
-class RouteDecision:
+class RouteDecision(JsonSerializable):
     target_path: str
     content_type: ContentType
     layer: Layer
@@ -93,7 +102,7 @@ class AllowedContext:
 
 
 @dataclass
-class QueryRouteDecision:
+class QueryRouteDecision(JsonSerializable):
     target_path: str
     allowed_context: AllowedContext = field(default_factory=AllowedContext)
     query_type: QueryType = "lookup"

@@ -1,3 +1,4 @@
+import json
 import sys
 
 from vertical_brain.cli.main import main
@@ -55,3 +56,56 @@ def test_cli_ask_prints_query_route_contract(monkeypatch, capsys, tmp_path):
     assert "Answer:" in output
     assert "Based only on locked context:" in output
     assert "Databricks Delta schema evolution" in output
+
+
+def test_cli_ingest_route_json_is_inspectable(monkeypatch, capsys, tmp_path):
+    output = run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "ingest",
+        "--route-json",
+        "Databricks Auto Loader schema evolution",
+    )
+
+    route_json = output.split("Route decision JSON:\n", maxsplit=1)[1].splitlines()[0]
+    payload = json.loads(route_json)
+    assert payload["target_path"] == "WORK/DataArt/Databricks"
+    assert payload["peer_links"][0]["path"] == "WORK/DataArt/Databricks/AutoLoader"
+
+
+def test_cli_unknown_ingest_asks_clarification_without_writing_chunk(monkeypatch, capsys, tmp_path):
+    output = run_cli(monkeypatch, capsys, tmp_path, "ingest", "random note")
+
+    assert "Action: ask_clarification" in output
+    assert "Clarification needed:" in output
+    store = JsonStore(tmp_path / "data")
+    assert store.list_chunks() == []
+
+
+def test_cli_unknown_ask_requests_clarification(monkeypatch, capsys, tmp_path):
+    output = run_cli(monkeypatch, capsys, tmp_path, "ask", "--route-json", "random question?")
+
+    route_json = output.split("Route decision JSON:\n", maxsplit=1)[1].splitlines()[0]
+    payload = json.loads(route_json)
+    assert payload["target_path"] == "INBOX/Unclassified"
+    assert payload["confidence"] == 0.4
+    assert "Clarification needed:" in output
+    assert "Allowed context:" not in output
+
+
+def test_cli_uses_configured_data_dir(monkeypatch, capsys, tmp_path):
+    output = run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--data-dir",
+        "brain-data",
+        "ingest",
+        "dbt ephemeral staging model",
+    )
+
+    assert "Target path: WORK/Stack/dbt" in output
+    store = JsonStore(tmp_path / "brain-data")
+    assert len(store.get_chunks_by_path("WORK/Stack/dbt")) == 1
+    assert not (tmp_path / "data" / "chunks.json").exists()

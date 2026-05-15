@@ -63,7 +63,7 @@ class MockRouter:
             target_path="INBOX/Unclassified",
             content_type="note",
             layer="bronze",
-            action="append_bronze",
+            action="ask_clarification",
             confidence=0.4,
             reasoning_summary="No strong route found.",
         )
