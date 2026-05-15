@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from vertical_brain.core.models import Chunk, Node, SearchResult
+from vertical_brain.core.models import Chunk, SearchResult
 
 
 TOKEN_PATTERN = re.compile(r"\w+", re.UNICODE)
@@ -43,7 +43,6 @@ def fts_query(query: str) -> str:
 
 def lexical_search(
     *,
-    nodes: list[Node],
     chunks: list[Chunk],
     query: str,
     root_path: str | None = None,
@@ -81,33 +80,6 @@ def lexical_search(
                 layer=chunk.layer,
                 content_type=chunk.content_type,
                 status=chunk.status,
-            )
-        )
-
-    for node in nodes:
-        gold_text = " | ".join(node.gold_aspects)
-        if not gold_text.strip():
-            continue
-        if not _path_in_scope(node.path, root_path):
-            continue
-
-        score = _score_text(
-            query=normalized_query,
-            terms=terms,
-            path=node.path,
-            text=gold_text,
-        )
-        if score <= 0:
-            continue
-        results.append(
-            SearchResult(
-                path=node.path,
-                source="gold",
-                score=float(score),
-                snippet=make_snippet(gold_text, terms),
-                layer="gold",
-                content_type="summary",
-                status="active",
             )
         )
 

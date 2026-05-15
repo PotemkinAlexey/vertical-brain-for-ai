@@ -9,7 +9,7 @@ from vertical_brain.storage.sqlite_store import SQLiteStore
 @pytest.mark.parametrize("store_class", [JsonStore, SQLiteStore])
 def test_namespace_map_exposes_structure_counts_and_summaries_without_chunk_content(tmp_path, store_class):
     store = store_class(tmp_path)
-    store.append_node_gold_aspect("WORK/DataArt", "Stable DataArt summary")
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="Stable DataArt summary", layer="gold"))
     store.save_chunk(
         Chunk(
             node_path="WORK/DataArt/Databricks",
@@ -45,7 +45,7 @@ def test_namespace_map_exposes_structure_counts_and_summaries_without_chunk_cont
     assert set(nodes) == {"WORK/DataArt", "WORK/DataArt/Databricks", "WORK/DataArt/FXDB"}
     assert nodes["WORK/DataArt"].children == ["WORK/DataArt/Databricks", "WORK/DataArt/FXDB"]
     assert nodes["WORK/DataArt"].gold_summary == "Stable DataArt summary"
-    assert nodes["WORK/DataArt"].subtree_chunk_count == 3
+    assert nodes["WORK/DataArt"].subtree_chunk_count == 4
     assert nodes["WORK/DataArt/Databricks"].chunk_count == 2
     assert nodes["WORK/DataArt/Databricks"].active_chunk_count == 1
     assert nodes["WORK/DataArt/Databricks"].stale_chunk_count == 1
@@ -56,7 +56,7 @@ def test_namespace_map_exposes_structure_counts_and_summaries_without_chunk_cont
 
 def test_namespace_map_respects_relative_depth_limit_and_summary_budget(tmp_path):
     store = JsonStore(tmp_path)
-    store.append_node_gold_aspect("WORK/DataArt", "A" * 20)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="A" * 20, layer="gold"))
     store.ensure_node("WORK/DataArt/Databricks/Certification/SchemaEvolution")
 
     namespace_map = ContextSession(store).namespace_map(

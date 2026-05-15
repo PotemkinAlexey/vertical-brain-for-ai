@@ -5,7 +5,7 @@ from vertical_brain.storage.json_store import JsonStore
 
 def test_context_session_uses_search_as_navigation_to_locked_context(tmp_path):
     store = JsonStore(tmp_path)
-    store.append_node_gold_aspect("WORK/DataArt", "DataArt ancestor summary")
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="DataArt ancestor summary", layer="gold"))
     store.save_chunk(
         Chunk(
             node_path="WORK/DataArt/Databricks/StructuredStreaming",

@@ -33,28 +33,34 @@ class ContextLock:
 
         if policy.include_ancestors:
             for ancestor_path in self.store.get_ancestors(target_path):
-                ancestor = self.store.get_node(ancestor_path)
-                if ancestor and ancestor.gold_aspects:
+                gold_chunks = sorted(
+                    [c for c in self.store.get_chunks_by_path(ancestor_path) if c.layer == "gold" and c.status == "active"],
+                    key=lambda c: c.created_at,
+                )
+                if gold_chunks:
                     omitted_items += self._append_with_budget(
                         items,
                         ContextItem(
-                            path=ancestor.path,
+                            path=ancestor_path,
                             layer="gold",
-                            content=" | ".join(ancestor.gold_aspects),
-                            source="node",
+                            content=" | ".join(c.content for c in gold_chunks),
+                            source="chunk",
                         ),
                         budget,
                     )
 
-        target = self.store.get_node(target_path)
-        if policy.include_target and target and target.gold_aspects:
+        target_gold = sorted(
+            [c for c in self.store.get_chunks_by_path(target_path) if c.layer == "gold" and c.status == "active"],
+            key=lambda c: c.created_at,
+        )
+        if policy.include_target and target_gold:
             omitted_items += self._append_with_budget(
                 items,
                 ContextItem(
-                    path=target.path,
+                    path=target_path,
                     layer="gold",
-                    content=" | ".join(target.gold_aspects),
-                    source="node",
+                    content=" | ".join(c.content for c in target_gold),
+                    source="chunk",
                 ),
                 budget,
             )

@@ -146,7 +146,7 @@ class SQLiteStore:
             parent_path = "/".join(parts[: index - 1]) or None
             node = Node(path=node_path, name=parts[index - 1], parent_path=parent_path)
             row = asdict(node)
-            row["gold_summary"] = json.dumps(row.pop("gold_aspects"))
+            row["gold_summary"] = ""
             self.conn.execute(
                 """
                 INSERT INTO nodes (
@@ -239,35 +239,9 @@ class SQLiteStore:
         self._commit_if_needed()
         return chunk
 
-    def append_node_gold_aspect(self, path: str, aspect: str) -> Node:
-        self.ensure_node(path)
-        node = self.get_node(path)
-        if node is None:
-            raise ValueError(f"Node not found: {path}")
-        new_aspects = node.gold_aspects + [aspect]
-        updated_at = utc_now()
-        cursor = self.conn.execute(
-            "UPDATE nodes SET gold_summary = ?, updated_at = ? WHERE path = ?",
-            (json.dumps(new_aspects), updated_at, path),
-        )
-        if cursor.rowcount == 0:
-            raise ValueError(f"Node not found: {path}")
-        self._index_gold_aspects(path, new_aspects)
-        self._commit_if_needed()
-        self._write_gold_aspects_markdown(path, new_aspects)
-        node.gold_aspects = new_aspects
-        node.updated_at = updated_at
-        return node
-
     def gold_summary_path(self, path: str) -> Path:
         parts = path.split("/")
         return self.gold_dir.joinpath(*parts).with_suffix(".md")
-
-    def _write_gold_aspects_markdown(self, path: str, aspects: list[str]) -> None:
-        file = self.gold_summary_path(path)
-        file.parent.mkdir(parents=True, exist_ok=True)
-        content = "\n".join(f"- {a}" for a in aspects)
-        file.write_text(f"# {path}\n\n{content}\n", encoding="utf-8")
 
     def get_node(self, path: str) -> Node | None:
         row = self.conn.execute("SELECT * FROM nodes WHERE path = ?", (path,)).fetchone()
@@ -281,14 +255,7 @@ class SQLiteStore:
 
     def _node_data_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
         data = dict(row)
-        raw = data.pop("gold_summary", "[]")
-        try:
-            aspects = json.loads(raw)
-            if not isinstance(aspects, list):
-                aspects = [raw] if raw else []
-        except (json.JSONDecodeError, TypeError):
-            aspects = [raw] if raw else []
-        data["gold_aspects"] = aspects
+        data.pop("gold_summary", None)
         return data
 
     def list_chunks(self) -> list[Chunk]:
@@ -351,7 +318,6 @@ class SQLiteStore:
             return []
         if not self._fts_enabled:
             return lexical_search(
-                nodes=self.list_nodes(),
                 chunks=self.list_chunks(),
                 query=query,
                 root_path=root_path,
@@ -365,7 +331,7 @@ class SQLiteStore:
             where.append("(path = ? OR path LIKE ?)")
             params.extend([root_path, f"{root_path}/%"])
         if not include_stale:
-            where.append("(record_type = 'gold' OR status = 'active')")
+            where.append("status = 'active'")
         params.append(limit)
 
         try:
@@ -436,8 +402,7 @@ class SQLiteStore:
         self.conn.execute("DELETE FROM search_index")
         for chunk in self.list_chunks():
             self._index_chunk(chunk)
-        for node in self.list_nodes():
-            self._index_gold_aspects(node.path, node.gold_aspects)
+        # Gold is now indexed as regular chunks (layer="gold")
         self._commit_if_needed()
 
     def _get_link_by_relationship(self, source_path: str, target_path: str, link_type: str) -> Link | None:
@@ -492,39 +457,3 @@ class SQLiteStore:
             ),
         )
 
-    def _index_gold_aspects(self, path: str, aspects: list[str]) -> None:
-        if not self._fts_enabled:
-            return
-
-        self.conn.execute(
-            "DELETE FROM search_index WHERE record_type = 'gold' AND record_id = ?",
-            (path,),
-        )
-        content = " | ".join(aspects)
-        if not content.strip():
-            return
-        self.conn.execute(
-            """
-            INSERT INTO search_index (
-                record_type,
-                record_id,
-                path,
-                layer,
-                content_type,
-                status,
-                chunk_source,
-                content
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "gold",
-                path,
-                path,
-                "gold",
-                "summary",
-                "active",
-                "gold",
-                content,
-            ),
-        )
