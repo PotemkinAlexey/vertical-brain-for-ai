@@ -95,6 +95,7 @@ MVP core implemented:
 
 - CLI ingest / ask / tree / optimize
 - local JSON storage
+- root namespace bootstrap from `data/namespaces/root.json`
 - route decision JSON serialization
 - context locking with ancestors, target node, and explicit peer links
 - exact duplicate stale marking

@@ -15,12 +15,23 @@ class JsonStore:
         self.nodes_file = self.root / "nodes.json"
         self.chunks_file = self.root / "chunks.json"
         self.links_file = self.root / "links.json"
+        self.namespace_roots_file = self.root / "namespaces" / "root.json"
         self.gold_dir = self.root / "gold"
         self.gold_dir.mkdir(parents=True, exist_ok=True)
 
         for file in [self.nodes_file, self.chunks_file, self.links_file]:
             if not file.exists():
                 file.write_text("[]", encoding="utf-8")
+        self._seed_namespace_roots()
+
+    def _seed_namespace_roots(self) -> None:
+        if not self.namespace_roots_file.exists():
+            return
+
+        payload = json.loads(self.namespace_roots_file.read_text(encoding="utf-8"))
+        for root in payload.get("roots", []):
+            if isinstance(root, str) and root:
+                self.ensure_node(root)
 
     def _read(self, file: Path) -> list[dict[str, Any]]:
         return json.loads(file.read_text(encoding="utf-8"))

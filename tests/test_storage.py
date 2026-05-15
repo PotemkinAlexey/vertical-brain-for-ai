@@ -1,3 +1,5 @@
+import json
+
 from vertical_brain.core.models import Link
 from vertical_brain.storage.json_store import JsonStore
 
@@ -12,6 +14,19 @@ def test_ensure_node_creates_ancestor_chain(tmp_path):
     assert nodes["WORK"].parent_path is None
     assert nodes["WORK/DataArt"].parent_path == "WORK"
     assert nodes["WORK/DataArt/Databricks"].parent_path == "WORK/DataArt"
+
+
+def test_store_seeds_configured_root_namespaces(tmp_path):
+    namespace_dir = tmp_path / "namespaces"
+    namespace_dir.mkdir()
+    (namespace_dir / "root.json").write_text(
+        json.dumps({"roots": ["WORK", "PERSONAL", "TRADING", "INBOX"]}),
+        encoding="utf-8",
+    )
+
+    store = JsonStore(tmp_path)
+
+    assert [node.path for node in store.list_nodes()] == ["WORK", "PERSONAL", "TRADING", "INBOX"]
 
 
 def test_peer_paths_are_available_from_both_sides(tmp_path):
