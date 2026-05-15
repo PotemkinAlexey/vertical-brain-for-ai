@@ -44,7 +44,7 @@ class JsonStore:
         nodes = self._read(self.nodes_file)
         existing = next((n for n in nodes if n["path"] == path), None)
         if existing:
-            return Node(**existing)
+            return Node(**self._clean_node_row(existing))
 
         existing_paths = {n["path"] for n in nodes}
         parts = path.split("/")
@@ -68,7 +68,7 @@ class JsonStore:
         self._write(self.nodes_file, nodes)
         if target_row is None:
             target_row = next(n for n in nodes if n["path"] == path)
-        return Node(**target_row)
+        return Node(**self._clean_node_row(target_row))
 
     def save_chunk(self, chunk: Chunk) -> Chunk:
         self.ensure_node(chunk.node_path)
@@ -106,44 +106,21 @@ class JsonStore:
                 return chunk
         raise ValueError(f"Chunk not found: {chunk.id}")
 
-    def append_node_gold_aspect(self, path: str, aspect: str) -> Node:
-        self.ensure_node(path)
-        nodes = self._read(self.nodes_file)
-        for index, row in enumerate(nodes):
-            if row["path"] == path:
-                row = self._migrate_node_row(row)
-                row["gold_aspects"].append(aspect)
-                row["updated_at"] = utc_now()
-                nodes[index] = row
-                self._write(self.nodes_file, nodes)
-                self._write_gold_aspects_markdown(path, row["gold_aspects"])
-                return Node(**row)
-        raise ValueError(f"Node not found: {path}")
-
     def gold_summary_path(self, path: str) -> Path:
         parts = path.split("/")
         return self.gold_dir.joinpath(*parts).with_suffix(".md")
-
-    def _write_gold_aspects_markdown(self, path: str, aspects: list[str]) -> None:
-        file = self.gold_summary_path(path)
-        file.parent.mkdir(parents=True, exist_ok=True)
-        content = "\n".join(f"- {a}" for a in aspects)
-        file.write_text(f"# {path}\n\n{content}\n", encoding="utf-8")
 
     def get_node(self, path: str) -> Node | None:
         existing = next((row for row in self._read(self.nodes_file) if row["path"] == path), None)
         if existing is None:
             return None
-        return Node(**self._migrate_node_row(existing))
+        return Node(**self._clean_node_row(existing))
 
     def list_nodes(self) -> list[Node]:
-        return [Node(**self._migrate_node_row(row)) for row in self._read(self.nodes_file)]
+        return [Node(**self._clean_node_row(row)) for row in self._read(self.nodes_file)]
 
-    def _migrate_node_row(self, row: dict[str, Any]) -> dict[str, Any]:
-        if "gold_summary" in row and "gold_aspects" not in row:
-            old = row.pop("gold_summary")
-            row["gold_aspects"] = [old] if old else []
-        return row
+    def _clean_node_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in row.items() if k in {"id", "path", "name", "parent_path", "node_type", "created_at", "updated_at"}}
 
     def list_chunks(self) -> list[Chunk]:
         return [Chunk(**row) for row in self._read(self.chunks_file)]
@@ -187,7 +164,6 @@ class JsonStore:
         include_stale: bool = False,
     ) -> list[SearchResult]:
         return lexical_search(
-            nodes=self.list_nodes(),
             chunks=self.list_chunks(),
             query=query,
             root_path=root_path,

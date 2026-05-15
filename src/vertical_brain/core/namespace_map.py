@@ -24,8 +24,15 @@ class NamespaceMapBuilder:
         links = self.store.list_links()
 
         map_nodes: list[NamespaceMapNode] = []
+        gold_chunks_by_path: dict[str, list] = {}
+        for chunk in chunks:
+            if chunk.layer == "gold" and chunk.status == "active":
+                gold_chunks_by_path.setdefault(chunk.node_path, []).append(chunk)
+
         for node in sorted(visible_nodes, key=lambda item: item.path):
-            gold_summary, omitted_summary_chars = _truncate(" | ".join(node.gold_aspects), summary_max_chars)
+            node_gold = sorted(gold_chunks_by_path.get(node.path, []), key=lambda c: c.created_at)
+            gold_text = " | ".join(c.content for c in node_gold)
+            gold_summary, omitted_summary_chars = _truncate(gold_text, summary_max_chars)
             map_nodes.append(
                 NamespaceMapNode(
                     path=node.path,

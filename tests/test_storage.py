@@ -1,6 +1,6 @@
 import json
 
-from vertical_brain.core.models import Link
+from vertical_brain.core.models import Chunk, Link
 from vertical_brain.storage.json_store import JsonStore
 
 
@@ -72,12 +72,12 @@ def test_save_link_does_not_duplicate_same_relationship(tmp_path):
     assert store.get_link(first.id) == first
 
 
-def test_gold_aspect_append_writes_json_field_and_markdown_file(tmp_path):
+def test_gold_chunk_is_stored_and_retrievable(tmp_path):
     store = JsonStore(tmp_path)
 
-    node = store.append_node_gold_aspect("WORK/DataArt", "Stable DataArt summary")
+    chunk = store.save_chunk(Chunk(node_path="WORK/DataArt", content="Stable DataArt summary", layer="gold"))
 
-    assert node.gold_aspects == ["Stable DataArt summary"]
-    gold_file = store.gold_summary_path("WORK/DataArt")
-    assert gold_file.exists()
-    assert gold_file.read_text(encoding="utf-8") == "# WORK/DataArt\n\n- Stable DataArt summary\n"
+    gold_chunks = [c for c in store.get_chunks_by_path("WORK/DataArt") if c.layer == "gold"]
+    assert len(gold_chunks) == 1
+    assert gold_chunks[0].id == chunk.id
+    assert gold_chunks[0].content == "Stable DataArt summary"

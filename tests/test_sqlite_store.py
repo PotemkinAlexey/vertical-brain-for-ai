@@ -59,7 +59,7 @@ def test_sqlite_store_persists_chunks_links_and_gold_summary(tmp_path):
             reason="Repeated route decision.",
         )
     )
-    node = store.append_node_gold_aspect("WORK/DataArt/Databricks", "Stable summary")
+    gold = store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="Stable summary", layer="gold"))
 
     stored_chunk = store.get_chunks_by_path("WORK/DataArt/Databricks")[0]
     assert stored_chunk.id == chunk.id
@@ -67,10 +67,9 @@ def test_sqlite_store_persists_chunks_links_and_gold_summary(tmp_path):
     assert repeated.id == link.id
     assert store.get_link(link.id) == link
     assert store.get_peer_paths("WORK/DataArt/Databricks") == ["WORK/DataArt/Databricks/AutoLoader"]
-    assert node.gold_aspects == ["Stable summary"]
-    assert store.gold_summary_path("WORK/DataArt/Databricks").read_text(encoding="utf-8") == (
-        "# WORK/DataArt/Databricks\n\n- Stable summary\n"
-    )
+    gold_chunks = [c for c in store.get_chunks_by_path("WORK/DataArt/Databricks") if c.layer == "gold"]
+    assert len(gold_chunks) == 1
+    assert gold_chunks[0].id == gold.id
 
 
 def test_sqlite_store_transaction_rolls_back_storage_writes(tmp_path):

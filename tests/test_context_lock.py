@@ -18,7 +18,7 @@ def test_context_lock_excludes_other_branches(tmp_path):
 
 def test_context_lock_returns_locked_context_with_link_handles_only_by_default(tmp_path):
     store = JsonStore(tmp_path)
-    store.append_node_gold_aspect("WORK/DataArt", "DataArt gold summary")
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="DataArt gold summary", layer="gold"))
     store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="Databricks target fact"))
     store.save_chunk(
         Chunk(
@@ -50,7 +50,7 @@ def test_context_lock_returns_locked_context_with_link_handles_only_by_default(t
 
 def test_context_lock_respects_context_policy_flags(tmp_path):
     store = JsonStore(tmp_path)
-    store.append_node_gold_aspect("WORK/DataArt", "DataArt gold summary")
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="DataArt gold summary", layer="gold"))
     store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="Databricks target fact"))
     store.save_chunk(
         Chunk(

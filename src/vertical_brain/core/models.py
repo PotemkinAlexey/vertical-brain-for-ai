@@ -50,7 +50,6 @@ class Node:
     id: str = field(default_factory=lambda: str(uuid4()))
     parent_path: str | None = None
     node_type: str = "default"
-    gold_aspects: list[str] = field(default_factory=list)
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
 

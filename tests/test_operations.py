@@ -187,3 +187,38 @@ def test_dry_run_batch_returns_invalid_result_without_mutating_store(tmp_path):
     assert result.validation.valid is False
     assert result.results == []
     assert store.get_chunks_by_path("WORK/Vertical/Node") == []
+
+
+def test_append_gold_aspect_creates_gold_chunk_and_extends_on_fit(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+
+    executor.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/DataArt", gold_aspect="migration"))
+    executor.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/DataArt", gold_aspect="clusters"))
+
+    gold = [c for c in store.get_chunks_by_path("WORK/DataArt") if c.layer == "gold" and c.status == "active"]
+    assert len(gold) == 1
+    assert gold[0].content == "migration | clusters"
+
+
+def test_append_gold_aspect_creates_overflow_sibling_when_full(tmp_path):
+    from vertical_brain.core.operations import MAX_GOLD_CHARS
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+
+    long_aspect = "x" * (MAX_GOLD_CHARS - 5)
+    executor.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/DataArt", gold_aspect=long_aspect))
+    executor.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/DataArt", gold_aspect="overflow"))
+
+    primary_gold = [c for c in store.get_chunks_by_path("WORK/DataArt") if c.layer == "gold" and c.status == "active"]
+    assert len(primary_gold) == 1
+    assert primary_gold[0].content == long_aspect
+
+    overflow_links = [lnk for lnk in store.list_links() if lnk.link_type == "gold_overflow"]
+    assert len(overflow_links) == 1
+    overflow_path = overflow_links[0].target_path
+    assert overflow_path == "WORK/DataArt_2"
+
+    overflow_gold = [c for c in store.get_chunks_by_path(overflow_path) if c.layer == "gold" and c.status == "active"]
+    assert len(overflow_gold) == 1
+    assert overflow_gold[0].content == "overflow"

@@ -4,6 +4,7 @@ import sys
 import pytest
 
 from vertical_brain.cli.main import main
+from vertical_brain.core.models import Chunk
 from vertical_brain.storage.json_store import JsonStore
 from vertical_brain.storage.sqlite_store import SQLiteStore
 
@@ -222,7 +223,7 @@ def test_cli_map_prints_namespace_map_without_raw_chunk_content(monkeypatch, cap
         "Databricks raw note hidden from namespace map.",
     )
     store = JsonStore(tmp_path / "data")
-    store.append_node_gold_aspect("WORK/DataArt", "Stable DataArt summary")
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="Stable DataArt summary", layer="gold"))
 
     output = run_cli(monkeypatch, capsys, tmp_path, "map", "--path", "WORK/DataArt", "--max-depth", "1")
 

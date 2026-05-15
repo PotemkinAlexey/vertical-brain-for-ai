@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from contextlib import nullcontext
 from typing import Any, get_args
@@ -28,6 +29,14 @@ from vertical_brain.storage.json_store import JsonStore
 VALID_CONTENT_TYPES = set(get_args(ContentType))
 VALID_LAYERS = set(get_args(Layer))
 VALID_OPERATIONS = set(get_args(OperationType))
+MAX_GOLD_CHARS = 200
+
+
+def _next_overflow_path(path: str) -> str:
+    parent, _, name = path.rpartition("/")
+    m = re.match(r"^(.+?)_(\d+)$", name)
+    suffix = f"{m.group(1)}_{int(m.group(2)) + 1}" if m else f"{name}_2"
+    return f"{parent}/{suffix}" if parent else suffix
 
 
 class StorageOperationExecutor:
@@ -130,10 +139,57 @@ class StorageOperationExecutor:
 
         if operation.operation == "append_gold_aspect":
             assert operation.gold_aspect is not None
-            self.store.append_node_gold_aspect(operation.target_path, operation.gold_aspect)
+            self._apply_append_gold_aspect(operation.target_path, operation.gold_aspect)
             return OperationResult(operation=operation.operation, target_path=operation.target_path)
 
         raise ValueError(f"Unsupported storage operation: {operation.operation}")
+
+    def _apply_append_gold_aspect(self, path: str, aspect: str) -> None:
+        tail = self._gold_tail_path(path)
+        gold_chunks = [
+            c for c in self.store.get_chunks_by_path(tail)
+            if c.layer == "gold" and c.status == "active"
+        ]
+        if not gold_chunks:
+            self.store.ensure_node(tail)
+            self.store.save_chunk(Chunk(node_path=tail, content=aspect, layer="gold", source="model"))
+            return
+
+        latest = max(gold_chunks, key=lambda c: c.created_at)
+        new_content = latest.content + " | " + aspect
+        if len(new_content) <= MAX_GOLD_CHARS:
+            latest.status = "superseded"
+            latest.updated_at = utc_now()
+            self.store.update_chunk(latest)
+            self.store.save_chunk(
+                Chunk(node_path=tail, content=new_content, layer="gold", source="model", lineage=[latest.id])
+            )
+        else:
+            overflow = _next_overflow_path(tail)
+            self.store.ensure_node(overflow)
+            self.store.save_chunk(Chunk(node_path=overflow, content=aspect, layer="gold", source="model"))
+            self.store.save_link(Link(
+                source_path=tail,
+                target_path=overflow,
+                link_type="gold_overflow",
+                reason="Gold capacity overflow.",
+            ))
+
+    def _gold_tail_path(self, path: str) -> str:
+        current = path
+        visited: set[str] = {path}
+        while True:
+            links = [
+                lnk for lnk in self.store.list_links()
+                if lnk.source_path == current and lnk.link_type == "gold_overflow"
+            ]
+            if not links:
+                return current
+            nxt = links[0].target_path
+            if nxt in visited:
+                return current
+            visited.add(nxt)
+            current = nxt
 
     def _chunk_from_input(self, target_path: str, chunk_input: ChunkInput) -> Chunk:
         return Chunk(
