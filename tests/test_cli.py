@@ -52,4 +52,6 @@ def test_cli_ask_prints_query_route_contract(monkeypatch, capsys, tmp_path):
     assert "Target path: WORK/DataArt/Databricks" in output
     assert "Query type: explanation" in output
     assert "Allowed context policy: ancestors=True, peer_links=True, exclude_other_branches=True" in output
+    assert "Answer:" in output
+    assert "Based only on locked context:" in output
     assert "Databricks Delta schema evolution" in output

@@ -6,6 +6,7 @@ from vertical_brain.core.context_lock import ContextLock
 from vertical_brain.core.models import Chunk, Link
 from vertical_brain.core.optimizer import SimpleOptimizer
 from vertical_brain.core.router import MockRouter
+from vertical_brain.llm.mock_llm import MockLLM
 from vertical_brain.storage.json_store import JsonStore
 
 
@@ -90,8 +91,8 @@ def main() -> None:
                 print(f"- {item}")
 
         print("")
-        print("MVP answer placeholder:")
-        print("LLM answer generation will be added after router/storage are stable.")
+        print("Answer:")
+        print(MockLLM().answer_from_context(args.question, context))
 
     elif args.command == "tree":
         print(store.tree_text())
