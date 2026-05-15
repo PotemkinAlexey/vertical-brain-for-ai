@@ -6,6 +6,7 @@ from pathlib import Path
 
 from vertical_brain.core.context_lock import ContextLock
 from vertical_brain.core.context_session import ContextSession
+from vertical_brain.core.embedding_router import EmbeddingRouter
 from vertical_brain.core.json_schema import format_json_schema_errors, validate_json_schema
 from vertical_brain.core.models import ContextPolicy, OperationBatchResult
 from vertical_brain.core.optimizer import SimpleOptimizer
@@ -16,6 +17,7 @@ from vertical_brain.core.operations import (
 )
 from vertical_brain.core.router import LLMRouter, StorageModel
 from vertical_brain.core.search import BrainSearch
+from vertical_brain.llm.embedding import HttpEmbeddingProvider, MockEmbeddingProvider
 from vertical_brain.llm.mock_llm import MockLLM
 from vertical_brain.storage.json_store import JsonStore
 from vertical_brain.storage.sqlite_store import SQLiteStore
@@ -88,6 +90,18 @@ def build_parser() -> argparse.ArgumentParser:
     context_search.add_argument("query")
 
     sub.add_parser("tree")
+
+    route = sub.add_parser("route")
+    route.add_argument("--threshold", type=float, default=0.0, help="Minimum similarity score")
+    route.add_argument("--limit", type=int, default=5, help="Maximum number of candidates")
+    route.add_argument(
+        "--embedding-url",
+        default=None,
+        help="OpenAI-compatible embeddings endpoint URL (e.g. http://localhost:11434/v1/embeddings)",
+    )
+    route.add_argument("--embedding-model", default="nomic-embed-text", help="Embedding model name")
+    route.add_argument("--embedding-api-key", default="", help="API key for the embedding endpoint")
+    route.add_argument("text")
 
     optimize = sub.add_parser("optimize")
     optimize.add_argument("path")
@@ -285,6 +299,27 @@ def main() -> None:
                             print(f"Omitted items due to budget: {locked_context.omitted_items}")
                 if result.omitted_candidates:
                     print(f"Omitted candidate paths: {result.omitted_candidates}")
+
+    elif args.command == "route":
+        provider = (
+            HttpEmbeddingProvider(
+                url=args.embedding_url,
+                model=args.embedding_model,
+                api_key=args.embedding_api_key,
+            )
+            if args.embedding_url
+            else MockEmbeddingProvider()
+        )
+        candidates = EmbeddingRouter(store, provider).find_candidates(
+            args.text,
+            threshold=args.threshold,
+            limit=args.limit,
+        )
+        if not candidates:
+            print("(no matching namespaces)")
+        else:
+            for c in candidates:
+                print(f"score={c.score:.4f}  {c.path}  —  {c.gold_summary}")
 
     elif args.command == "optimize":
         optimizer = SimpleOptimizer(

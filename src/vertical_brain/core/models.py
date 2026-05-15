@@ -288,3 +288,10 @@ class QueryRouteDecision(JsonSerializable):
     query_type: QueryType = "lookup"
     confidence: float = 1.0
     reasoning_summary: str = ""
+
+
+@dataclass
+class EmbeddingRouteCandidate:
+    path: str
+    score: float
+    gold_summary: str
