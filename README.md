@@ -27,6 +27,7 @@ Build a CLI-first prototype that can:
 vb ingest "New information"
 vb ask "Question"
 vb search "Question or keyword"
+vb context search "Question or keyword"
 vb tree
 vb optimize WORK/DataArt/Databricks
 vb operation dry-run operation.json
@@ -41,6 +42,7 @@ Run directly from the repository:
 PYTHONPATH=src python -m vertical_brain.cli.main ingest "Databricks Auto Loader uses Spark Structured Streaming."
 PYTHONPATH=src python -m vertical_brain.cli.main ask "How does Databricks schema evolution work?"
 PYTHONPATH=src python -m vertical_brain.cli.main search --path WORK/DataArt "mergeSchema"
+PYTHONPATH=src python -m vertical_brain.cli.main context search --path WORK/DataArt "mergeSchema"
 PYTHONPATH=src python -m vertical_brain.cli.main tree
 PYTHONPATH=src python -m vertical_brain.cli.main optimize WORK/DataArt/Databricks
 PYTHONPATH=src python -m vertical_brain.cli.main operation dry-run operation.json
@@ -140,14 +142,20 @@ MAP FIRST → LOCK TARGET VERTICAL → READ BOUNDED CONTEXT → EXPAND LINKS ONL
 Horizontal links are handles by default. Their target content is not included in
 the prompt unless a caller explicitly requests link expansion.
 
+Use `vb search` to inspect ranked matches. Use `vb context search` for
+model-facing retrieval: search returns candidate handles, then Vertical Brain
+opens bounded locked context capsules for selected paths. Raw search snippets are
+not treated as model context.
+
 ## Project status
 
 MVP core implemented:
 
-- CLI ingest / ask / search / tree / optimize
+- CLI ingest / ask / search / context search / tree / optimize
 - local JSON storage
 - local SQLite storage with transaction support for operation batches
 - SQLite FTS search index with JSON lexical fallback
+- model-facing search-to-locked-context session
 - root namespace bootstrap from `data/namespaces/root.json`
 - LLM-driven routing through strict JSON contracts from `data/namespaces/model.json`
 - first-class `StorageOperation` execution

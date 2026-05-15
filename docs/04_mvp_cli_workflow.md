@@ -63,6 +63,23 @@ Expected behavior:
 5. Use SQLite FTS when SQLite backend is selected; use lexical fallback for JSON.
 ```
 
+### Context Search
+
+```bash
+vb context search --path WORK/DataArt "mergeSchema"
+vb context search --json --context-limit 2 --items-per-context 4 "schema evolution"
+```
+
+Expected behavior:
+
+```text
+1. Search for candidate namespace paths.
+2. Return candidate handles without using raw search snippets as model context.
+3. Dedupe candidate paths.
+4. Open bounded locked context capsules for selected paths.
+5. Keep horizontal links as handles unless link expansion is explicitly requested.
+```
+
 ### Tree
 
 ```bash

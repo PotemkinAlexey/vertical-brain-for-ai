@@ -395,6 +395,82 @@ def test_cli_search_uses_sqlite_fts_backend(monkeypatch, capsys, tmp_path):
     assert "SQLite FTS search note" in output
 
 
+def test_cli_context_search_opens_locked_context_from_candidate_paths(monkeypatch, capsys, tmp_path):
+    structured_response_file = write_llm_response(tmp_path, "structured.json", ingest_response())
+    run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--llm-response-file",
+        str(structured_response_file),
+        "ingest",
+        "needle needle needle locked target fact",
+    )
+    auto_loader_response_file = write_llm_response(
+        tmp_path,
+        "auto_loader.json",
+        ingest_response(target_path=AUTO_LOADER_SCHEMA_PATH),
+    )
+    run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--llm-response-file",
+        str(auto_loader_response_file),
+        "ingest",
+        "needle omitted candidate fact",
+    )
+
+    output = run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "context",
+        "search",
+        "--path",
+        "WORK/DataArt",
+        "--context-limit",
+        "1",
+        "needle",
+    )
+
+    assert "Candidate handles:" in output
+    assert "Locked contexts:" in output
+    assert f"Context: {STRUCTURED_SCHEMA_PATH}" in output
+    assert "needle needle needle locked target fact" in output
+    assert "needle omitted candidate fact" not in output
+    assert "Omitted candidate paths: 1" in output
+
+
+def test_cli_context_search_json_omits_raw_search_snippets(monkeypatch, capsys, tmp_path):
+    response_file = write_llm_response(tmp_path, "ingest.json", ingest_response())
+    run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--llm-response-file",
+        str(response_file),
+        "ingest",
+        "schema evolution locked target fact",
+    )
+
+    output = run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "context",
+        "search",
+        "--json",
+        "schema evolution",
+    )
+
+    payload = json.loads(output)
+    assert payload["candidate_handles"][0]["path"] == STRUCTURED_SCHEMA_PATH
+    assert "snippet" not in payload["candidate_handles"][0]
+    assert payload["locked_contexts"][0]["target_path"] == STRUCTURED_SCHEMA_PATH
+    assert "schema evolution locked target fact" in payload["locked_contexts"][0]["items"][0]["content"]
+
+
 def test_cli_operation_dry_run_reports_schema_errors(monkeypatch, capsys, tmp_path):
     operation_file = tmp_path / "invalid_operation.json"
     operation_file.write_text(

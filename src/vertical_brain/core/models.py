@@ -166,6 +166,17 @@ class SearchResult(JsonSerializable):
 
 
 @dataclass
+class SearchCandidateHandle(JsonSerializable):
+    path: str
+    source: str
+    score: float
+    chunk_id: str | None = None
+    layer: str | None = None
+    content_type: str | None = None
+    status: str | None = None
+
+
+@dataclass
 class ContextBudget:
     max_items: int = 12
 
@@ -204,6 +215,14 @@ class LockedContext(JsonSerializable):
 
     def as_prompt_lines(self) -> list[str]:
         return [f"[{item.path}][{item.layer}] {item.content}" for item in self.items]
+
+
+@dataclass
+class SearchContextResult(JsonSerializable):
+    query: str
+    candidate_handles: list[SearchCandidateHandle] = field(default_factory=list)
+    locked_contexts: list[LockedContext] = field(default_factory=list)
+    omitted_candidates: int = 0
 
 
 @dataclass

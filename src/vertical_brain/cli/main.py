@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from vertical_brain.core.context_lock import ContextLock
+from vertical_brain.core.context_session import ContextSession
 from vertical_brain.core.json_schema import format_json_schema_errors, validate_json_schema
 from vertical_brain.core.models import ContextPolicy, OperationBatchResult
 from vertical_brain.core.optimizer import SimpleOptimizer
@@ -57,6 +58,23 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--limit", type=int, default=10, help="Maximum number of results")
     search.add_argument("--include-stale", action="store_true", help="Include stale and superseded chunks")
     search.add_argument("query")
+
+    context = sub.add_parser("context")
+    context_sub = context.add_subparsers(dest="context_command", required=True)
+    context_search = context_sub.add_parser("search")
+    context_search.add_argument("--path", default=None, help="Limit search to a namespace branch")
+    context_search.add_argument("--search-limit", type=int, default=10, help="Maximum candidate handles")
+    context_search.add_argument("--context-limit", type=int, default=3, help="Maximum locked contexts to open")
+    context_search.add_argument("--items-per-context", type=int, default=6, help="Maximum items per locked context")
+    context_search.add_argument("--no-ancestors", action="store_true", help="Do not include ancestor Gold summaries")
+    context_search.add_argument(
+        "--link-expansion",
+        choices=["handles_only", "expanded", "none"],
+        default="handles_only",
+        help="How to expose horizontal links in locked contexts",
+    )
+    context_search.add_argument("--json", action="store_true", help="Print strict JSON result")
+    context_search.add_argument("query")
 
     sub.add_parser("tree")
 
@@ -176,6 +194,53 @@ def main() -> None:
                 if result.layer and result.content_type:
                     metadata = f"{metadata}/{result.layer}/{result.content_type}"
                 print(f"- score={result.score:.6f} [{result.path}][{metadata}] {result.snippet}")
+
+    elif args.command == "context":
+        if args.context_command == "search":
+            result = ContextSession(store).search_locked_context(
+                args.query,
+                root_path=args.path,
+                search_limit=args.search_limit,
+                context_limit=args.context_limit,
+                items_per_context=args.items_per_context,
+                include_ancestors=not args.no_ancestors,
+                link_expansion=args.link_expansion,
+            )
+            if args.json:
+                print(result.to_json())
+            else:
+                print("Candidate handles:")
+                if not result.candidate_handles:
+                    print("(no candidates)")
+                else:
+                    for handle in result.candidate_handles:
+                        metadata = handle.source
+                        if handle.layer and handle.content_type:
+                            metadata = f"{metadata}/{handle.layer}/{handle.content_type}"
+                        print(f"- score={handle.score:.6f} [{handle.path}][{metadata}]")
+
+                print("Locked contexts:")
+                if not result.locked_contexts:
+                    print("(no locked context)")
+                else:
+                    for locked_context in result.locked_contexts:
+                        print(f"Context: {locked_context.target_path}")
+                        if not locked_context.items:
+                            print("- (no context items)")
+                        else:
+                            for item in locked_context.items:
+                                print(f"- [{item.path}][{item.layer}] {item.content}")
+                        if locked_context.link_handles:
+                            print("Available link handles:")
+                            for handle in locked_context.link_handles:
+                                print(
+                                    f"- {handle.link_id} -> {handle.target_path} "
+                                    f"({handle.link_type}): {handle.reason}"
+                                )
+                        if locked_context.omitted_items:
+                            print(f"Omitted items due to budget: {locked_context.omitted_items}")
+                if result.omitted_candidates:
+                    print(f"Omitted candidate paths: {result.omitted_candidates}")
 
     elif args.command == "optimize":
         optimizer = SimpleOptimizer(
