@@ -347,6 +347,54 @@ def test_cli_can_use_sqlite_storage_backend(monkeypatch, capsys, tmp_path):
     assert chunks[0].content == "Databricks SQLite-backed fact"
 
 
+def test_cli_search_finds_ingested_json_chunk(monkeypatch, capsys, tmp_path):
+    response_file = write_llm_response(tmp_path, "ingest.json", ingest_response())
+    run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--llm-response-file",
+        str(response_file),
+        "ingest",
+        "Databricks Delta schema evolution uses mergeSchema.",
+    )
+
+    output = run_cli(monkeypatch, capsys, tmp_path, "search", "--path", "WORK/DataArt", "mergeSchema")
+
+    assert "Search results:" in output
+    assert f"[{STRUCTURED_SCHEMA_PATH}][chunk/silver/fact]" in output
+    assert "mergeSchema" in output
+
+
+def test_cli_search_uses_sqlite_fts_backend(monkeypatch, capsys, tmp_path):
+    response_file = write_llm_response(tmp_path, "ingest.json", ingest_response())
+    run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--storage-backend",
+        "sqlite",
+        "--llm-response-file",
+        str(response_file),
+        "ingest",
+        "Databricks SQLite FTS search note.",
+    )
+
+    output = run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--storage-backend",
+        "sqlite",
+        "search",
+        "FTS",
+    )
+
+    assert "Search results:" in output
+    assert f"[{STRUCTURED_SCHEMA_PATH}][chunk/silver/fact]" in output
+    assert "SQLite FTS search note" in output
+
+
 def test_cli_operation_dry_run_reports_schema_errors(monkeypatch, capsys, tmp_path):
     operation_file = tmp_path / "invalid_operation.json"
     operation_file.write_text(

@@ -11,6 +11,7 @@ Vertical Brain is not a generic chatbot memory and it is not the model.
 It is a controlled knowledge storage engine with:
 
 - strict namespace isolation
+- fast namespace-scoped search
 - vertical context storage operations
 - Bronze / Silver / Gold knowledge layers
 - peer-links between controlled sibling nodes
@@ -25,6 +26,7 @@ Build a CLI-first prototype that can:
 ```bash
 vb ingest "New information"
 vb ask "Question"
+vb search "Question or keyword"
 vb tree
 vb optimize WORK/DataArt/Databricks
 vb operation dry-run operation.json
@@ -38,6 +40,7 @@ Run directly from the repository:
 ```bash
 PYTHONPATH=src python -m vertical_brain.cli.main ingest "Databricks Auto Loader uses Spark Structured Streaming."
 PYTHONPATH=src python -m vertical_brain.cli.main ask "How does Databricks schema evolution work?"
+PYTHONPATH=src python -m vertical_brain.cli.main search --path WORK/DataArt "mergeSchema"
 PYTHONPATH=src python -m vertical_brain.cli.main tree
 PYTHONPATH=src python -m vertical_brain.cli.main optimize WORK/DataArt/Databricks
 PYTHONPATH=src python -m vertical_brain.cli.main operation dry-run operation.json
@@ -141,9 +144,10 @@ the prompt unless a caller explicitly requests link expansion.
 
 MVP core implemented:
 
-- CLI ingest / ask / tree / optimize
+- CLI ingest / ask / search / tree / optimize
 - local JSON storage
 - local SQLite storage with transaction support for operation batches
+- SQLite FTS search index with JSON lexical fallback
 - root namespace bootstrap from `data/namespaces/root.json`
 - LLM-driven routing through strict JSON contracts from `data/namespaces/model.json`
 - first-class `StorageOperation` execution

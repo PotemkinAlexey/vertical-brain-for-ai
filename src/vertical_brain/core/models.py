@@ -154,6 +154,18 @@ class OperationBatchResult(JsonSerializable):
 
 
 @dataclass
+class SearchResult(JsonSerializable):
+    path: str
+    source: str
+    score: float
+    snippet: str
+    chunk_id: str | None = None
+    layer: str | None = None
+    content_type: str | None = None
+    status: str | None = None
+
+
+@dataclass
 class ContextBudget:
     max_items: int = 12
 

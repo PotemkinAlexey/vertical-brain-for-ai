@@ -5,7 +5,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from vertical_brain.core.models import Chunk, Link, Node, utc_now
+from vertical_brain.core.models import Chunk, Link, Node, SearchResult, utc_now
+from vertical_brain.core.search import lexical_search
 
 
 class JsonStore:
@@ -162,6 +163,23 @@ class JsonStore:
         if include_children:
             return [c for c in chunks if c.node_path == path or c.node_path.startswith(path + "/")]
         return [c for c in chunks if c.node_path == path]
+
+    def search(
+        self,
+        query: str,
+        *,
+        root_path: str | None = None,
+        limit: int = 10,
+        include_stale: bool = False,
+    ) -> list[SearchResult]:
+        return lexical_search(
+            nodes=self.list_nodes(),
+            chunks=self.list_chunks(),
+            query=query,
+            root_path=root_path,
+            limit=limit,
+            include_stale=include_stale,
+        )
 
     def get_ancestors(self, path: str) -> list[str]:
         parts = path.split("/")

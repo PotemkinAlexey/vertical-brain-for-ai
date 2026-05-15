@@ -14,6 +14,7 @@ from vertical_brain.core.operations import (
     operation_from_route_decision,
 )
 from vertical_brain.core.router import LLMRouter, StorageModel
+from vertical_brain.core.search import BrainSearch
 from vertical_brain.llm.mock_llm import MockLLM
 from vertical_brain.storage.json_store import JsonStore
 from vertical_brain.storage.sqlite_store import SQLiteStore
@@ -50,6 +51,12 @@ def build_parser() -> argparse.ArgumentParser:
     ask = sub.add_parser("ask")
     ask.add_argument("--route-json", action="store_true", help="Print the query route decision as strict JSON")
     ask.add_argument("question")
+
+    search = sub.add_parser("search")
+    search.add_argument("--path", default=None, help="Limit search to a namespace branch")
+    search.add_argument("--limit", type=int, default=10, help="Maximum number of results")
+    search.add_argument("--include-stale", action="store_true", help="Include stale and superseded chunks")
+    search.add_argument("query")
 
     sub.add_parser("tree")
 
@@ -152,6 +159,23 @@ def main() -> None:
 
     elif args.command == "tree":
         print(store.tree_text())
+
+    elif args.command == "search":
+        results = BrainSearch(store).search(
+            args.query,
+            root_path=args.path,
+            limit=args.limit,
+            include_stale=args.include_stale,
+        )
+        print("Search results:")
+        if not results:
+            print("(no results)")
+        else:
+            for result in results:
+                metadata = result.source
+                if result.layer and result.content_type:
+                    metadata = f"{metadata}/{result.layer}/{result.content_type}"
+                print(f"- score={result.score:.6f} [{result.path}][{metadata}] {result.snippet}")
 
     elif args.command == "optimize":
         optimizer = SimpleOptimizer(

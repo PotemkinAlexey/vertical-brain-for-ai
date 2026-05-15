@@ -46,6 +46,23 @@ Expected behavior:
 4. Answer only from allowed context.
 ```
 
+### Search
+
+```bash
+vb search --path WORK/DataArt "mergeSchema"
+vb --storage-backend sqlite search "schema evolution"
+```
+
+Expected behavior:
+
+```text
+1. Search chunks and Gold summaries.
+2. Limit results to the requested branch when --path is set.
+3. Exclude stale and superseded chunks unless --include-stale is set.
+4. Return ranked candidates with path, source, layer, type, and snippet.
+5. Use SQLite FTS when SQLite backend is selected; use lexical fallback for JSON.
+```
+
 ### Tree
 
 ```bash
