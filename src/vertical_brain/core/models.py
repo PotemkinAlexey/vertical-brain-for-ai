@@ -55,6 +55,7 @@ class Chunk:
     status: ChunkStatus = "active"
     source: str = "manual"
     confidence: float = 1.0
+    lineage: list[str] = field(default_factory=list)
     id: str = field(default_factory=lambda: str(uuid4()))
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)

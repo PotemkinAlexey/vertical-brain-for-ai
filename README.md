@@ -99,5 +99,6 @@ MVP core implemented:
 - route decision JSON serialization
 - context locking with ancestors, target node, and explicit peer links
 - exact duplicate stale marking
-- deterministic Gold summary placeholder
+- deterministic semantic compaction into Silver chunks
+- deterministic Gold summary artifacts
 - context-bound MVP answerer
