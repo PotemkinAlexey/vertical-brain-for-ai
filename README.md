@@ -1,241 +1,285 @@
-# Vertical Brain MVP
+# Vertical Brain
 
-**Vertical Brain** is a personal context lakehouse.
+A personal context lakehouse for AI assistants — hierarchical, layered, transactional, and zero-dependency.
 
-It stores knowledge in isolated vertical namespaces, accepts strict storage operations from models, prevents cross-domain context leakage, and continuously compacts raw notes into stable knowledge summaries.
+Vertical Brain gives your AI a **structured memory** instead of a flat context window. Knowledge is organized into namespace hierarchies, promoted through Bronze → Silver → Gold quality layers, and exposed to models through locked context capsules that prevent cross-domain leakage.
 
-## Core idea
+---
 
-Vertical Brain is not a generic chatbot memory and it is not the model.
+## Why
 
-It is a controlled knowledge storage engine with:
+Chat assistants forget between sessions and mix unrelated contexts together. Vector DBs store isolated facts without structure. Vertical Brain takes a different approach:
 
-- strict namespace isolation
-- fast namespace-scoped search
-- vertical context storage operations
-- Bronze / Silver / Gold knowledge layers
-- peer-links between controlled sibling nodes
-- stale context detection
-- read-time context locking
-- optimize / compaction process
+- **Namespaces** enforce vertical isolation — `WORK/DataArt/Databricks` never bleeds into `PERSONAL/Finance`
+- **Layers** distinguish raw notes (Bronze) from canonical facts (Silver) from stable summaries (Gold)
+- **Locked context** gives the model a bounded, focused view — exactly what it needs, nothing it doesn't
+- **Operations** make writes explicit, validated, and auditable — no silent mutations
 
-## MVP goal
+---
 
-Build a CLI-first prototype that can:
+## Quick Start
 
 ```bash
-vb ingest "New information"
-vb ask "Question"
+pip install -e .          # no external dependencies
+vb ingest "Spark 3.5 dropped support for Python 3.8"
 vb map
-vb search "Question or keyword"
-vb context search "Question or keyword"
-vb context expand <link_id>
-vb tree
-vb optimize WORK/DataArt/Databricks
-vb operation dry-run operation.json
-vb operation apply operation.json
+vb search "Spark Python"
+vb context search "Spark compatibility"
 ```
 
-## Local usage
+### MCP (Claude Desktop)
 
-Run directly from the repository:
-
-```bash
-PYTHONPATH=src python -m vertical_brain.cli.main ingest "Databricks Auto Loader uses Spark Structured Streaming."
-PYTHONPATH=src python -m vertical_brain.cli.main ask "How does Databricks schema evolution work?"
-PYTHONPATH=src python -m vertical_brain.cli.main map --path WORK/DataArt
-PYTHONPATH=src python -m vertical_brain.cli.main search --path WORK/DataArt "mergeSchema"
-PYTHONPATH=src python -m vertical_brain.cli.main context search --path WORK/DataArt "mergeSchema"
-PYTHONPATH=src python -m vertical_brain.cli.main context expand <link_id>
-PYTHONPATH=src python -m vertical_brain.cli.main tree
-PYTHONPATH=src python -m vertical_brain.cli.main optimize WORK/DataArt/Databricks
-PYTHONPATH=src python -m vertical_brain.cli.main operation dry-run operation.json
-```
-
-Or install the CLI entrypoint:
-
-```bash
-python -m pip install -e .
-vb ingest "Databricks Delta schema evolution uses mergeSchema."
-vb ask "How does Databricks schema evolution work?"
-```
-
-The current local runner uses a mock provider. Without a real model provider or `--llm-response-file`, routing returns a clarification response instead of guessing.
-
-Use an isolated storage directory when experimenting:
-
-```bash
-vb --data-dir .vb-dev-data ingest "dbt staging models are ephemeral in this project."
-```
-
-## Storage backends
-
-SQLite is the **default** backend. It provides transactional operation
-batches, an FTS search index, and an append-only operation audit log:
-
-```bash
-vb ingest "Models should write through validated operation batches."
-```
-
-JSON storage is available for development and debugging — it keeps every
-record in human-readable `nodes.json` / `chunks.json` / `links.json` files
-plus an `operation_audit.jsonl` audit log:
-
-```bash
-vb --storage-backend json ingest "Inspect raw records on disk while debugging."
-```
-
-> **Note:** JSON backend is for development/debugging and does not provide transactional guarantees for runtime failures. Use SQLite for agent/MCP writes.
-
-### SQLite concurrency
-
-The SQLite backend opens every connection with `PRAGMA journal_mode=WAL` and
-`PRAGMA busy_timeout=5000`. This means:
-
-- Multiple `SQLiteStore` instances may safely point at the same database file —
-  WAL mode allows one writer and many concurrent readers without blocking.
-- Do **not** share a single `SQLiteStore` instance across threads. The
-  underlying `sqlite3` connection is not thread-safe by default. Create one
-  instance per thread or per request instead.
-- For agent and MCP usage, one `SQLiteStore` per process/worker is the right
-  default. The MCP stdio server is single-process, so a single instance is
-  sufficient.
-
-## Quick start
-
-```bash
-# 1. Orient: print all namespaces, Gold summaries, counts, and link handles
-vb session-start
-
-# 2. Retrieve: search returns candidate handles, then bounded locked contexts
-vb search "mergeSchema"
-vb context search "schema evolution"
-
-# 3. Check integrity: run the doctor for orphan links, duplicates, bad fields
-vb doctor
-vb doctor --json
-
-# 4. Compact: preview a compaction plan before applying it
-vb optimize WORK/DataArt/Databricks --plan
-vb optimize WORK/DataArt/Databricks
-```
-
-## MCP integration
-
-Vertical Brain ships an MCP stdio server (`vb mcp`). Add it to Claude
-Desktop's `claude_desktop_config.json`:
+Add to `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "vertical-brain": {
       "command": "vb",
-      "args": ["--data-dir", "/absolute/path/to/brain-data", "mcp"]
+      "args": ["--data-dir", "/path/to/your/brain", "mcp"]
     }
   }
 }
 ```
 
-Use a custom storage model when changing the format contract:
+With semantic search via Ollama:
 
-```bash
-vb --model-file data/namespaces/model.json tree
+```json
+{
+  "mcpServers": {
+    "vertical-brain": {
+      "command": "vb",
+      "args": [
+        "--data-dir", "/path/to/your/brain",
+        "mcp",
+        "--embedding-url", "http://localhost:11434/v1/embeddings",
+        "--embedding-model", "nomic-embed-text"
+      ]
+    }
+  }
+}
 ```
 
-`model.json` describes storage, routing, and operation JSON contracts only. It
-does not contain domain routing rules; route decisions are strict JSON returned
-by the configured model provider. For local tests, `--llm-response-file` can
-inject a canned provider response.
+---
 
-Inspect router decisions as strict JSON:
+## Core Concepts
 
-```bash
-vb ingest --route-json "Databricks Auto Loader schema evolution"
-vb ask --route-json "How does Databricks schema evolution work?"
+### Namespace Hierarchy
+
+Every piece of knowledge lives at a path:
+
+```
+ROOT
+├── WORK
+│   ├── DataArt
+│   │   ├── Databricks        ← chunks about Databricks at DataArt
+│   │   └── MLflow
+│   └── SideProject
+└── PERSONAL
+    └── Finance
 ```
 
-If router confidence is below the namespace model threshold, the CLI asks for clarification instead of writing low-quality knowledge into the store.
+Paths are slash-separated. Vertical isolation means context opened at `WORK/DataArt/Databricks` includes ancestors (`WORK/DataArt`, `WORK`) but never peers like `PERSONAL/Finance` unless you follow an explicit link.
 
-Models can also emit first-class storage operations directly. The CLI validates
-the incoming JSON against the operation schema from `model.json`, then runs
-semantic validation against storage state. `dry-run` validates the operation or
-batch without mutating storage; `apply` prevalidates the full batch before any
-write:
+### Knowledge Layers
+
+| Layer | Purpose | Managed by |
+|-------|---------|------------|
+| **Bronze** | Raw notes, questions, fragments | You / the model |
+| **Silver** | Canonical facts, cleaned, deduplicated | Optimizer compaction |
+| **Gold** | Stable summary aspects, stable IDs | Gold builder / LLM |
+
+The optimizer deduplicates Bronze chunks and compacts them into Silver summaries. Gold aspects carry stable UUIDs so they survive rewrites without identity drift. Up to 20 Gold aspects per namespace; overflow creates a sibling namespace automatically.
+
+### Operations
+
+All writes are explicit `StorageOperation` objects validated against JSON Schema before execution:
+
+| Operation | What it does |
+|-----------|-------------|
+| `append_chunk` | Add a new chunk to a namespace |
+| `append_gold_aspect` | Add or refresh a semantic label in the Gold layer |
+| `create_link` | Create a horizontal link between namespaces |
+| `mark_stale` | Retire a chunk |
+| `supersede_chunk` | Replace chunks with a newer version |
+| `rename_namespace` | Atomically rename a namespace prefix |
+
+### Locked Context
+
+The model never sees raw storage dumps. It receives a **locked context capsule** — a bounded view containing:
+- Full chunk content (Gold → Silver → Bronze priority)
+- Ancestor Gold summaries for orientation
+- Link handles (not expanded content) for horizontal navigation
+
+---
+
+## CLI Reference
+
+All commands share global flags:
+
+```
+vb [--data-dir DIR] [--storage-backend sqlite|json] [--model-file FILE] COMMAND
+```
+
+| Command | Description |
+|---------|-------------|
+| `ingest TEXT` | Route and store a piece of text |
+| `ask QUESTION` | Route a question and show the locked context |
+| `map` | Show the namespace map with Gold summaries |
+| `search QUERY` | Lexical full-text search |
+| `search --semantic QUERY` | Semantic embedding search |
+| `route TEXT` | Show best-matching namespaces by embedding similarity |
+| `context search QUERY` | Search + open locked context capsules |
+| `context expand LINK_ID` | Expand a link handle into a locked context |
+| `session-start` | Print the orientation prompt for a new model session |
+| `tree` | Print the raw namespace tree |
+| `optimize PATH` | Run duplicate detection and Silver compaction |
+| `optimize --plan PATH` | Show compaction plan without applying |
+| `doctor` | Run storage integrity checks |
+| `operation dry-run FILE` | Validate an operation batch JSON file |
+| `operation apply FILE` | Apply an operation batch JSON file |
+| `mcp` | Start the MCP stdio server |
+
+### Examples
+
+```bash
+# Map the whole brain
+vb map
+
+# Map a subtree with depth limit
+vb map --path WORK --max-depth 2
+
+# Search within a subtree
+vb search --path WORK/DataArt "Databricks"
+
+# Semantic search with Ollama
+vb search --semantic \
+  --embedding-url http://localhost:11434/v1/embeddings \
+  "Python 3.8 compatibility"
+
+# Open locked context capsules for a query
+vb context search "MLflow experiment tracking" --path WORK
+
+# Show compaction plan for a namespace
+vb optimize --plan WORK/DataArt/Databricks
+
+# Apply a model-emitted operation batch
+vb operation apply ops.json
+
+# Run integrity checks
+vb doctor
+```
+
+---
+
+## Storage Backends
+
+### SQLite (default)
+
+Single-file `brain.sqlite` with WAL mode. Supports FTS5 full-text search, transactional batches, persistent embedding vector cache, and an append-only operation audit log.
+
+**Concurrency:** one writer + N readers via WAL. Use `ThreadLocalSQLiteStoreProxy` for multi-threaded access — it creates one `SQLiteStore` instance per thread.
+
+```bash
+vb --data-dir ./brain ...
+```
+
+### JSON (dev/debug)
+
+Human-readable files: `nodes.json`, `chunks.json`, `links.json`, `vector_cache.json`, `operation_audit.jsonl`. Good for inspecting and editing state by hand.
+
+```bash
+vb --data-dir ./brain --storage-backend json ...
+```
+
+---
+
+## Semantic Search & Routing
+
+Vertical Brain supports semantic search via any OpenAI-compatible embeddings endpoint. Embedding vectors are cached persistently to avoid recomputation across sessions. Switching models triggers automatic cache invalidation.
+
+```bash
+# Semantic search
+vb search --semantic \
+  --embedding-url http://localhost:11434/v1/embeddings \
+  --embedding-model nomic-embed-text \
+  "query text"
+
+# Route text to the best matching namespace
+vb route \
+  --embedding-url http://localhost:11434/v1/embeddings \
+  "Databricks cluster autoscaling"
+```
+
+---
+
+## Operation Contracts
+
+Models emit operations as JSON. Vertical Brain validates them against JSON Schema before applying:
 
 ```json
 {
   "operations": [
     {
       "operation": "append_chunk",
-      "target_path": "WORK/VerticalBrain/Protocol",
+      "target_path": "WORK/DataArt/Databricks",
       "chunk": {
-        "content": "Models write context through validated storage operations.",
+        "content": "Delta Lake Z-ordering reduces scan time by clustering related rows.",
         "layer": "silver",
-        "content_type": "fact"
-      }
+        "content_type": "fact",
+        "source": "model",
+        "confidence": 0.92
+      },
+      "reasoning_summary": "Canonicalized user note on Z-ordering performance."
     }
   ],
-  "reasoning_summary": "Persist protocol knowledge."
+  "reasoning_summary": "Ingest performance fact."
 }
 ```
 
-## Tests
+```bash
+vb operation apply ops.json      # apply
+vb operation dry-run ops.json    # validate only
+```
+
+See [docs/operations_reference.md](docs/operations_reference.md) for the full operation schema.
+
+---
+
+## MCP Tools
+
+The MCP server exposes these tools to Claude:
+
+| Tool | Purpose |
+|------|---------|
+| `session_start` | Orientation prompt at session start (call first) |
+| `namespace_map` | Full namespace map as JSON |
+| `list_chunks` | List chunks at a path |
+| `read_context` | Open a locked context capsule |
+| `search` | Lexical FTS search |
+| `search_semantic` | Semantic embedding search |
+| `context_search` | Search + locked context capsules |
+| `context_search_semantic` | Semantic search + locked context capsules |
+| `route` | Find best namespaces by embedding similarity |
+| `append_chunk` | Write a chunk |
+| `append_gold_aspect` | Update Gold summary |
+| `create_link` | Create a namespace link |
+| `operations` | Apply a full operation batch |
+| `optimize` | Run optimizer on a subtree |
+| `doctor` | Run integrity checks |
+
+See [docs/mcp_tools.md](docs/mcp_tools.md) for full parameter reference.
+
+---
+
+## Development
 
 ```bash
-python -m pytest -q
+pip install -e .
+pytest
+pytest tests/test_operations.py -v   # run a subset
 ```
 
-## MVP scope
+**Zero external dependencies.** Core, storage, and MCP server use only the Python standard library. The optional HTTP embedding provider uses `urllib`.
 
-Version `0.1` should use simple local storage first:
-
-- JSON or SQLite for metadata and chunks
-- Markdown files for Gold summaries
-- Optional vector index later
-- LLM router returning strict JSON
-- No UI in the first version
-
-## Key design rule
-
-Do not retrieve from the whole knowledge base.
-
-Always:
-
-```text
-MAP FIRST → LOCK TARGET VERTICAL → READ BOUNDED CONTEXT → EXPAND LINKS ONLY ON REQUEST → ANSWER
-```
-
-Horizontal links are handles by default. Their target content is not included in
-the prompt unless a caller explicitly requests link expansion.
-
-Use `vb map` for the first model-facing read: it exposes namespace structure,
-counts, Gold summaries, and link handles without raw chunk content. Use
-`vb search` to inspect ranked matches. Use `vb context search` for model-facing
-retrieval: search returns candidate handles, then Vertical Brain opens bounded
-locked context capsules for selected paths. Raw search snippets are not treated
-as model context. Use `vb context expand <link_id>` to explicitly open a
-horizontal link handle as a separate locked context.
-
-## Project status
-
-MVP core implemented:
-
-- CLI ingest / ask / map / search / context search / context expand / tree / optimize
-- local JSON storage
-- local SQLite storage with transaction support for operation batches
-- SQLite FTS search index with JSON lexical fallback
-- model-facing namespace map without raw chunk content
-- model-facing search-to-locked-context session
-- explicit horizontal link expansion into separate locked context
-- root namespace bootstrap from `data/namespaces/root.json`
-- LLM-driven routing through strict JSON contracts from `data/namespaces/model.json`
-- first-class `StorageOperation` execution
-- `StorageOperationBatch` optimization for many variants into one canonical chunk
-- JSON Schema validation for model-emitted operation payloads
-- operation validation, dry-run, and batch preflight before writes
-- route decision JSON serialization
-- locked context capsules with budget and horizontal link handles
-- exact duplicate stale marking
-- namespace-bounded compaction into Silver chunks
-- deterministic Gold summary artifacts
-- context-bound MVP answerer
+See [ARCHITECTURE.md](ARCHITECTURE.md) for a deep dive into the design.

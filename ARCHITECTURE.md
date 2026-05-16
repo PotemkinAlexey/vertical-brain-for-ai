@@ -1,138 +1,310 @@
 # Vertical Brain — Architecture
 
-Vertical Brain is a personal context warehouse / persistent memory system for
-LLM agents. It stores knowledge in isolated vertical namespaces, accepts strict
-storage operations, prevents cross-domain context leakage, and continuously
-compacts raw notes into stable summaries.
+Vertical Brain is a personal knowledge store designed around one constraint: **a model should never see more than it needs to answer a specific question.** Everything else follows from that.
 
-## Core principles
+---
 
-1. **Namespace isolation.** Knowledge lives in slash-separated namespace paths
-   (e.g. `WORK/DataArt/Databricks`). A read never crosses sibling branches
-   unless an explicit horizontal link is followed.
-2. **Map first, then lock.** Models orient with a namespace map, lock a target
-   vertical, read a bounded context capsule, and only then expand links.
-3. **Strict operations.** All writes go through validated `StorageOperation`
-   objects — never ad-hoc mutation. Operations are schema-checked before any
-   write touches storage.
-4. **Layered knowledge.** Raw notes (Bronze) are compacted into canonical
-   facts (Silver) and finally distilled into stable summaries (Gold).
-5. **Search is for discovery, not context.** Search returns candidate handles.
-   Model-facing content always comes from locked context capsules.
+## Design Principles
 
-## Data model
+1. **Namespace isolation first.** Knowledge lives in vertical paths. A context capsule opened at `WORK/DataArt/Databricks` includes only that subtree and its ancestors — never peer branches or unrelated domains.
 
-### Chunk
+2. **Map before locking.** The model always starts with a compact orientation map, then locks a specific namespace. This prevents context stuffing and makes sessions reproducible.
 
-A unit of stored content.
+3. **Operations, not raw writes.** Every mutation is a `StorageOperation` validated against JSON Schema. Validation happens before any I/O. Invalid operations are rejected, not silently truncated.
 
-| Field | Meaning |
-| --- | --- |
-| `id` | UUID |
-| `node_path` | Owning namespace path |
-| `content` | Text content |
-| `layer` | `bronze` / `silver` / `gold` |
-| `content_type` | `fact`, `correction`, `decision`, `question`, `note`, `code`, `artifact` |
-| `status` | `active`, `stale`, `superseded`, `legacy`, `contradicted`, `uncertain` |
-| `source` | Origin marker (`manual`, `model`, optimizer source, etc.) |
-| `confidence` | 0..1 |
-| `lineage` | IDs of chunks this was derived from |
-| `chunk_key` | Optional stable identity key (nullable) |
-| `content_hash` | SHA-256 of whitespace-normalized content (computed) |
-| `supersedes` | IDs of chunks this chunk replaces |
-| `valid_from` / `valid_to` | ISO timestamps for temporal validity |
-| `created_at` / `updated_at` | ISO timestamps |
+4. **Layered quality.** Raw input (Bronze) flows through compaction to canonical facts (Silver) to stable summaries (Gold). Only Gold is shown in orientation maps; Silver and Bronze are available in locked context.
 
-`content_hash` is computed in `__post_init__` over normalized content, so two
-chunks with the same text (modulo whitespace) always share a hash. This powers
-duplicate detection in the optimizer and `vb doctor`.
+5. **Deterministic optimizer.** The optimizer is a pure function over a snapshot. It reads storage exactly once, builds a plan with no I/O, then applies the batch transactionally. No surprises.
+
+---
+
+## Data Model
 
 ### Node
 
-A namespace in the tree: `id`, `path`, `name`, `parent_path`, `node_type`,
-timestamps. Ancestor nodes are created automatically when a deep path is used.
+A node is a namespace path. It is created automatically when a chunk is written to it.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Stable identifier |
+| `path` | string | Slash-separated path, e.g. `WORK/DataArt` |
+| `name` | string | Last segment of the path |
+| `parent_path` | string\|null | Parent path (null for roots) |
+| `node_type` | string | `namespace` or `root` |
+| `gold_summary` | string\|null | Serialized Gold aspect list (v2 JSON) |
+| `version` | int | Monotonically increasing; incremented on every mutation |
+| `is_dirty` | bool | True if content changed since last Gold rebuild |
+| `created_at` | ISO 8601 | UTC creation time |
+| `updated_at` | ISO 8601 | UTC last mutation time |
+
+### Chunk
+
+A chunk is a single piece of content at a node. Multiple chunks can coexist at the same node in different layers and states.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Stable identifier |
+| `node_path` | string | The namespace this chunk belongs to |
+| `layer` | `bronze`\|`silver`\|`gold` | Knowledge quality layer |
+| `content` | string | The actual text |
+| `content_type` | enum | `fact`, `decision`, `question`, `note`, `code`, `artifact`, `correction` |
+| `status` | enum | `active`, `stale`, `superseded`, `legacy`, `contradicted` |
+| `source` | string | Who produced this: `user`, `model`, `optimizer:namespace_compaction`, etc. |
+| `confidence` | float [0,1] | Routing/quality signal |
+| `lineage` | list[UUID] | IDs of source chunks this was distilled from |
+| `content_hash` | string | SHA-256 of content, used for deduplication and vector cache keys |
+| `decay_factor` | float | Per-chunk decay rate (overrides global if < 1.0) |
+| `valid_from` | ISO 8601 | When this chunk became active |
+| `valid_to` | ISO 8601\|null | Auto-set when status transitions to stale/superseded/legacy/contradicted |
+| `created_at` | ISO 8601 | |
+| `updated_at` | ISO 8601 | |
 
 ### Link
 
-A horizontal relationship between two namespaces: `source_path`,
-`target_path`, `link_type`, `reason`. Symmetric link types (`peer`,
-`related_to`) can be expanded from either side. Directional link types require
-a `from_path` to disambiguate which endpoint is being expanded.
+A link is a horizontal connection between two namespace paths.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | UUID | Stable identifier |
+| `source_path` | string | Source namespace |
+| `target_path` | string | Target namespace |
+| `link_type` | string | `related`, `depends_on`, `supersedes`, `peer`, etc. |
+| `reason` | string | Human-readable description |
+
+### GoldAspect (v2 format)
+
+Gold summaries are stored as structured JSON at `node.gold_summary`:
+
+```json
+{
+  "aspects": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "text": "Delta Lake Z-ordering reduces scan time by clustering rows.",
+      "updated_at": "2025-01-15T10:30:00Z"
+    }
+  ]
+}
+```
+
+- `id` is stable across rewrites — updating the same aspect refreshes `updated_at` but keeps the UUID
+- Max 20 aspects per node; overflow creates a sibling namespace `{path}_2`, `{path}_3`, etc.
+
+---
+
+## Knowledge Layers
+
+```
+Bronze  ──→  Silver  ──→  Gold
+(raw)       (canonical)   (stable)
+```
+
+### Bronze
+
+What comes in. Raw user notes, model observations, questions, code snippets. Multiple bronze chunks can exist at the same node — they accumulate until the optimizer runs.
+
+### Silver
+
+Canonical facts. The optimizer compacts multiple Bronze chunks at a node into a single Silver summary, preserving lineage. Silver chunks de-duplicate by content hash.
+
+### Compaction (Bronze → Silver)
+
+`SimpleOptimizer.optimize_branch(path)` runs in three passes over a single storage snapshot:
+
+1. **Exact dedup** — mark stale any active chunk whose `(node_path, content_hash)` already exists
+2. **Namespace compaction** — for each node with 2+ active non-Gold chunks lacking lineage, create one Silver summary and supersede the originals
+3. **Confidence decay** — mark stale any old Bronze/Silver chunk whose decayed confidence falls below `stale_threshold`
+
+The entire batch is applied in a single transactional tick. If optimistic concurrency detects a concurrent write (`branch_path` + `start_version`), it raises `OptimisticLockException`.
 
 ### Gold
 
-Gold chunks hold distilled summaries. Content is backward-compatible:
+Stable semantic labels. Gold aspects are managed explicitly via `append_gold_aspect` — they are not overwritten wholesale. Each aspect has a stable UUID so downstream indexes can track identity across rewrites.
 
-- Plain text: `"Delta migration | AutoLoader streaming"`
-- Structured JSON: `{"aspects": [...], "last_updated": "..."}`
+---
 
-`parse_gold_content()` handles both forms and returns an aspect list.
-
-## Operation lifecycle
-
-1. A model emits a `StorageOperation` or `StorageOperationBatch` (JSON).
-2. The payload is checked against the JSON Schema in `model.json`.
-3. `StorageOperationExecutor` runs semantic validation against current state.
-4. `dry_run` reports validity without writing; `apply` / `apply_batch` write.
-5. Batches run inside a transaction on backends that support it (SQLite).
-6. Every successful applied operation is written to the operation audit log.
-
-Operation types: `create_node`, `append_chunk`, `create_link`, `mark_stale`,
-`supersede_chunk`, `append_gold_aspect`.
-
-## Search-to-context lifecycle
+## Read Path
 
 ```
-MAP FIRST → LOCK TARGET VERTICAL → READ BOUNDED CONTEXT → EXPAND LINKS ON REQUEST → ANSWER
+Model
+  │
+  ▼
+session_start / namespace_map
+  │   Returns compact orientation: paths, Gold summaries,
+  │   chunk counts, link handles. No raw content.
+  │
+  ▼
+search / context_search
+  │   Lexical (FTS5) or semantic (cosine similarity) search.
+  │   Returns ranked handles — path + score + snippet.
+  │
+  ▼
+read_context / context_search
+  │   Opens a locked context capsule for the target path:
+  │   - Full content at the node (Gold → Silver → Bronze priority)
+  │   - Ancestor Gold summaries
+  │   - Link handles (not expanded)
+  │   Budget enforced: items_per_context cap.
+  │
+  ▼
+context_expand (optional)
+      Follows a link handle to open its target's locked context.
+      Same budget rules apply.
 ```
 
-- `BrainSearch` / `EmbeddingSearch` produce ranked `SearchResult`s.
-- `rank_paths_from_results()` aggregates per-path scores into a composite
-  ranking (max score + average of top hits + a small hit-count bonus).
-- `ContextSession` selects top-ranked paths and opens `LockedContext` capsules
-  via `ContextLock`, bounded by a `ContextBudget`.
-- Horizontal links are exposed as handles by default and expanded only when
-  requested.
+**Why handles, not content?** Link handles let the model decide whether to expand. Automatic expansion would flood the context with potentially irrelevant cross-domain content.
 
-## Storage backend contract
+---
 
-Both backends implement the `StorageProvider` protocol
-(`storage/protocol.py`): node/chunk/link CRUD, ancestor and peer lookups, and
-`tree_text()`. `search()`, `gold_summary_path()`, and `transaction()` are
-backend-specific and not part of the protocol. `log_audit()` is optional and
-discovered via `hasattr`.
+## Write Path
 
-- **SQLiteStore** (default): transactional, FTS5 search index, automatic
-  column migration for chunk versioning fields, `operation_audit` table.
-- **JsonStore** (dev/debug): plain JSON files plus an append-only
-  `operation_audit.jsonl`.
+```
+Model emits StorageOperation or StorageOperationBatch JSON
+  │
+  ▼
+JSON Schema validation (json_schema.py)
+  │   Rejects malformed operations before any I/O.
+  │
+  ▼
+StorageOperationExecutor.apply_batch()
+  │   - Opens transaction (SQLite: WAL savepoint)
+  │   - OCC check inside transaction: branch_path + start_version
+  │   - Applies each operation in order
+  │   - Marks ancestors dirty + increments version
+  │   - Commits atomically
+  │
+  ▼
+Storage (SQLiteStore or JsonStore)
+  │
+  ▼
+Audit log (operation_audit table / operation_audit.jsonl)
+```
 
-### SQLite concurrency model
+### Optimistic Concurrency Control
 
-SQLiteStore opens its connection with `PRAGMA journal_mode=WAL` and
-`PRAGMA busy_timeout=5000`.  WAL mode allows one writer and multiple
-concurrent readers without blocking each other.  Multiple `SQLiteStore`
-instances pointing at the same database file are safe: each holds its own
-connection, and the 5-second busy-timeout means a brief write contention
-retries automatically rather than raising immediately.
+`StorageOperationBatch` carries optional `branch_path` and `start_version`. If set, the executor checks `node.version == start_version` inside the transaction before any mutations. A stale version raises `OptimisticLockException`.
 
-**Do not share a single `SQLiteStore` instance across threads.**  The
-connection is not thread-safe by default.  The right pattern for
-multi-threaded code is one `SQLiteStore` per thread (or per request),
-each opening its own connection to the same file.
+The optimizer always stamps `branch_path`/`start_version` from the snapshot it read, so concurrent writes are detected and rejected cleanly.
 
-For agent and MCP usage, prefer one `SQLiteStore` instance per
-process/worker.  The MCP stdio server is single-process, so a single
-instance is the right default.
+---
 
-## Known limitations / MVP status
+## Component Map
 
-- Routing uses a mock LLM unless a real provider or `--llm-response-file` is
-  supplied; low-confidence routes ask for clarification rather than guessing.
-- The optimizer is deterministic and intentionally simple: exact-duplicate
-  stale marking plus namespace-bounded Silver compaction.
-- Embedding search uses a mock provider by default; semantic quality depends
-  on supplying a real embeddings endpoint.
-- Gold structured content is supported on read; the executor still writes
-  plain-text Gold.
-- No UI — CLI and MCP stdio server only.
+```
+vertical_brain/
+├── core/
+│   ├── models.py             — Data classes: Chunk, Node, Link, StorageOperation, …
+│   ├── operations.py         — StorageOperationExecutor: validate + apply
+│   ├── optimizer.py          — SimpleOptimizer: dedup + compaction + decay
+│   ├── gold.py               — GoldAspect, parse/serialize, LlmGoldBuilder
+│   ├── search.py             — BrainSearch: lexical FTS + path ranking
+│   ├── embedding_search.py   — EmbeddingSearch: cosine similarity + vector cache
+│   ├── embedding_router.py   — EmbeddingRouter: namespace routing by embedding
+│   ├── context_lock.py       — ContextLock: builds locked context capsules
+│   ├── context_session.py    — ContextSession: map + search + lock orchestration
+│   ├── namespace_map.py      — NamespaceMapBuilder: model-facing orientation map
+│   ├── router.py             — LLMRouter: validate route decisions from models
+│   ├── doctor.py             — Doctor: storage integrity checks
+│   └── json_schema.py        — Stdlib JSON Schema validator (no external deps)
+│
+├── storage/
+│   ├── protocol.py           — StorageProvider Protocol (runtime-checkable)
+│   ├── sqlite_store.py       — SQLiteStore: WAL, FTS5, transactions, vector cache
+│   ├── json_store.py         — JsonStore: human-readable files, dev/debug
+│   └── thread_local_store.py — ThreadLocalSQLiteStoreProxy: per-thread instances
+│
+├── llm/
+│   ├── embedding.py          — EmbeddingProvider Protocol, Mock, HttpEmbeddingProvider
+│   └── mock_llm.py           — MockLLM: canned responses for testing
+│
+├── mcp/
+│   └── server.py             — MCP stdio server (JSON-RPC 2.0, LSP framing)
+│
+└── cli/
+    └── main.py               — `vb` CLI entry point
+```
+
+---
+
+## Storage Protocol
+
+`StorageProvider` is a `runtime_checkable` Protocol in `storage/protocol.py`. Both `SQLiteStore` and `JsonStore` implement it. You can add a new backend by implementing the protocol — no base class needed.
+
+Core methods:
+
+```python
+# Nodes
+get_node(path: str) -> Node | None
+save_node(node: Node) -> Node
+list_nodes() -> list[Node]
+
+# Chunks
+save_chunk(chunk: Chunk) -> Chunk
+update_chunk(chunk: Chunk) -> None
+get_chunks_by_path(path: str, include_children: bool) -> list[Chunk]
+list_chunks() -> list[Chunk]
+
+# Links
+save_link(link: Link) -> Link
+list_links() -> list[Link]
+
+# Namespace ops
+rename_namespace(old_prefix: str, new_prefix: str) -> None
+
+# Transactions (SQLite only)
+transaction() -> ContextManager
+```
+
+Optional extension protocols:
+- `VectorCacheStorageProvider` — `get_vector`, `set_vector`, `delete_vectors_for_model`
+- `EmbeddingSchemaStorageProvider` — `get_embedding_schema`, `set_embedding_schema`
+
+`EmbeddingSearch` and `EmbeddingRouter` detect these extensions at runtime via `getattr` and degrade gracefully when absent.
+
+---
+
+## Concurrency Model
+
+### SQLite
+
+- WAL mode: N concurrent readers + 1 writer, no reader/writer blocking
+- One `SQLiteStore` per thread — creating multiple instances on the same file is safe for reads, but concurrent writes from multiple instances will contend on the WAL lock
+- Use `ThreadLocalSQLiteStoreProxy` in multi-threaded applications; it lazily creates one `SQLiteStore` per thread
+
+### JSON
+
+- Not thread-safe. For development only.
+
+---
+
+## Embedding Vector Cache
+
+Vectors are stored keyed by `(content_hash, model_name)`:
+- SQLite: `vector_cache` table (content_hash, model_name, vector_json, created_at)
+- JSON: `vector_cache.json` flat dict
+
+On `EmbeddingSearch` init, the stored model name is compared against the provider's `model_name`. Mismatches raise `IncompatibleEmbeddingModelError`. Switching providers via `trigger_reindexing(new_provider)` purges old vectors, updates the schema, and re-embeds all active chunks.
+
+---
+
+## Key Invariants
+
+These invariants are preserved by the executor and tested explicitly:
+
+1. **A chunk's `valid_to` is set** when its status transitions to `stale`, `superseded`, `legacy`, or `contradicted`.
+2. **`node.version` increments** on every mutation at that node or any descendant.
+3. **`node.is_dirty` is set** whenever a chunk is added or modified at that node.
+4. **Compacted Silver chunks carry `lineage`** listing all source chunk IDs.
+5. **Gold aspects are upserted by text** — exact-text duplicates refresh `updated_at`, never duplicate.
+6. **OCC check is inside the transaction** — a version mismatch rolls back the entire batch.
+7. **`rename_namespace` is atomic** — wrapped in `with self.transaction()` in SQLite.
+
+---
+
+## Known Limitations
+
+- **No cross-store queries.** Each store is independent; federation is not implemented.
+- **No real LLM routing.** `LLMRouter` expects JSON responses; plug in a real LLM via the response file mechanism or by subclassing.
+- **Gold compaction is manual.** `append_gold_aspect` is called explicitly; there is no background Gold promoter.
+- **FTS5 requires SQLite with FTS5 compiled in.** Falls back to prefix search if unavailable.
+- **Python 3.11+.** Uses `Self` and structural pattern matching in places.
