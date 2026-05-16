@@ -8,6 +8,7 @@ from vertical_brain.core.context_lock import ContextLock
 from vertical_brain.core.context_session import ContextSession
 from vertical_brain.core.embedding_router import EmbeddingRouter
 from vertical_brain.core.embedding_search import EmbeddingSearch
+from vertical_brain.mcp.server import run_stdio
 from vertical_brain.core.json_schema import format_json_schema_errors, validate_json_schema
 from vertical_brain.core.models import ContextPolicy, OperationBatchResult
 from vertical_brain.core.optimizer import SimpleOptimizer
@@ -108,6 +109,11 @@ def build_parser() -> argparse.ArgumentParser:
     context_expand.add_argument("--json", action="store_true", help="Print strict JSON result")
 
     sub.add_parser("tree")
+
+    mcp = sub.add_parser("mcp", help="Run MCP stdio server (for Claude Desktop / agent integration)")
+    mcp.add_argument("--embedding-url", default=None, help="OpenAI-compatible embeddings endpoint URL")
+    mcp.add_argument("--embedding-model", default="nomic-embed-text", help="Embedding model name")
+    mcp.add_argument("--embedding-api-key", default="", help="API key for the embedding endpoint")
 
     session_start = sub.add_parser("session-start")
     session_start.add_argument("--path", default=None, help="Limit to a namespace branch")
@@ -227,6 +233,18 @@ def main() -> None:
         print("")
         print("Answer:")
         print(MockLLM().answer_from_context(args.question, locked_context.as_prompt_lines()))
+
+    elif args.command == "mcp":
+        provider = (
+            HttpEmbeddingProvider(
+                url=args.embedding_url,
+                model=args.embedding_model,
+                api_key=args.embedding_api_key,
+            )
+            if args.embedding_url
+            else MockEmbeddingProvider()
+        )
+        run_stdio(store, provider)
 
     elif args.command == "session-start":
         print(ContextSession(store).session_prompt(
