@@ -7,6 +7,8 @@ from vertical_brain.core.context_lock import ContextLock
 from vertical_brain.core.models import (
     ContextBudget,
     ContextPolicy,
+    LinkExpansionResult,
+    LockedContext,
     NamespaceMap,
     SearchCandidateHandle,
     SearchContextResult,
@@ -133,6 +135,39 @@ class ContextSession:
             omitted_candidates=max(0, len(candidate_paths) - len(selected_paths)),
         )
 
+
+    def expand_link(
+        self,
+        link_id: str,
+        *,
+        from_path: str | None = None,
+        items_per_context: int = 6,
+        include_ancestors: bool = True,
+        link_expansion: str = "handles_only",
+    ) -> LinkExpansionResult:
+        """Open the far endpoint of a link as a locked context.
+
+        Delegates directional enforcement to ContextLock.expand_link:
+        symmetric link types (peer, related_to) work without from_path;
+        directional types require from_path or raise ValueError.
+        """
+        expanded_path = self.lock.expand_link(link_id, from_path=from_path)
+        locked_context = self.lock.open_locked_context(
+            expanded_path,
+            policy=ContextPolicy(
+                include_ancestors=include_ancestors,
+                include_target=True,
+                link_expansion=link_expansion,
+            ),
+            budget=ContextBudget(max_items=max(0, items_per_context)),
+        )
+        source_path = from_path if from_path is not None else expanded_path
+        return LinkExpansionResult(
+            link_id=link_id,
+            source_path=source_path,
+            expanded_path=expanded_path,
+            locked_context=locked_context,
+        )
 
     def search_locked_context_semantic(
         self,
