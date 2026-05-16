@@ -84,7 +84,7 @@ def test_context_session_exposes_horizontal_links_as_handles_by_default(tmp_path
 @pytest.mark.parametrize("store_class", [JsonStore, SQLiteStore])
 def test_context_session_expands_link_handle_explicitly(tmp_path, store_class):
     store = store_class(tmp_path)
-    store.update_node_gold_summary("WORK/DataArt", "DataArt ancestor summary")
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="DataArt ancestor summary", layer="gold"))
     store.save_chunk(
         Chunk(
             node_path="WORK/DataArt/Databricks/StructuredStreaming",

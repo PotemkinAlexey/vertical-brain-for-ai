@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from vertical_brain.core.models import Chunk, Link, Node, SearchResult, utc_now
 from vertical_brain.core.search import lexical_search
+
+if TYPE_CHECKING:
+    from vertical_brain.core.models import OperationResult, StorageOperation
 
 
 class JsonStore:
@@ -19,6 +23,7 @@ class JsonStore:
         self.namespace_roots_file = self.root / "namespaces" / "root.json"
         self.gold_dir = self.root / "gold"
         self.gold_dir.mkdir(parents=True, exist_ok=True)
+        self.audit_file = self.root / "operation_audit.jsonl"
 
         for file in [self.nodes_file, self.chunks_file, self.links_file]:
             if not file.exists():
@@ -123,7 +128,21 @@ class JsonStore:
         return {k: v for k, v in row.items() if k in {"id", "path", "name", "parent_path", "node_type", "created_at", "updated_at"}}
 
     def list_chunks(self) -> list[Chunk]:
-        return [Chunk(**row) for row in self._read(self.chunks_file)]
+        return [self._chunk_from_row(row) for row in self._read(self.chunks_file)]
+
+    def _chunk_from_row(self, row: dict[str, Any]) -> Chunk:
+        known = {
+            "node_path", "content", "layer", "content_type", "status", "source",
+            "confidence", "lineage", "id", "created_at", "updated_at",
+            "chunk_key", "content_hash", "supersedes", "valid_from", "valid_to",
+        }
+        data = {k: v for k, v in row.items() if k in known}
+        data.setdefault("chunk_key", None)
+        data.setdefault("content_hash", "")
+        data.setdefault("supersedes", [])
+        data.setdefault("valid_from", row.get("created_at") or "")
+        data.setdefault("valid_to", None)
+        return Chunk(**data)
 
     def list_links(self) -> list[Link]:
         return [Link(**row) for row in self._read(self.links_file)]
@@ -177,6 +196,30 @@ class JsonStore:
         for i in range(1, len(parts)):
             ancestors.append("/".join(parts[:i]))
         return ancestors
+
+    def log_audit(self, operation: "StorageOperation", result: "OperationResult") -> None:
+        record = {
+            "id": str(uuid4()),
+            "operation_type": operation.operation,
+            "target_path": operation.target_path,
+            "payload_json": operation.to_json(),
+            "result_json": result.to_json(),
+            "status": result.status,
+            "reasoning_summary": operation.reasoning_summary,
+            "created_at": utc_now(),
+        }
+        with self.audit_file.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    def list_audit(self) -> list[dict[str, Any]]:
+        if not self.audit_file.exists():
+            return []
+        records: list[dict[str, Any]] = []
+        for line in self.audit_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+        return records
 
     def tree_text(self) -> str:
         paths = sorted(n.path for n in self.list_nodes())

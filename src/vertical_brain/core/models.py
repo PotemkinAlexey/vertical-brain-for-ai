@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -67,6 +68,16 @@ class Chunk:
     id: str = field(default_factory=lambda: str(uuid4()))
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
+    chunk_key: str | None = None
+    content_hash: str = field(default="")
+    supersedes: list[str] = field(default_factory=list)
+    valid_from: str = field(default_factory=utc_now)
+    valid_to: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.content_hash:
+            normalized = " ".join(self.content.strip().split())
+            self.content_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 @dataclass

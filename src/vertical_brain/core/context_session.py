@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import TYPE_CHECKING
 
 from vertical_brain.core.context_lock import ContextLock
 from vertical_brain.core.models import (
@@ -14,8 +15,11 @@ from vertical_brain.core.models import (
     SearchResult,
 )
 from vertical_brain.core.namespace_map import NamespaceMapBuilder
-from vertical_brain.core.search import BrainSearch
+from vertical_brain.core.search import BrainSearch, rank_paths_from_results
 from vertical_brain.llm.embedding import EmbeddingProvider
+
+if TYPE_CHECKING:
+    from vertical_brain.storage.protocol import StorageProvider
 
 
 class ContextSession:
@@ -25,7 +29,7 @@ class ContextSession:
     content still comes from locked vertical context capsules.
     """
 
-    def __init__(self, store):
+    def __init__(self, store: "StorageProvider"):
         self.store = store
         self.search = BrainSearch(store)
         self.lock = ContextLock(store)
@@ -111,7 +115,7 @@ class ContextSession:
             include_stale=False,
         )
         handles = [_handle_from_result(result) for result in results]
-        candidate_paths = _unique_paths(results)
+        candidate_paths = [rank.path for rank in rank_paths_from_results(results)]
         selected_paths = candidate_paths[: max(0, context_limit)]
         policy = ContextPolicy(
             include_ancestors=include_ancestors,
@@ -185,7 +189,7 @@ class ContextSession:
             threshold=threshold,
         )
         handles = [_handle_from_result(result) for result in results]
-        candidate_paths = _unique_paths(results)
+        candidate_paths = [rank.path for rank in rank_paths_from_results(results)]
         selected_paths = candidate_paths[: max(0, context_limit)]
         policy = ContextPolicy(
             include_ancestors=include_ancestors,
@@ -217,22 +221,16 @@ def _handle_from_result(result: SearchResult) -> SearchCandidateHandle:
     )
 
 
-def _unique_paths(results: list[SearchResult]) -> list[str]:
-    paths: list[str] = []
-    for result in results:
-        if result.path not in paths:
-            paths.append(result.path)
-    return paths
 
 
-def _get_link(store, link_id: str) -> Link | None:
+def _get_link(store: object, link_id: str) -> "Link | None":
     get_link = getattr(store, "get_link", None)
     if callable(get_link):
         return get_link(link_id)
-    return next((link for link in store.list_links() if link.id == link_id), None)
+    return next((link for link in store.list_links() if link.id == link_id), None)  # type: ignore[union-attr]
 
 
-def _expanded_path(link: Link, from_path: str | None) -> str:
+def _expanded_path(link: "Link", from_path: "str | None") -> str:
     if from_path is None:
         return link.target_path
     if from_path == link.source_path:

@@ -184,6 +184,13 @@
       }
     }
   },
+  "context_policy": {
+    "default_search_limit": 10,
+    "default_context_limit": 3,
+    "default_items_per_context": 6,
+    "default_max_context_items": 12,
+    "default_link_expansion": "handles_only"
+  },
   "storage_files": {
     "nodes": "nodes.json",
     "chunks": "chunks.json",

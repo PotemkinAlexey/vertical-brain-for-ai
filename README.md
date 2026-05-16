@@ -68,10 +68,56 @@ Use an isolated storage directory when experimenting:
 vb --data-dir .vb-dev-data ingest "dbt staging models are ephemeral in this project."
 ```
 
-Use SQLite when you need transactional local storage:
+## Storage backends
+
+SQLite is the **default** backend. It provides transactional operation
+batches, an FTS search index, and an append-only operation audit log:
 
 ```bash
-vb --storage-backend sqlite ingest "Models should write through validated operation batches."
+vb ingest "Models should write through validated operation batches."
+```
+
+JSON storage is available for development and debugging — it keeps every
+record in human-readable `nodes.json` / `chunks.json` / `links.json` files
+plus an `operation_audit.jsonl` audit log:
+
+```bash
+vb --storage-backend json ingest "Inspect raw records on disk while debugging."
+```
+
+## Quick start
+
+```bash
+# 1. Orient: print all namespaces, Gold summaries, counts, and link handles
+vb session-start
+
+# 2. Retrieve: search returns candidate handles, then bounded locked contexts
+vb search "mergeSchema"
+vb context search "schema evolution"
+
+# 3. Check integrity: run the doctor for orphan links, duplicates, bad fields
+vb doctor
+vb doctor --json
+
+# 4. Compact: preview a compaction plan before applying it
+vb optimize WORK/DataArt/Databricks --plan
+vb optimize WORK/DataArt/Databricks
+```
+
+## MCP integration
+
+Vertical Brain ships an MCP stdio server (`vb mcp`). Add it to Claude
+Desktop's `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "vertical-brain": {
+      "command": "vb",
+      "args": ["--data-dir", "/absolute/path/to/brain-data", "mcp"]
+    }
+  }
+}
 ```
 
 Use a custom storage model when changing the format contract:

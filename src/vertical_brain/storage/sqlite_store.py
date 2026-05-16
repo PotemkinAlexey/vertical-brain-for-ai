@@ -5,9 +5,13 @@ import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
+from uuid import uuid4
 
 from vertical_brain.core.models import Chunk, Link, Node, SearchResult, utc_now
+
+if TYPE_CHECKING:
+    from vertical_brain.core.models import OperationResult, StorageOperation
 from vertical_brain.core.search import fts_query, lexical_search, make_snippet, tokenize_query
 
 
@@ -54,7 +58,12 @@ class SQLiteStore:
                 confidence REAL NOT NULL,
                 lineage_json TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                chunk_key TEXT,
+                content_hash TEXT NOT NULL DEFAULT '',
+                supersedes TEXT NOT NULL DEFAULT '[]',
+                valid_from TEXT NOT NULL DEFAULT '',
+                valid_to TEXT
             );
 
             CREATE TABLE IF NOT EXISTS links (
@@ -71,9 +80,41 @@ class SQLiteStore:
             CREATE INDEX IF NOT EXISTS idx_chunks_status ON chunks(status);
             CREATE INDEX IF NOT EXISTS idx_links_source ON links(source_path);
             CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_path);
+
+            CREATE TABLE IF NOT EXISTS operation_audit (
+                id TEXT PRIMARY KEY,
+                operation_type TEXT NOT NULL,
+                target_path TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                reasoning_summary TEXT,
+                created_at TEXT NOT NULL
+            );
             """
         )
         self.conn.commit()
+        self._migrate_chunk_columns()
+
+    def _migrate_chunk_columns(self) -> None:
+        existing = {row["name"] for row in self.conn.execute("PRAGMA table_info(chunks)").fetchall()}
+        migrations = {
+            "chunk_key": "ALTER TABLE chunks ADD COLUMN chunk_key TEXT",
+            "content_hash": "ALTER TABLE chunks ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
+            "supersedes": "ALTER TABLE chunks ADD COLUMN supersedes TEXT NOT NULL DEFAULT '[]'",
+            "valid_from": "ALTER TABLE chunks ADD COLUMN valid_from TEXT NOT NULL DEFAULT ''",
+            "valid_to": "ALTER TABLE chunks ADD COLUMN valid_to TEXT",
+        }
+        changed = False
+        for column, ddl in migrations.items():
+            if column not in existing:
+                try:
+                    self.conn.execute(ddl)
+                    changed = True
+                except sqlite3.OperationalError:
+                    pass
+        if changed:
+            self.conn.commit()
 
     def _init_search_index(self) -> bool:
         try:
@@ -169,18 +210,18 @@ class SQLiteStore:
 
     def save_chunk(self, chunk: Chunk) -> Chunk:
         self.ensure_node(chunk.node_path)
-        row = asdict(chunk)
-        row["lineage_json"] = json.dumps(chunk.lineage, ensure_ascii=False)
-        del row["lineage"]
+        row = self._chunk_row(chunk)
         self.conn.execute(
             """
             INSERT INTO chunks (
                 id, node_path, content, layer, content_type, status, source,
-                confidence, lineage_json, created_at, updated_at
+                confidence, lineage_json, created_at, updated_at,
+                chunk_key, content_hash, supersedes, valid_from, valid_to
             )
             VALUES (
                 :id, :node_path, :content, :layer, :content_type, :status, :source,
-                :confidence, :lineage_json, :created_at, :updated_at
+                :confidence, :lineage_json, :created_at, :updated_at,
+                :chunk_key, :content_hash, :supersedes, :valid_from, :valid_to
             )
             """,
             row,
@@ -213,9 +254,7 @@ class SQLiteStore:
         return link
 
     def update_chunk(self, chunk: Chunk) -> Chunk:
-        row = asdict(chunk)
-        row["lineage_json"] = json.dumps(chunk.lineage, ensure_ascii=False)
-        del row["lineage"]
+        row = self._chunk_row(chunk)
         cursor = self.conn.execute(
             """
             UPDATE chunks
@@ -228,7 +267,12 @@ class SQLiteStore:
                 confidence = :confidence,
                 lineage_json = :lineage_json,
                 created_at = :created_at,
-                updated_at = :updated_at
+                updated_at = :updated_at,
+                chunk_key = :chunk_key,
+                content_hash = :content_hash,
+                supersedes = :supersedes,
+                valid_from = :valid_from,
+                valid_to = :valid_to
             WHERE id = :id
             """,
             row,
@@ -411,6 +455,34 @@ class SQLiteStore:
         # Gold is now indexed as regular chunks (layer="gold")
         self._commit_if_needed()
 
+    def log_audit(self, operation: "StorageOperation", result: "OperationResult") -> None:
+        self.conn.execute(
+            """
+            INSERT INTO operation_audit (
+                id, operation_type, target_path, payload_json, result_json,
+                status, reasoning_summary, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                operation.operation,
+                operation.target_path,
+                operation.to_json(),
+                result.to_json(),
+                result.status,
+                operation.reasoning_summary,
+                utc_now(),
+            ),
+        )
+        self._commit_if_needed()
+
+    def list_audit(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM operation_audit ORDER BY rowid"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def _get_link_by_relationship(self, source_path: str, target_path: str, link_type: str) -> Link | None:
         row = self.conn.execute(
             """
@@ -424,9 +496,25 @@ class SQLiteStore:
             return None
         return Link(**dict(row))
 
+    def _chunk_row(self, chunk: Chunk) -> dict[str, Any]:
+        row = asdict(chunk)
+        row["lineage_json"] = json.dumps(chunk.lineage, ensure_ascii=False)
+        del row["lineage"]
+        row["supersedes"] = json.dumps(chunk.supersedes, ensure_ascii=False)
+        return row
+
     def _chunk_from_row(self, row: sqlite3.Row) -> Chunk:
         payload: dict[str, Any] = dict(row)
         payload["lineage"] = json.loads(payload.pop("lineage_json"))
+        supersedes = payload.get("supersedes")
+        if isinstance(supersedes, str):
+            payload["supersedes"] = json.loads(supersedes) if supersedes else []
+        elif supersedes is None:
+            payload["supersedes"] = []
+        if not payload.get("valid_from"):
+            payload["valid_from"] = payload.get("created_at") or ""
+        if payload.get("content_hash") is None:
+            payload["content_hash"] = ""
         return Chunk(**payload)
 
     def _index_chunk(self, chunk: Chunk) -> None:

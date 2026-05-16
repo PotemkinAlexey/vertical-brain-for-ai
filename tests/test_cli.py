@@ -51,7 +51,9 @@ def write_llm_response(tmp_path, name, payload):
 
 def run_cli(monkeypatch, capsys, tmp_path, *args):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["vb", *args])
+    # Default to the JSON backend for these tests; an explicit
+    # --storage-backend in *args overrides it (argparse: last wins).
+    monkeypatch.setattr(sys, "argv", ["vb", "--storage-backend", "json", *args])
     main()
     return capsys.readouterr().out
 
