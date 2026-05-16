@@ -333,6 +333,7 @@ class VerticalBrainMCP:
         self._provider = embedding_provider or MockEmbeddingProvider()
         self._session = ContextSession(store)
         self._executor = StorageOperationExecutor(store)
+        self._client_source: str = "model:mcp"  # updated on initialize
 
     # ------------------------------------------------------------------
     # Protocol dispatch
@@ -343,6 +344,10 @@ class VerticalBrainMCP:
         req_id = request.get("id")
 
         if method == "initialize":
+            client_info = request.get("params", {}).get("clientInfo", {})
+            client_name = client_info.get("name", "")
+            if client_name:
+                self._client_source = f"model:{client_name}"
             return self._reply(req_id, {
                 "protocolVersion": _PROTOCOL_VERSION,
                 "capabilities": {
@@ -501,7 +506,7 @@ class VerticalBrainMCP:
                     content=args["content"],
                     layer=args.get("layer", "bronze"),
                     content_type=args.get("content_type", "fact"),
-                    source=args.get("source", "model:mcp"),
+                    source=args.get("source", self._client_source),
                     confidence=args.get("confidence", 1.0),
                 ),
                 reasoning_summary=args.get("reasoning_summary", "Appended via MCP append_chunk."),
@@ -569,7 +574,7 @@ class VerticalBrainMCP:
                             content=item["content"],
                             layer=item.get("layer", "bronze"),
                             content_type=item.get("content_type", "fact"),
-                            source=item.get("source", "model"),
+                            source=item.get("source", self._client_source),
                             confidence=item.get("confidence", 1.0),
                         ),
                     )
@@ -589,7 +594,7 @@ class VerticalBrainMCP:
                     content=args["summary"],
                     layer="silver",
                     content_type="note",
-                    source="model:session_end",
+                    source=self._client_source,
                 ),
                 reasoning_summary="Persisted session summary.",
             )
