@@ -138,17 +138,36 @@ class SimpleOptimizer:
             ):
                 compactions_by_node[op.target_path] += 1
 
+        total_ops = len(batch.operations)
+        if total_ops == 0:
+            no_op_line = "  no optimization changes required"
+        else:
+            no_op_line = None
+
         lines = [f"Optimize report for {path}", ""]
-        for node_path, node_chunks in sorted(self._group_by_node(initial_chunks).items()):
-            active = sum(1 for c in node_chunks if c.status == "active")
-            stale = sum(1 for c in node_chunks if c.status == "stale")
-            superseded = sum(1 for c in node_chunks if c.status == "superseded")
-            lines.append(
-                f"- {node_path}: {len(node_chunks)} chunks, "
-                f"{active} active, {stale} stale, {superseded} superseded, "
-                f"{duplicates_by_node[node_path]} exact duplicates marked stale, "
-                f"{compactions_by_node[node_path]} namespace compactions created"
-            )
+        if no_op_line:
+            lines.append(no_op_line)
+        else:
+            lines.append("  observed before optimization:")
+            for node_path, node_chunks in sorted(self._group_by_node(initial_chunks).items()):
+                active = sum(1 for c in node_chunks if c.status == "active")
+                stale = sum(1 for c in node_chunks if c.status == "stale")
+                superseded = sum(1 for c in node_chunks if c.status == "superseded")
+                lines.append(
+                    f"  - {node_path}: {len(node_chunks)} chunks "
+                    f"({active} active, {stale} stale, {superseded} superseded)"
+                )
+            lines.append("")
+            lines.append("  changes applied:")
+            for node_path, node_chunks in sorted(self._group_by_node(initial_chunks).items()):
+                dups = duplicates_by_node[node_path]
+                comp = compactions_by_node[node_path]
+                if dups or comp:
+                    lines.append(
+                        f"  - {node_path}: "
+                        f"{dups} exact duplicates marked stale, "
+                        f"{comp} namespace compactions created"
+                    )
 
         return "\n".join(lines)
 

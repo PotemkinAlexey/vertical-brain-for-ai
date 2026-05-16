@@ -1,5 +1,8 @@
+from unittest.mock import MagicMock, patch
+
 from vertical_brain.core.models import Chunk
 from vertical_brain.core.optimizer import SimpleOptimizer
+from vertical_brain.storage.sqlite_store import SQLiteStore
 from vertical_brain.storage.json_store import JsonStore
 
 MIN_COMPACTION_PATH_PARTS = 5
@@ -108,4 +111,116 @@ def test_optimizer_does_not_compact_across_namespaces(tmp_path):
     chunks = store.get_chunks_by_path(branch, include_children=True)
     assert len([chunk for chunk in chunks if chunk.source == "optimizer:namespace_compaction"]) == 0
     assert {chunk.status for chunk in chunks} == {"active"}
-    assert "0 namespace compactions created" in report
+    assert "no optimization changes required" in report
+
+
+# ── no-op behavior ────────────────────────────────────────────────────────────
+
+def test_optimizer_no_op_does_not_call_apply_batch(tmp_path):
+    """Empty branch produces no operations — apply_batch must not be called."""
+    store = JsonStore(tmp_path)
+    # Single chunk at each node: nothing to deduplicate or compact.
+    store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks/Misc/A", content="fact A"))
+
+    with patch(
+        "vertical_brain.core.optimizer.StorageOperationExecutor"
+    ) as mock_executor_cls:
+        build_optimizer(store).optimize_branch("WORK/DataArt/Databricks/Misc")
+
+    mock_executor_cls.return_value.apply_batch.assert_not_called()
+    mock_executor_cls.return_value.apply.assert_not_called()
+
+
+def test_optimizer_no_op_report_says_no_changes_required(tmp_path):
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks/Misc/A", content="only fact"))
+
+    report = build_optimizer(store).optimize_branch("WORK/DataArt/Databricks/Misc")
+
+    assert "no optimization changes required" in report
+
+
+# ── I/O contract guard tests ──────────────────────────────────────────────────
+
+def test_optimizer_reads_store_exactly_once(tmp_path):
+    """get_chunks_by_path must be called exactly once per optimize_branch call."""
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks/Misc/A", content="fact one"))
+    store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks/Misc/A", content="fact two"))
+
+    original_get = store.get_chunks_by_path
+    call_count = []
+
+    def counting_get(path, **kwargs):
+        call_count.append(path)
+        return original_get(path, **kwargs)
+
+    store.get_chunks_by_path = counting_get  # type: ignore[method-assign]
+    build_optimizer(store).optimize_branch("WORK/DataArt/Databricks/Misc")
+
+    assert len(call_count) == 1
+
+
+def test_optimizer_calls_apply_batch_exactly_once_when_operations_exist(tmp_path):
+    """All planned operations must be applied in a single apply_batch call."""
+    store = JsonStore(tmp_path)
+    path = "WORK/DataArt/Databricks/Misc/A"
+    store.save_chunk(Chunk(node_path=path, content="duplicate fact"))
+    store.save_chunk(Chunk(node_path=path, content="duplicate fact"))
+
+    with patch(
+        "vertical_brain.core.optimizer.StorageOperationExecutor"
+    ) as mock_executor_cls:
+        mock_executor_cls.return_value.apply_batch.return_value = MagicMock(results=[])
+        build_optimizer(store).optimize_branch("WORK/DataArt/Databricks/Misc")
+
+    mock_executor_cls.return_value.apply_batch.assert_called_once()
+    mock_executor_cls.return_value.apply.assert_not_called()
+
+
+def test_optimizer_never_calls_individual_apply(tmp_path):
+    """apply() must never be called — only apply_batch()."""
+    store = JsonStore(tmp_path)
+    path = "WORK/DataArt/Databricks/Misc/A"
+    # Multiple chunks so compaction is also triggered.
+    store.save_chunk(Chunk(node_path=path, content="fact alpha"))
+    store.save_chunk(Chunk(node_path=path, content="fact beta"))
+    store.save_chunk(Chunk(node_path=path, content="fact alpha"))  # duplicate
+
+    with patch(
+        "vertical_brain.core.optimizer.StorageOperationExecutor"
+    ) as mock_executor_cls:
+        mock_executor_cls.return_value.apply_batch.return_value = MagicMock(results=[])
+        build_optimizer(store).optimize_branch("WORK/DataArt/Databricks/Misc")
+
+    mock_executor_cls.return_value.apply.assert_not_called()
+
+
+# ── content_hash dedup ────────────────────────────────────────────────────────
+
+def test_optimizer_deduplicates_by_content_hash_when_present(tmp_path):
+    """Dedup key uses content_hash; chunks with the same hash are treated as duplicates."""
+    store = SQLiteStore(tmp_path)
+    # Save identical content — SQLiteStore populates content_hash automatically.
+    store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="same content"))
+    store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="same content"))
+
+    build_optimizer(store).optimize_branch("WORK/DataArt/Databricks")
+
+    chunks = store.get_chunks_by_path("WORK/DataArt/Databricks")
+    active = [c for c in chunks if c.status == "active"]
+    stale = [c for c in chunks if c.status == "stale"]
+    assert len(active) == 1
+    assert len(stale) == 1
+
+
+def test_optimizer_plan_dedup_key_falls_back_to_content_when_hash_empty(tmp_path):
+    """plan_branch dedup must still work when content_hash is absent (e.g. JsonStore)."""
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="identical content"))
+    store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="identical content"))
+
+    plan = SimpleOptimizer(store, min_compaction_path_parts=3).plan_branch("WORK/DataArt")
+
+    stale_ops = [op for op in plan.operations if op.operation == "mark_stale"]
+    assert len(stale_ops) == 1

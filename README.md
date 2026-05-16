@@ -85,6 +85,20 @@ plus an `operation_audit.jsonl` audit log:
 vb --storage-backend json ingest "Inspect raw records on disk while debugging."
 ```
 
+### SQLite concurrency
+
+The SQLite backend opens every connection with `PRAGMA journal_mode=WAL` and
+`PRAGMA busy_timeout=5000`. This means:
+
+- Multiple `SQLiteStore` instances may safely point at the same database file —
+  WAL mode allows one writer and many concurrent readers without blocking.
+- Do **not** share a single `SQLiteStore` instance across threads. The
+  underlying `sqlite3` connection is not thread-safe by default. Create one
+  instance per thread or per request instead.
+- For agent and MCP usage, one `SQLiteStore` per process/worker is the right
+  default. The MCP stdio server is single-process, so a single instance is
+  sufficient.
+
 ## Quick start
 
 ```bash
