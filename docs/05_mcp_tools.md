@@ -217,7 +217,7 @@ Apply a full `StorageOperationBatch` JSON. The batch is validated against the st
 |-----------|------|-------------|
 | `payload` | object | **required** A `StorageOperationBatch` JSON object |
 
-See [operations_reference.md](operations_reference.md) for the full batch schema.
+See [04_operations_reference.md](04_operations_reference.md) for the full batch schema.
 
 ---
 

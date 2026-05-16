@@ -242,7 +242,7 @@ vb operation apply ops.json      # apply
 vb operation dry-run ops.json    # validate only
 ```
 
-See [docs/operations_reference.md](docs/operations_reference.md) for the full operation schema.
+See [docs/04_operations_reference.md](docs/04_operations_reference.md) for the full operation schema.
 
 ---
 
@@ -271,7 +271,7 @@ The MCP server exposes these tools to Claude:
 | `optimize` | Run optimizer on a subtree |
 | `doctor` | Run storage integrity checks |
 
-See [docs/mcp_tools.md](docs/mcp_tools.md) for full parameter reference.
+See [docs/05_mcp_tools.md](docs/05_mcp_tools.md) for full parameter reference.
 
 ---
 
