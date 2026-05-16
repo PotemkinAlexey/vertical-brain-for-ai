@@ -501,7 +501,7 @@ class VerticalBrainMCP:
                     content=args["content"],
                     layer=args.get("layer", "bronze"),
                     content_type=args.get("content_type", "fact"),
-                    source=args.get("source", "model"),
+                    source=args.get("source", "model:mcp"),
                     confidence=args.get("confidence", 1.0),
                 ),
                 reasoning_summary=args.get("reasoning_summary", "Appended via MCP append_chunk."),
