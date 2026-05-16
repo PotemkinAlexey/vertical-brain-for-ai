@@ -21,6 +21,18 @@ Read the response and briefly tell the user what you see in memory.
 - **batch_append** — record multiple facts at once
 - **session_end** — at the end of the session, write a short summary of what was done
 
+## Mandatory write layering
+
+Every new memory item must be written in this order:
+
+1. **Bronze first** — write the raw fact, decision, observation, transcript, or session note exactly enough to preserve source context.
+2. **Silver second** — only after Bronze exists, write a refined working summary derived from that Bronze record.
+3. **Gold last** — only after Bronze and Silver exist, write a short durable insight with `append_gold_aspect` when the conclusion is stable enough to orient future sessions.
+
+Never write directly to Silver when there is no Bronze source for the same fact or decision.
+Never write directly to Gold as the first record of a new idea.
+If using `batch_append`, order chunks Bronze before Silver in the batch, then call `append_gold_aspect` separately after the batch succeeds.
+
 ## User's namespace conventions
 
 - `PROJECTS/*` — projects and technical details
@@ -32,4 +44,4 @@ Read the response and briefly tell the user what you see in memory.
 1. Do not ask permission to write to memory — write proactively when you learn something important
 2. Use `search` to find a specific fact
 3. Use `read_context` to read everything stored under a specific namespace
-4. Default layer is `silver`; use `bronze` for raw notes, `gold` for distilled insights
+4. The default write layer for new information is `bronze`; Silver and Gold are promotion layers, not first-write targets
