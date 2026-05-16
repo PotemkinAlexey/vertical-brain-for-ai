@@ -224,3 +224,92 @@ def test_optimizer_plan_dedup_key_falls_back_to_content_when_hash_empty(tmp_path
 
     stale_ops = [op for op in plan.operations if op.operation == "mark_stale"]
     assert len(stale_ops) == 1
+
+
+# ── fact decay ────────────────────────────────────────────────────────────────
+
+def test_optimizer_decay_marks_old_unlinked_chunks_stale(tmp_path):
+    """Chunks older than decay_days with effective confidence below threshold become stale."""
+    from datetime import datetime, timedelta, timezone
+    store = JsonStore(tmp_path)
+    path = "WORK/DataArt/Databricks/Misc/A"
+    old_time = (datetime.now(timezone.utc) - timedelta(days=91)).isoformat()
+    chunk = Chunk(node_path=path, content="old unlinked fact")
+    chunk.created_at = old_time
+    store.save_chunk(chunk)
+
+    optimizer = SimpleOptimizer(
+        store,
+        min_compaction_path_parts=MIN_COMPACTION_PATH_PARTS,
+        decay_rate=0.5,
+        decay_days=30,
+        stale_threshold=0.2,
+    )
+    optimizer.optimize_branch("WORK/DataArt/Databricks/Misc")
+
+    chunks = store.get_chunks_by_path(path)
+    assert all(c.status == "stale" for c in chunks)
+
+
+def test_optimizer_decay_does_not_affect_gold_chunks(tmp_path):
+    """Gold chunks must never be decayed regardless of age."""
+    from datetime import datetime, timedelta, timezone
+    store = JsonStore(tmp_path)
+    path = "WORK/DataArt/Databricks/Misc/A"
+    old_time = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+    chunk = Chunk(node_path=path, content="old gold summary", layer="gold")
+    chunk.created_at = old_time
+    store.save_chunk(chunk)
+
+    optimizer = SimpleOptimizer(
+        store,
+        min_compaction_path_parts=MIN_COMPACTION_PATH_PARTS,
+        decay_rate=0.1,
+        decay_days=30,
+        stale_threshold=0.5,
+    )
+    optimizer.optimize_branch("WORK/DataArt/Databricks/Misc")
+
+    chunks = store.get_chunks_by_path(path)
+    assert all(c.status == "active" for c in chunks)
+
+
+def test_optimizer_decay_skips_linked_namespaces(tmp_path):
+    """Chunks whose namespace has any link must not be decayed."""
+    from datetime import datetime, timedelta, timezone
+    from vertical_brain.core.models import Link
+    store = JsonStore(tmp_path)
+    path = "WORK/DataArt/Databricks/Misc/A"
+    old_time = (datetime.now(timezone.utc) - timedelta(days=91)).isoformat()
+    chunk = Chunk(node_path=path, content="linked but old fact")
+    chunk.created_at = old_time
+    store.save_chunk(chunk)
+    store.save_link(Link(source_path=path, target_path="WORK/Other", link_type="peer", reason="related"))
+
+    optimizer = SimpleOptimizer(
+        store,
+        min_compaction_path_parts=MIN_COMPACTION_PATH_PARTS,
+        decay_rate=0.5,
+        decay_days=30,
+        stale_threshold=0.2,
+    )
+    optimizer.optimize_branch("WORK/DataArt/Databricks/Misc")
+
+    chunks = store.get_chunks_by_path(path)
+    assert all(c.status == "active" for c in chunks)
+
+
+def test_optimizer_decay_default_rate_1_never_decays(tmp_path):
+    """With default decay_rate=1.0 no chunks are ever decayed."""
+    from datetime import datetime, timedelta, timezone
+    store = JsonStore(tmp_path)
+    path = "WORK/DataArt/Databricks/Misc/A"
+    old_time = (datetime.now(timezone.utc) - timedelta(days=3650)).isoformat()
+    chunk = Chunk(node_path=path, content="ancient fact", confidence=0.01)
+    chunk.created_at = old_time
+    store.save_chunk(chunk)
+
+    build_optimizer(store).optimize_branch("WORK/DataArt/Databricks/Misc")
+
+    chunks = store.get_chunks_by_path(path)
+    assert all(c.status == "active" for c in chunks)

@@ -222,3 +222,58 @@ def test_append_gold_aspect_creates_overflow_sibling_when_full(tmp_path):
     overflow_gold = [c for c in store.get_chunks_by_path(overflow_path) if c.layer == "gold" and c.status == "active"]
     assert len(overflow_gold) == 1
     assert overflow_gold[0].content == "overflow"
+
+
+# ── Gold dirty flag ───────────────────────────────────────────────────────────
+
+def test_append_chunk_marks_ancestor_nodes_dirty(tmp_path):
+    """append_chunk must set is_dirty=True on the target node and all ancestors."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    executor.apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/DataArt/Databricks",
+        chunk=ChunkInput(content="new fact about Databricks"),
+        reasoning_summary="Dirty flag test.",
+    ))
+
+    nodes = {n.path: n for n in store.list_nodes()}
+    assert nodes["WORK"].is_dirty is True
+    assert nodes["WORK/DataArt"].is_dirty is True
+    assert nodes["WORK/DataArt/Databricks"].is_dirty is True
+
+
+def test_mark_stale_marks_ancestor_nodes_dirty(tmp_path):
+    """mark_stale must propagate is_dirty up the hierarchy."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    chunk = store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="fact to stale"))
+    # Manually clear dirty flags that were set by save_chunk path creation.
+    for node in store.list_nodes():
+        node.is_dirty = False
+        store.update_node(node)
+
+    executor.apply(StorageOperation(
+        operation="mark_stale",
+        target_path="WORK/DataArt/Databricks",
+        chunk_ids=[chunk.id],
+        reasoning_summary="Stale dirty flag test.",
+    ))
+
+    nodes = {n.path: n for n in store.list_nodes()}
+    assert nodes["WORK/DataArt/Databricks"].is_dirty is True
+    assert nodes["WORK/DataArt"].is_dirty is True
+
+
+def test_dirty_flag_only_set_for_mutations_not_reads(tmp_path):
+    """Simply reading chunks must not change is_dirty on any node."""
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="read-only fact"))
+    for node in store.list_nodes():
+        node.is_dirty = False
+        store.update_node(node)
+
+    _ = store.get_chunks_by_path("WORK/DataArt/Databricks")
+
+    nodes = {n.path: n for n in store.list_nodes()}
+    assert all(not n.is_dirty for n in nodes.values())

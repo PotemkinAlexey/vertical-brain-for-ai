@@ -51,6 +51,7 @@ class Node:
     id: str = field(default_factory=lambda: str(uuid4()))
     parent_path: str | None = None
     node_type: str = "default"
+    is_dirty: bool = False
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
 
@@ -73,6 +74,7 @@ class Chunk:
     supersedes: list[str] = field(default_factory=list)
     valid_from: str = field(default_factory=utc_now)
     valid_to: str | None = None
+    decay_factor: float = 1.0
 
     def __post_init__(self) -> None:
         if not self.content_hash:

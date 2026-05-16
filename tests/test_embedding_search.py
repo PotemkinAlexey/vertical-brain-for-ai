@@ -112,3 +112,35 @@ def test_semantic_search_truncates_long_snippet(tmp_path):
 
     assert len(results[0].snippet) <= 163  # 160 + "..."
     assert results[0].snippet.endswith("...")
+
+
+# ── vector sovereignty ────────────────────────────────────────────────────────
+
+def test_embedding_search_root_path_excludes_other_verticals(tmp_path):
+    """A vector query scoped to one vertical must not return chunks from another."""
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="Delta Lake streaming ingestion"))
+    store.save_chunk(Chunk(node_path="TRADING/Bots", content="Delta Lake strategy execution"))
+
+    results = EmbeddingSearch(store, MockEmbeddingProvider()).search(
+        "Delta Lake streaming",
+        root_path="WORK/DataArt",
+    )
+
+    paths = [r.path for r in results]
+    assert "WORK/DataArt/Databricks" in paths
+    assert "TRADING/Bots" not in paths
+
+
+def test_embedding_search_without_root_path_spans_all_verticals(tmp_path):
+    """Without a root_path restriction, search returns results from any namespace."""
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="Delta Lake streaming ingestion"))
+    store.save_chunk(Chunk(node_path="TRADING/Bots", content="Delta Lake strategy execution"))
+
+    results = EmbeddingSearch(store, MockEmbeddingProvider()).search("Delta Lake")
+
+    paths = [r.path for r in results]
+    assert "WORK/DataArt/Databricks" in paths
+    assert "TRADING/Bots" in paths
+

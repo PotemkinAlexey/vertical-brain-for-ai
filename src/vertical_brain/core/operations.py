@@ -126,6 +126,7 @@ class StorageOperationExecutor:
                 self.store.save_link(self._link_from_input(operation.target_path, link_input))
                 for link_input in operation.links
             ]
+            self._mark_ancestors_dirty(operation.target_path)
             return OperationResult(
                 operation=operation.operation,
                 target_path=operation.target_path,
@@ -147,10 +148,12 @@ class StorageOperationExecutor:
 
         if operation.operation == "mark_stale":
             self._update_chunk_status(operation, "stale")
+            self._mark_ancestors_dirty(operation.target_path)
             return OperationResult(operation=operation.operation, target_path=operation.target_path)
 
         if operation.operation == "supersede_chunk":
             self._update_chunk_status(operation, "superseded")
+            self._mark_ancestors_dirty(operation.target_path)
             return OperationResult(operation=operation.operation, target_path=operation.target_path)
 
         if operation.operation == "append_gold_aspect":
@@ -233,6 +236,18 @@ class StorageOperationExecutor:
             link_type=link_input.link_type,
             reason=link_input.reason,
         )
+
+    def _mark_ancestors_dirty(self, path: str) -> None:
+        update_node = getattr(self.store, "update_node", None)
+        if not callable(update_node):
+            return
+        parts = path.split("/")
+        for depth in range(1, len(parts) + 1):
+            ancestor = "/".join(parts[:depth])
+            node = self.store.get_node(ancestor)
+            if node is not None and not node.is_dirty:
+                node.is_dirty = True
+                update_node(node)
 
     def _update_chunk_status(self, operation: StorageOperation, status: str) -> None:
         if not operation.chunk_ids:

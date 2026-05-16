@@ -46,6 +46,7 @@ class SQLiteStore:
                 parent_path TEXT,
                 node_type TEXT NOT NULL,
                 gold_summary TEXT NOT NULL,
+                is_dirty INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -66,7 +67,8 @@ class SQLiteStore:
                 content_hash TEXT NOT NULL DEFAULT '',
                 supersedes TEXT NOT NULL DEFAULT '[]',
                 valid_from TEXT NOT NULL DEFAULT '',
-                valid_to TEXT
+                valid_to TEXT,
+                decay_factor REAL NOT NULL DEFAULT 1.0
             );
 
             CREATE TABLE IF NOT EXISTS links (
@@ -97,7 +99,24 @@ class SQLiteStore:
             """
         )
         self.conn.commit()
+        self._migrate_node_columns()
         self._migrate_chunk_columns()
+
+    def _migrate_node_columns(self) -> None:
+        existing = {row["name"] for row in self.conn.execute("PRAGMA table_info(nodes)").fetchall()}
+        migrations = {
+            "is_dirty": "ALTER TABLE nodes ADD COLUMN is_dirty INTEGER NOT NULL DEFAULT 0",
+        }
+        changed = False
+        for column, ddl in migrations.items():
+            if column not in existing:
+                try:
+                    self.conn.execute(ddl)
+                    changed = True
+                except sqlite3.OperationalError:
+                    pass
+        if changed:
+            self.conn.commit()
 
     def _migrate_chunk_columns(self) -> None:
         existing = {row["name"] for row in self.conn.execute("PRAGMA table_info(chunks)").fetchall()}
@@ -107,6 +126,7 @@ class SQLiteStore:
             "supersedes": "ALTER TABLE chunks ADD COLUMN supersedes TEXT NOT NULL DEFAULT '[]'",
             "valid_from": "ALTER TABLE chunks ADD COLUMN valid_from TEXT NOT NULL DEFAULT ''",
             "valid_to": "ALTER TABLE chunks ADD COLUMN valid_to TEXT",
+            "decay_factor": "ALTER TABLE chunks ADD COLUMN decay_factor REAL NOT NULL DEFAULT 1.0",
         }
         changed = False
         for column, ddl in migrations.items():
@@ -191,13 +211,14 @@ class SQLiteStore:
             node = Node(path=node_path, name=parts[index - 1], parent_path=parent_path)
             row = asdict(node)
             row["gold_summary"] = ""
+            row["is_dirty"] = 0
             self.conn.execute(
                 """
                 INSERT INTO nodes (
-                    id, path, name, parent_path, node_type, gold_summary, created_at, updated_at
+                    id, path, name, parent_path, node_type, gold_summary, is_dirty, created_at, updated_at
                 )
                 VALUES (
-                    :id, :path, :name, :parent_path, :node_type, :gold_summary, :created_at, :updated_at
+                    :id, :path, :name, :parent_path, :node_type, :gold_summary, :is_dirty, :created_at, :updated_at
                 )
                 """,
                 row,
@@ -219,12 +240,12 @@ class SQLiteStore:
             INSERT INTO chunks (
                 id, node_path, content, layer, content_type, status, source,
                 confidence, lineage_json, created_at, updated_at,
-                chunk_key, content_hash, supersedes, valid_from, valid_to
+                chunk_key, content_hash, supersedes, valid_from, valid_to, decay_factor
             )
             VALUES (
                 :id, :node_path, :content, :layer, :content_type, :status, :source,
                 :confidence, :lineage_json, :created_at, :updated_at,
-                :chunk_key, :content_hash, :supersedes, :valid_from, :valid_to
+                :chunk_key, :content_hash, :supersedes, :valid_from, :valid_to, :decay_factor
             )
             """,
             row,
@@ -275,7 +296,8 @@ class SQLiteStore:
                 content_hash = :content_hash,
                 supersedes = :supersedes,
                 valid_from = :valid_from,
-                valid_to = :valid_to
+                valid_to = :valid_to,
+                decay_factor = :decay_factor
             WHERE id = :id
             """,
             row,
@@ -303,7 +325,18 @@ class SQLiteStore:
     def _node_data_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
         data = dict(row)
         data.pop("gold_summary", None)
+        data["is_dirty"] = bool(data.get("is_dirty", 0))
         return data
+
+    def update_node(self, node: Node) -> Node:
+        cursor = self.conn.execute(
+            "UPDATE nodes SET is_dirty = ?, updated_at = ? WHERE path = ?",
+            (1 if node.is_dirty else 0, utc_now(), node.path),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Node not found: {node.path}")
+        self._commit_if_needed()
+        return node
 
     def list_chunks(self) -> list[Chunk]:
         rows = self.conn.execute("SELECT * FROM chunks ORDER BY rowid").fetchall()
@@ -518,6 +551,7 @@ class SQLiteStore:
             payload["valid_from"] = payload.get("created_at") or ""
         if payload.get("content_hash") is None:
             payload["content_hash"] = ""
+        payload.setdefault("decay_factor", 1.0)
         return Chunk(**payload)
 
     def _index_chunk(self, chunk: Chunk) -> None:

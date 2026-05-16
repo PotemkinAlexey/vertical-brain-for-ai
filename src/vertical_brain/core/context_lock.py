@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 
 _SYMMETRIC_LINK_TYPES = {"peer", "related_to"}
+_LAYER_PRIORITY: dict[str, int] = {"gold": 0, "silver": 1, "bronze": 2}
 
 
 class ContextLock:
@@ -74,7 +75,10 @@ class ContextLock:
             )
 
         if policy.include_target:
-            for chunk in self.store.get_chunks_by_path(target_path):
+            for chunk in sorted(
+                self.store.get_chunks_by_path(target_path),
+                key=lambda c: (_LAYER_PRIORITY.get(c.layer, 3), c.created_at),
+            ):
                 if chunk.status == "active":
                     omitted_items += self._append_with_budget(
                         items,

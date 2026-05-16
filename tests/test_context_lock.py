@@ -156,3 +156,40 @@ def test_context_lock_expanded_links_skip_target_path_itself(tmp_path):
 
     contents = [item.content for item in locked.items]
     assert contents.count("Fact about A") == 1
+
+
+# ── context priority stratification ──────────────────────────────────────────
+
+def test_context_lock_gold_chunks_fill_budget_before_bronze(tmp_path):
+    """When budget is tight, Gold items must be included before Bronze."""
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/A", content="bronze fact one", layer="bronze"))
+    store.save_chunk(Chunk(node_path="WORK/A", content="bronze fact two", layer="bronze"))
+    store.save_chunk(Chunk(node_path="WORK/A", content="gold summary", layer="gold"))
+
+    locked = ContextLock(store).open_locked_context(
+        "WORK/A",
+        policy=ContextPolicy(include_ancestors=False),
+        budget=ContextBudget(max_items=2),
+    )
+
+    layers = [item.layer for item in locked.items]
+    assert "gold" in layers
+    assert locked.omitted_items >= 1
+
+
+def test_context_lock_silver_fills_before_bronze(tmp_path):
+    """Silver chunks must be included before Bronze when budget is limited."""
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/A", content="bronze raw note", layer="bronze"))
+    store.save_chunk(Chunk(node_path="WORK/A", content="silver compact fact", layer="silver"))
+    store.save_chunk(Chunk(node_path="WORK/A", content="another bronze note", layer="bronze"))
+
+    locked = ContextLock(store).open_locked_context(
+        "WORK/A",
+        policy=ContextPolicy(include_ancestors=False),
+        budget=ContextBudget(max_items=1),
+    )
+
+    assert locked.items[0].layer == "silver"
+    assert locked.omitted_items == 2

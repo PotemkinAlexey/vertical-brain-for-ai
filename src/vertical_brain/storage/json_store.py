@@ -125,7 +125,20 @@ class JsonStore:
         return [Node(**self._clean_node_row(row)) for row in self._read(self.nodes_file)]
 
     def _clean_node_row(self, row: dict[str, Any]) -> dict[str, Any]:
-        return {k: v for k, v in row.items() if k in {"id", "path", "name", "parent_path", "node_type", "created_at", "updated_at"}}
+        known = {"id", "path", "name", "parent_path", "node_type", "is_dirty", "created_at", "updated_at"}
+        data = {k: v for k, v in row.items() if k in known}
+        data.setdefault("is_dirty", False)
+        return data
+
+    def update_node(self, node: Node) -> Node:
+        nodes = self._read(self.nodes_file)
+        for index, row in enumerate(nodes):
+            if row["path"] == node.path:
+                from dataclasses import asdict as _asdict
+                nodes[index] = _asdict(node)
+                self._write(self.nodes_file, nodes)
+                return node
+        raise ValueError(f"Node not found: {node.path}")
 
     def list_chunks(self) -> list[Chunk]:
         return [self._chunk_from_row(row) for row in self._read(self.chunks_file)]
@@ -135,6 +148,7 @@ class JsonStore:
             "node_path", "content", "layer", "content_type", "status", "source",
             "confidence", "lineage", "id", "created_at", "updated_at",
             "chunk_key", "content_hash", "supersedes", "valid_from", "valid_to",
+            "decay_factor",
         }
         data = {k: v for k, v in row.items() if k in known}
         data.setdefault("chunk_key", None)
@@ -142,6 +156,7 @@ class JsonStore:
         data.setdefault("supersedes", [])
         data.setdefault("valid_from", row.get("created_at") or "")
         data.setdefault("valid_to", None)
+        data.setdefault("decay_factor", 1.0)
         return Chunk(**data)
 
     def list_links(self) -> list[Link]:
