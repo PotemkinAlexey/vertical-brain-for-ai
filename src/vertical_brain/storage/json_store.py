@@ -24,6 +24,7 @@ class JsonStore:
         self.gold_dir = self.root / "gold"
         self.gold_dir.mkdir(parents=True, exist_ok=True)
         self.audit_file = self.root / "operation_audit.jsonl"
+        self._vector_cache_file = self.root / "vector_cache.json"
 
         for file in [self.nodes_file, self.chunks_file, self.links_file]:
             if not file.exists():
@@ -252,6 +253,44 @@ class JsonStore:
             ),
             encoding="utf-8",
         )
+
+    def _read_vector_cache(self) -> dict[str, Any]:
+        if not self._vector_cache_file.exists():
+            return {}
+        try:
+            return json.loads(self._vector_cache_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _write_vector_cache(self, cache: dict[str, Any]) -> None:
+        self._vector_cache_file.write_text(
+            json.dumps(cache, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def get_vector(self, content_hash: str, model_name: str) -> list[float] | None:
+        cache = self._read_vector_cache()
+        entry = cache.get(content_hash, {})
+        vec = entry.get(model_name)
+        if vec is None:
+            return None
+        return vec
+
+    def set_vector(self, content_hash: str, model_name: str, vector: list[float]) -> None:
+        cache = self._read_vector_cache()
+        if content_hash not in cache:
+            cache[content_hash] = {}
+        cache[content_hash][model_name] = vector
+        self._write_vector_cache(cache)
+
+    def delete_vectors_for_model(self, model_name: str) -> int:
+        cache = self._read_vector_cache()
+        count = 0
+        for entry in cache.values():
+            if model_name in entry:
+                del entry[model_name]
+                count += 1
+        self._write_vector_cache(cache)
+        return count
 
     def rename_namespace(self, old_prefix: str, new_prefix: str) -> None:
         chunks = self._read(self.chunks_file)
