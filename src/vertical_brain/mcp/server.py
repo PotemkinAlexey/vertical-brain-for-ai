@@ -459,6 +459,7 @@ class VerticalBrainMCP:
                     source=args.get("source", "model"),
                     confidence=args.get("confidence", 1.0),
                 ),
+                reasoning_summary=args.get("reasoning_summary", "Appended via MCP append_chunk."),
             )
             result = self._executor.apply(op)
             return json.dumps({"chunk_id": result.chunk_id, "status": result.status})
@@ -468,6 +469,7 @@ class VerticalBrainMCP:
                 operation="append_gold_aspect",
                 target_path=args["path"],
                 gold_aspect=args["aspect"],
+                reasoning_summary=args.get("reasoning_summary", "Updated Gold aspect via MCP."),
             )
             result = self._executor.apply(op)
             out: dict[str, Any] = {"status": result.status, "path": result.target_path}
@@ -484,6 +486,7 @@ class VerticalBrainMCP:
                     link_type=args["link_type"],
                     reason=args["reason"],
                 )],
+                reasoning_summary=args.get("reasoning_summary", "Created link via MCP."),
             )
             result = self._executor.apply(op)
             return json.dumps({"link_ids": result.link_ids, "status": result.status})
@@ -543,6 +546,7 @@ class VerticalBrainMCP:
                     content_type="note",
                     source="model:session_end",
                 ),
+                reasoning_summary="Persisted session summary.",
             )
             result = self._executor.apply(op)
             out = {"status": result.status, "chunk_id": result.chunk_id}
@@ -551,6 +555,7 @@ class VerticalBrainMCP:
                     operation="append_gold_aspect",
                     target_path=args["path"],
                     gold_aspect=args["gold_aspect"],
+                    reasoning_summary="Updated Gold aspect via session_end.",
                 )
                 gold_result = self._executor.apply(gold_op)
                 out["gold_status"] = gold_result.status

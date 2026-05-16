@@ -67,3 +67,61 @@ def test_batch_apply_writes_audit_for_each_operation(tmp_path):
     )
     StorageOperationExecutor(store).apply_batch(batch)
     assert len(store.list_audit()) == 3
+
+
+# ── MCP audit quality ────────────────────────────────────────────────────────
+
+def _mcp_sqlite(tmp_path):
+    from vertical_brain.mcp.server import VerticalBrainMCP
+    store = SQLiteStore(tmp_path)
+    return VerticalBrainMCP(store), store
+
+
+def _call(mcp, name, args=None):
+    import json
+    from vertical_brain.mcp.server import VerticalBrainMCP
+    return mcp.handle({
+        "jsonrpc": "2.0", "id": 1,
+        "method": "tools/call",
+        "params": {"name": name, "arguments": args or {}},
+    })
+
+
+def test_mcp_append_chunk_audit_has_default_summary(tmp_path):
+    mcp, store = _mcp_sqlite(tmp_path)
+    _call(mcp, "append_chunk", {"path": "WORK/A", "content": "a fact"})
+    record = store.list_audit()[0]
+    assert record["reasoning_summary"] == "Appended via MCP append_chunk."
+
+
+def test_mcp_append_chunk_audit_uses_provided_summary(tmp_path):
+    mcp, store = _mcp_sqlite(tmp_path)
+    _call(mcp, "append_chunk", {
+        "path": "WORK/A", "content": "a fact",
+        "reasoning_summary": "explicit caller reason",
+    })
+    assert store.list_audit()[0]["reasoning_summary"] == "explicit caller reason"
+
+
+def test_mcp_append_gold_aspect_audit_has_default_summary(tmp_path):
+    mcp, store = _mcp_sqlite(tmp_path)
+    _call(mcp, "append_gold_aspect", {"path": "WORK/A", "aspect": "gold label"})
+    record = store.list_audit()[0]
+    assert record["reasoning_summary"] == "Updated Gold aspect via MCP."
+
+
+def test_mcp_create_link_audit_has_default_summary(tmp_path):
+    mcp, store = _mcp_sqlite(tmp_path)
+    _call(mcp, "create_link", {
+        "source_path": "WORK/A", "target_path": "WORK/B",
+        "link_type": "peer", "reason": "related",
+    })
+    record = store.list_audit()[0]
+    assert record["reasoning_summary"] == "Created link via MCP."
+
+
+def test_mcp_session_end_audit_has_default_summary(tmp_path):
+    mcp, store = _mcp_sqlite(tmp_path)
+    _call(mcp, "session_end", {"path": "WORK/A", "summary": "session wrap-up"})
+    record = store.list_audit()[0]
+    assert record["reasoning_summary"] == "Persisted session summary."
