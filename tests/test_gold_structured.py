@@ -4,20 +4,17 @@ from __future__ import annotations
 import json
 import time
 
-import pytest
 
 from vertical_brain.core.gold import (
     MAX_GOLD_ASPECTS,
     GoldAspect,
     GoldBuilder,
-    GoldDocument,
-    GoldFact,
     LlmGoldBuilder,
     parse_gold_aspects,
     parse_gold_content,
     serialize_gold_aspects,
 )
-from vertical_brain.core.models import Chunk, ChunkInput, StorageOperation
+from vertical_brain.core.models import Chunk, StorageOperation
 from vertical_brain.core.operations import StorageOperationExecutor
 from vertical_brain.llm.mock_llm import MockLLM
 from vertical_brain.storage.json_store import JsonStore

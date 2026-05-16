@@ -338,6 +338,49 @@ def test_cli_operation_dry_run_does_not_mutate_store(monkeypatch, capsys, tmp_pa
     assert store.get_chunks_by_path("WORK/Vertical/Node") == []
 
 
+def test_cli_backup_writes_sqlite_copy(monkeypatch, capsys, tmp_path):
+    data_dir = tmp_path / "data"
+    store = SQLiteStore(data_dir)
+    store.save_chunk(Chunk(node_path="WORK/Backup", content="backup fact"))
+    backup_file = tmp_path / "backup.sqlite"
+
+    output = run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--data-dir",
+        str(data_dir),
+        "--storage-backend",
+        "sqlite",
+        "backup",
+        str(backup_file),
+    )
+
+    assert "Backup written:" in output
+    backup = SQLiteStore(backup_file.parent, db_name=backup_file.name)
+    assert backup.get_chunks_by_path("WORK/Backup")[0].content == "backup fact"
+
+
+def test_cli_checkpoint_prints_sqlite_status(monkeypatch, capsys, tmp_path):
+    data_dir = tmp_path / "data"
+    SQLiteStore(data_dir).save_chunk(Chunk(node_path="WORK/Checkpoint", content="checkpoint fact"))
+
+    output = run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--data-dir",
+        str(data_dir),
+        "--storage-backend",
+        "sqlite",
+        "checkpoint",
+        "--json",
+    )
+
+    payload = json.loads(output)
+    assert set(payload) == {"busy", "checkpointed", "log"}
+
+
 def test_cli_operation_apply_writes_operation_batch(monkeypatch, capsys, tmp_path):
     operation_file = tmp_path / "operation_batch.json"
     operation_file.write_text(

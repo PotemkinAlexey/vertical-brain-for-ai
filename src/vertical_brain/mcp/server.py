@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 from vertical_brain.core.context_session import ContextSession
 from vertical_brain.core.embedding_router import EmbeddingRouter
 from vertical_brain.core.embedding_search import EmbeddingSearch
-from vertical_brain.core.models import Chunk, ChunkInput, LinkInput, StorageOperation, StorageOperationBatch
+from vertical_brain.core.models import ChunkInput, LinkInput, StorageOperation, StorageOperationBatch
 from vertical_brain.core.operations import StorageOperationExecutor
 from vertical_brain.core.search import BrainSearch
 from vertical_brain.llm.embedding import EmbeddingProvider, MockEmbeddingProvider

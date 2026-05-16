@@ -78,8 +78,6 @@ def _mcp_sqlite(tmp_path):
 
 
 def _call(mcp, name, args=None):
-    import json
-    from vertical_brain.mcp.server import VerticalBrainMCP
     return mcp.handle({
         "jsonrpc": "2.0", "id": 1,
         "method": "tools/call",

@@ -152,6 +152,19 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_cmd = sub.add_parser("doctor")
     doctor_cmd.add_argument("--json", action="store_true", help="Print JSON report")
 
+    backup = sub.add_parser("backup", help="Create a SQLite database backup")
+    backup.add_argument("file", help="Destination SQLite backup file")
+    backup.add_argument("--overwrite", action="store_true", help="Replace destination if it already exists")
+
+    checkpoint = sub.add_parser("checkpoint", help="Run a SQLite WAL checkpoint")
+    checkpoint.add_argument(
+        "--mode",
+        choices=["passive", "full", "restart", "truncate"],
+        default="passive",
+        help="SQLite WAL checkpoint mode",
+    )
+    checkpoint.add_argument("--json", action="store_true", help="Print JSON result")
+
     operation = sub.add_parser("operation")
     operation_sub = operation.add_subparsers(dest="operation_command", required=True)
     operation_dry_run = operation_sub.add_parser("dry-run")
@@ -483,6 +496,26 @@ def main() -> None:
                     prefix = "ERROR" if issue.severity == "error" else "WARN"
                     path_info = f" [{issue.path}]" if issue.path else ""
                     print(f"{prefix} [{issue.check}]{path_info} {issue.message}")
+
+    elif args.command == "backup":
+        backup_to = getattr(store, "backup_to", None)
+        if not callable(backup_to):
+            raise ValueError("backup is only supported by the SQLite storage backend")
+        backup_file = backup_to(args.file, overwrite=args.overwrite)
+        print(f"Backup written: {backup_file}")
+
+    elif args.command == "checkpoint":
+        checkpoint_store = getattr(store, "checkpoint", None)
+        if not callable(checkpoint_store):
+            raise ValueError("checkpoint is only supported by the SQLite storage backend")
+        result = checkpoint_store(args.mode)
+        if args.json:
+            print(json.dumps(result, sort_keys=True))
+        else:
+            print(
+                "Checkpoint complete: "
+                f"busy={result['busy']}, log={result['log']}, checkpointed={result['checkpointed']}"
+            )
 
     elif args.command == "operation":
         payload = json.loads(Path(args.file).read_text(encoding="utf-8"))

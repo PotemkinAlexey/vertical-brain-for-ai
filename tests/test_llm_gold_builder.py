@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
-from vertical_brain.core.gold import GoldDocument, GoldFact, LlmGoldBuilder
+from vertical_brain.core.gold import LlmGoldBuilder
 from vertical_brain.core.models import Chunk
 
 

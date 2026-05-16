@@ -4,7 +4,6 @@ from __future__ import annotations
 import pytest
 
 from vertical_brain.core.embedding_search import EmbeddingSearch, IncompatibleEmbeddingModelError
-from vertical_brain.core.models import Chunk
 from vertical_brain.llm.embedding import MockEmbeddingProvider
 from vertical_brain.storage.json_store import JsonStore
 from vertical_brain.storage.sqlite_store import SQLiteStore

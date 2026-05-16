@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from vertical_brain.core.gold import (
     MAX_GOLD_ASPECTS,

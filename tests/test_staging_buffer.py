@@ -3,9 +3,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
 
-from vertical_brain.core.models import STAGING_PATH, Chunk, ChunkInput, StorageOperation
+from vertical_brain.core.models import STAGING_PATH, Chunk, StorageOperation
 from vertical_brain.core.operations import StorageOperationExecutor, operation_to_staging
 from vertical_brain.storage.json_store import JsonStore
 

@@ -1,9 +1,8 @@
 import json
 
-import pytest
 
 from vertical_brain.core.doctor import Doctor
-from vertical_brain.core.models import Chunk, Link
+from vertical_brain.core.models import Chunk
 from vertical_brain.storage.json_store import JsonStore
 from vertical_brain.storage.sqlite_store import SQLiteStore
 

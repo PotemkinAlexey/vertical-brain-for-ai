@@ -1,9 +1,8 @@
 """Persistent vector cache tests — storage backends and EmbeddingSearch integration."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from vertical_brain.core.embedding_search import EmbeddingSearch
 from vertical_brain.core.models import Chunk

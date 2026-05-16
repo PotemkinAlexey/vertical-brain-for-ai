@@ -10,7 +10,7 @@ from vertical_brain.storage.sqlite_store import SQLiteStore
 
 
 def _populate(store, prefix: str) -> None:
-    from vertical_brain.core.models import Chunk, ChunkInput
+    from vertical_brain.core.models import ChunkInput
     store.ensure_node(f"{prefix}/Alpha")
     store.ensure_node(f"{prefix}/Beta")
     executor = StorageOperationExecutor(store)
@@ -119,7 +119,6 @@ def test_rename_sqlite_uses_transaction_context(tmp_path):
     rename, using a subclass hook on the transaction() context manager.
     """
     import inspect
-    import textwrap
     source = inspect.getsource(SQLiteStore.rename_namespace)
     # The method must contain 'with self.transaction()' — any whitespace variant.
     assert "with self.transaction()" in source.replace("\n", " "), (

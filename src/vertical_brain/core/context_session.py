@@ -9,7 +9,6 @@ from vertical_brain.core.models import (
     ContextPolicy,
     Link,
     LinkExpansionResult,
-    LockedContext,
     NamespaceMap,
     SearchCandidateHandle,
     SearchContextResult,

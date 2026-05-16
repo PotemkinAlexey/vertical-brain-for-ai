@@ -1,7 +1,7 @@
 """trigger_reindexing tests — cache warm-up and provider migration."""
 from __future__ import annotations
 
-from vertical_brain.core.embedding_search import EmbeddingSearch, IncompatibleEmbeddingModelError
+from vertical_brain.core.embedding_search import EmbeddingSearch
 from vertical_brain.core.models import Chunk
 from vertical_brain.llm.embedding import MockEmbeddingProvider
 from vertical_brain.storage.json_store import JsonStore

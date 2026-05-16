@@ -5,7 +5,6 @@ increments the version of the affected node(s) and marks them dirty.
 """
 from __future__ import annotations
 
-import pytest
 
 from vertical_brain.core.models import ChunkInput, LinkInput, StorageOperation
 from vertical_brain.core.operations import StorageOperationExecutor

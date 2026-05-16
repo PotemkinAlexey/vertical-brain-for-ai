@@ -136,6 +136,8 @@ vb [--data-dir DIR] [--storage-backend sqlite|json] [--model-file FILE] COMMAND
 | `optimize PATH` | Run duplicate detection and Silver compaction |
 | `optimize --plan PATH` | Show compaction plan without applying |
 | `doctor` | Run storage integrity checks |
+| `backup FILE` | Create a SQLite backup |
+| `checkpoint` | Run a SQLite WAL checkpoint |
 | `operation dry-run FILE` | Validate an operation batch JSON file |
 | `operation apply FILE` | Apply an operation batch JSON file |
 | `mcp` | Start the MCP stdio server |
@@ -168,6 +170,12 @@ vb operation apply ops.json
 
 # Run integrity checks
 vb doctor
+
+# Create a production SQLite backup
+vb backup ./backups/vertical_brain.sqlite
+
+# Force a WAL checkpoint after maintenance
+vb checkpoint --mode truncate
 ```
 
 ---
@@ -181,6 +189,10 @@ Single-file `vertical_brain.sqlite` inside `--data-dir` with WAL mode. Supports 
 **Concurrency:** one writer + N readers via WAL. Use `ThreadLocalSQLiteStoreProxy` for multi-threaded access — it creates one `SQLiteStore` instance per thread.
 
 Use SQLite for durable personal or agent-backed memory. It is the production storage backend for transactional operation batches, OCC, audit history, FTS5 search, and persistent vector cache.
+
+Operational commands:
+- `vb backup FILE` creates a consistent SQLite copy using the SQLite backup API.
+- `vb checkpoint --mode truncate` checkpoints the WAL file after maintenance or before external file-level backup.
 
 ```bash
 vb --data-dir ./brain ...

@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import pytest
 
@@ -126,6 +127,69 @@ def test_sqlite_wal_and_synchronous_pragmas_are_set(tmp_path):
     synchronous = store.conn.execute("PRAGMA synchronous").fetchone()[0]
     assert journal == "wal"
     assert synchronous == 1  # 1 = NORMAL
+
+
+def test_sqlite_backup_to_creates_readable_copy(tmp_path):
+    store = SQLiteStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/A", content="durable fact"))
+
+    backup_file = store.backup_to(tmp_path / "backups" / "brain.sqlite")
+    backup = SQLiteStore(backup_file.parent, db_name=backup_file.name)
+
+    chunks = backup.get_chunks_by_path("WORK/A")
+    assert len(chunks) == 1
+    assert chunks[0].content == "durable fact"
+
+
+def test_sqlite_backup_refuses_overwrite_by_default(tmp_path):
+    store = SQLiteStore(tmp_path)
+    backup_file = tmp_path / "brain-backup.sqlite"
+    store.backup_to(backup_file)
+
+    with pytest.raises(FileExistsError, match="already exists"):
+        store.backup_to(backup_file)
+
+    store.backup_to(backup_file, overwrite=True)
+
+
+def test_sqlite_backup_rejects_open_transaction(tmp_path):
+    store = SQLiteStore(tmp_path)
+
+    with store.transaction():
+        with pytest.raises(RuntimeError, match="transaction"):
+            store.backup_to(tmp_path / "backup.sqlite")
+
+
+def test_sqlite_backup_rejects_source_database_path(tmp_path):
+    store = SQLiteStore(tmp_path)
+
+    with pytest.raises(ValueError, match="must differ"):
+        store.backup_to(store.db_file, overwrite=True)
+
+
+def test_sqlite_checkpoint_returns_wal_status(tmp_path):
+    store = SQLiteStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/A", content="checkpoint fact"))
+
+    result = store.checkpoint("passive")
+
+    assert set(result) == {"busy", "log", "checkpointed"}
+    assert all(isinstance(value, int) for value in result.values())
+
+
+def test_sqlite_checkpoint_rejects_unknown_mode(tmp_path):
+    store = SQLiteStore(tmp_path)
+
+    with pytest.raises(ValueError, match="Unsupported checkpoint mode"):
+        store.checkpoint("vacuum")
+
+
+def test_sqlite_close_closes_connection(tmp_path):
+    store = SQLiteStore(tmp_path)
+    store.close()
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        store.list_nodes()
 
 
 def test_sqlite_fts_does_not_leak_superseded_chunks(tmp_path):

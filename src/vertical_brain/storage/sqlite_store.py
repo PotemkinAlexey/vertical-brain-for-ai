@@ -210,6 +210,45 @@ class SQLiteStore:
         if self._transaction_depth == 0:
             self.conn.commit()
 
+    def close(self) -> None:
+        self.conn.close()
+
+    def checkpoint(self, mode: str = "PASSIVE") -> dict[str, int]:
+        mode = mode.upper()
+        if mode not in {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}:
+            raise ValueError(f"Unsupported checkpoint mode: {mode}")
+        row = self.conn.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
+        return {
+            "busy": int(row[0]),
+            "log": int(row[1]),
+            "checkpointed": int(row[2]),
+        }
+
+    def backup_to(self, destination: str | Path, *, overwrite: bool = False) -> Path:
+        if self._transaction_depth != 0:
+            raise RuntimeError("Cannot create a SQLite backup while a transaction is open")
+
+        backup_file = Path(destination)
+        if backup_file.resolve() == self.db_file.resolve():
+            raise ValueError("Backup destination must differ from the source database file")
+        if backup_file.exists() and not overwrite:
+            raise FileExistsError(f"Backup destination already exists: {backup_file}")
+
+        self._commit_if_needed()
+        backup_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp_file = backup_file.with_name(f".{backup_file.name}.{uuid4().hex}.tmp")
+        try:
+            with sqlite3.connect(tmp_file) as target:
+                self.conn.backup(target)
+            tmp_file.replace(backup_file)
+        except Exception:
+            try:
+                tmp_file.unlink()
+            except FileNotFoundError:
+                pass
+            raise
+        return backup_file
+
     def ensure_node(self, path: str) -> Node:
         existing = self.get_node(path)
         if existing is not None:
@@ -719,4 +758,3 @@ class SQLiteStore:
                 chunk.content,
             ),
         )
-
