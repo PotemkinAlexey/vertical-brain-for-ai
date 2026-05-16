@@ -75,7 +75,7 @@ Add or refresh a semantic label in the Gold summary of a namespace.
 {
   "operation": "append_gold_aspect",
   "target_path": "WORK/DataArt/Databricks",
-  "aspect": "Delta Lake Z-ordering reduces scan range by clustering rows on selected columns.",
+  "gold_aspect": "Delta Lake Z-ordering reduces scan range by clustering rows on selected columns.",
   "reasoning_summary": "Stable Gold label for Z-ordering knowledge."
 }
 ```
@@ -83,7 +83,9 @@ Add or refresh a semantic label in the Gold summary of a namespace.
 | Field | Type | Description |
 |-------|------|-------------|
 | `target_path` | string | **required** Namespace to update |
-| `aspect` | string | **required** The semantic label text |
+| `gold_aspect` | string | **required** The semantic label text |
+
+> **MCP vs StorageOperation naming:** The MCP `append_gold_aspect` tool accepts the argument as `aspect`, but the underlying `StorageOperation` field is `gold_aspect`. When building operation batches directly (e.g. via the `operations` MCP tool or `vb operation apply`), use `gold_aspect`.
 
 ---
 
@@ -91,26 +93,30 @@ Add or refresh a semantic label in the Gold summary of a namespace.
 
 Create a horizontal link between two namespaces. Links appear as handles in locked context capsules.
 
+The `target_path` on the operation is the **source** namespace. Each entry in `links` describes a connection to a target namespace.
+
 ```json
 {
   "operation": "create_link",
   "target_path": "WORK/DataArt/Databricks",
-  "link": {
-    "source_path": "WORK/DataArt/Databricks",
-    "target_path": "WORK/SideProject/DataPipeline",
-    "link_type": "reference",
-    "reason": "Pipeline uses Databricks Delta Lake as the target store."
-  },
+  "links": [
+    {
+      "target_path": "WORK/SideProject/DataPipeline",
+      "link_type": "reference",
+      "reason": "Pipeline uses Databricks Delta Lake as the target store."
+    }
+  ],
   "reasoning_summary": "Cross-domain reference: Databricks → SideProject pipeline."
 }
 ```
 
-**`link` fields:**
+Multiple links can be created in one operation by including multiple entries in the `links` array.
+
+**`links` item fields:**
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `source_path` | string | **required** |
-| `target_path` | string | **required** |
+| `target_path` | string | **required** Namespace the link points to |
 | `link_type` | string | **required** e.g. `peer`, `reference`, `derived_from`, `depends_on` |
 | `reason` | string | **required** Human-readable explanation |
 

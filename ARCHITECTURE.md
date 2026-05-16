@@ -14,7 +14,7 @@ Vertical Brain is a personal knowledge store designed around one constraint: **a
 
 4. **Layered quality.** Raw input (Bronze) flows through compaction to canonical facts (Silver) to stable summaries (Gold). Only Gold is shown in orientation maps; Silver and Bronze are available in locked context.
 
-5. **Deterministic optimizer.** The optimizer is a pure function over a snapshot. It reads storage exactly once, builds a plan with no I/O, then applies the batch transactionally. No surprises.
+5. **Deterministic optimizer.** The optimizer performs a bounded snapshot read phase: branch chunks once, branch node version once, and links once only when decay is enabled. Planning is pure over that snapshot — no further I/O. The resulting batch is applied transactionally. No surprises.
 
 ---
 
@@ -30,12 +30,13 @@ A node is a namespace path. It is created automatically when a chunk is written 
 | `path` | string | Slash-separated path, e.g. `WORK/DataArt` |
 | `name` | string | Last segment of the path |
 | `parent_path` | string\|null | Parent path (null for roots) |
-| `node_type` | string | `namespace` or `root` |
-| `gold_summary` | string\|null | Serialized Gold aspect list (v2 JSON) |
+| `node_type` | string | `namespace` or `root` (default `"default"`) |
 | `version` | int | Monotonically increasing; incremented on every mutation |
 | `is_dirty` | bool | True if content changed since last Gold rebuild |
 | `created_at` | ISO 8601 | UTC creation time |
 | `updated_at` | ISO 8601 | UTC last mutation time |
+
+> **Gold summaries are stored as Gold-layer chunks, not as a field on Node.** The `Node` dataclass has no `gold_summary` field. When the namespace map or session prompt shows a Gold summary, it is read from the active Gold-layer chunk at that path. The SQLite backend maintains an internal `gold_summary` column for fast orientation reads, but this is an implementation detail of the store and not part of the `Node` protocol.
 
 ### Chunk
 
@@ -73,7 +74,7 @@ A link is a horizontal connection between two namespace paths.
 
 ### GoldAspect (v2 format)
 
-Gold summaries are stored as structured JSON at `node.gold_summary`:
+Gold aspects are stored as the content of an active Gold-layer chunk at the node's path. The chunk content is a v2 JSON object:
 
 ```json
 {
@@ -89,6 +90,11 @@ Gold summaries are stored as structured JSON at `node.gold_summary`:
 
 - `id` is stable across rewrites — updating the same aspect refreshes `updated_at` but keeps the UUID
 - Max 20 aspects per node; overflow creates a sibling namespace `{path}_2`, `{path}_3`, etc.
+
+There are two distinct Gold mechanisms in the codebase:
+
+- **`append_gold_aspect` / `GoldAspect`** — the lightweight incremental path. Adds or refreshes a single semantic label. Used by the model and MCP tools to annotate a namespace during normal operation.
+- **`GoldDocument` / `GoldBuilder` / `LlmGoldBuilder`** — the structured distillation path. Builds a full Gold document from a set of Silver chunks, with typed `facts`, `entities`, and `rules`. Each `GoldFact` carries `source_silver_ids` that must map to real Silver chunks (hallucinated IDs are rejected). Use this path for batch Gold rebuilds driven by an LLM.
 
 ---
 
@@ -109,7 +115,7 @@ Canonical facts. The optimizer compacts multiple Bronze chunks at a node into a 
 
 ### Compaction (Bronze → Silver)
 
-`SimpleOptimizer.optimize_branch(path)` runs in three passes over a single storage snapshot:
+`SimpleOptimizer.optimize_branch(path)` performs a bounded snapshot read (branch chunks, branch node version, and links when decay is enabled), then runs three passes over that snapshot with no further I/O:
 
 1. **Exact dedup** — mark stale any active chunk whose `(node_path, content_hash)` already exists
 2. **Namespace compaction** — for each node with 2+ active non-Gold chunks lacking lineage, create one Silver summary and supersede the originals
@@ -234,25 +240,27 @@ Core methods:
 
 ```python
 # Nodes
+ensure_node(path: str) -> Node          # create-or-get a node by path
 get_node(path: str) -> Node | None
-save_node(node: Node) -> Node
+update_node(node: Node) -> Node
 list_nodes() -> list[Node]
+get_ancestors(path: str) -> list[str]
 
 # Chunks
 save_chunk(chunk: Chunk) -> Chunk
-update_chunk(chunk: Chunk) -> None
-get_chunks_by_path(path: str, include_children: bool) -> list[Chunk]
+update_chunk(chunk: Chunk) -> Chunk
+get_chunks_by_path(path: str, include_children: bool = False) -> list[Chunk]
 list_chunks() -> list[Chunk]
 
 # Links
 save_link(link: Link) -> Link
+get_link(link_id: str) -> Link | None
+get_peer_links(path: str) -> list[Link]
+get_peer_paths(path: str) -> list[str]
 list_links() -> list[Link]
 
-# Namespace ops
-rename_namespace(old_prefix: str, new_prefix: str) -> None
-
-# Transactions (SQLite only)
-transaction() -> ContextManager
+# Utilities
+tree_text() -> str
 ```
 
 Optional extension protocols:

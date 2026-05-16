@@ -290,6 +290,31 @@ _TOOLS: list[dict[str, Any]] = [
             "required": ["path"],
         },
     },
+    {
+        "name": "operations",
+        "description": (
+            "Apply a StorageOperationBatch JSON object. Validated against schema before any I/O. "
+            "Supports OCC via branch_path/start_version. Returns status and per-operation results."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "payload": {
+                    "type": "object",
+                    "description": "A StorageOperationBatch JSON object with an 'operations' array.",
+                },
+            },
+            "required": ["payload"],
+        },
+    },
+    {
+        "name": "doctor",
+        "description": "Run storage integrity checks. Returns a list of issues (orphan links, duplicates, stale staging items, etc.).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
 ]
 
 
@@ -575,6 +600,23 @@ class VerticalBrainMCP:
                 min_compaction_path_parts=min_parts,
             ).optimize_branch(args["path"])
             return json.dumps({"status": "applied", "result": str(result)})
+
+        if name == "operations":
+            from vertical_brain.core.operations import operation_batch_from_dict
+            payload = args["payload"]
+            if not isinstance(payload, dict):
+                raise ValueError("payload must be a JSON object")
+            batch = operation_batch_from_dict(payload)
+            batch_result = self._executor.apply_batch(batch)
+            return batch_result.to_json()
+
+        if name == "doctor":
+            from vertical_brain.core.doctor import Doctor
+            issues = Doctor(self._store).run()  # type: ignore[arg-type]
+            return json.dumps([
+                {"severity": i.severity, "check": i.check, "message": i.message, "path": i.path}
+                for i in issues
+            ], ensure_ascii=False, indent=2)
 
         raise KeyError(name)
 

@@ -4,7 +4,7 @@
 
 A personal context lakehouse for AI assistants. Knowledge is stored in hierarchical namespaces (`WORK/DataArt/Databricks`), organized into Bronze → Silver → Gold quality layers, and served to models through locked context capsules with strict isolation.
 
-**Zero external dependencies.** Core + storage + MCP server use only the Python standard library. The HTTP embedding provider uses `urllib`.
+**Zero Python runtime dependencies.** Core + storage + MCP server use only the Python standard library. The HTTP embedding provider uses `urllib` from stdlib. Optional semantic search requires an external OpenAI-compatible embedding endpoint.
 
 ---
 
@@ -74,7 +74,7 @@ These are tested explicitly in `test_occ.py`, `test_version_propagation.py`, `te
 
 6. **`rename_namespace` is atomic in SQLite.** It must be wrapped in `with self.transaction():`.
 
-7. **The optimizer reads storage exactly once** (`_snapshot_branch`) and applies changes as a single transactional batch. No second reads during planning.
+7. **The optimizer performs a bounded snapshot read** via `_snapshot_branch`: branch chunks once, node version once, and links once only when decay is enabled. Planning (`_build_plan`) is pure over that snapshot — no further I/O. Changes are applied as a single transactional batch.
 
 ---
 
@@ -136,7 +136,7 @@ This repo uses conventional commit messages. Keep messages short and factual. Mu
 
 ## Things to Avoid
 
-- **Do not add external dependencies.** The zero-dependency constraint is intentional.
+- **Do not add external Python dependencies.** The zero-runtime-dependency constraint is intentional.
 - **Do not bypass the JSON Schema validation.** Never call `_apply_*` methods directly from outside the executor.
 - **Do not write raw strings to `node.gold_summary`.** Always use `serialize_gold_aspects`.
 - **Do not share `SQLiteStore` across threads.** Use `ThreadLocalSQLiteStoreProxy`.

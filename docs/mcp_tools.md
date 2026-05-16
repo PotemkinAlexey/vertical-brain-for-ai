@@ -156,6 +156,8 @@ Add or refresh a semantic label in the Gold summary of a namespace. Exact-text d
 | `path` | string | **required** Target namespace |
 | `aspect` | string | **required** The semantic label text |
 
+> **Naming note:** This MCP tool accepts the argument as `aspect`. The underlying `StorageOperation` field is `gold_aspect`. When building operation batches for the `operations` tool or `vb operation apply`, use `gold_aspect`.
+
 ---
 
 ### `create_link`

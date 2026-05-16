@@ -49,6 +49,7 @@ def test_tools_list_contains_expected_tools(tmp_path):
         "search", "search_semantic", "context_search", "context_search_semantic",
         "route", "append_chunk", "append_gold_aspect", "create_link",
         "mark_stale", "batch_append", "session_end", "optimize",
+        "operations", "doctor",
     }
 
 

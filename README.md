@@ -1,6 +1,6 @@
 # Vertical Brain
 
-A personal context lakehouse for AI assistants — hierarchical, layered, transactional, and zero-dependency.
+A personal context lakehouse for AI assistants — hierarchical, layered, transactional, with zero Python runtime dependencies.
 
 Vertical Brain gives your AI a **structured memory** instead of a flat context window. Knowledge is organized into namespace hierarchies, promoted through Bronze → Silver → Gold quality layers, and exposed to models through locked context capsules that prevent cross-domain leakage.
 
@@ -176,7 +176,7 @@ vb doctor
 
 ### SQLite (default)
 
-Single-file `brain.sqlite` with WAL mode. Supports FTS5 full-text search, transactional batches, persistent embedding vector cache, and an append-only operation audit log.
+Single-file `vertical_brain.sqlite` inside `--data-dir` with WAL mode. Supports FTS5 full-text search, transactional batches, persistent embedding vector cache, and an append-only operation audit log.
 
 **Concurrency:** one writer + N readers via WAL. Use `ThreadLocalSQLiteStoreProxy` for multi-threaded access — it creates one `SQLiteStore` instance per thread.
 
@@ -262,11 +262,14 @@ The MCP server exposes these tools to Claude:
 | `context_search_semantic` | Semantic search + locked context capsules |
 | `route` | Find best namespaces by embedding similarity |
 | `append_chunk` | Write a chunk |
-| `append_gold_aspect` | Update Gold summary |
+| `append_gold_aspect` | Add/refresh a Gold aspect |
 | `create_link` | Create a namespace link |
-| `operations` | Apply a full operation batch |
+| `mark_stale` | Retire chunks at a namespace |
+| `batch_append` | Write multiple chunks atomically |
+| `session_end` | Persist session summary + optional Gold aspect |
+| `operations` | Apply a `StorageOperationBatch` JSON object |
 | `optimize` | Run optimizer on a subtree |
-| `doctor` | Run integrity checks |
+| `doctor` | Run storage integrity checks |
 
 See [docs/mcp_tools.md](docs/mcp_tools.md) for full parameter reference.
 
@@ -280,6 +283,6 @@ pytest
 pytest tests/test_operations.py -v   # run a subset
 ```
 
-**Zero external dependencies.** Core, storage, and MCP server use only the Python standard library. The optional HTTP embedding provider uses `urllib`.
+**Zero Python runtime dependencies.** Core, storage, and MCP server use only the Python standard library. The optional HTTP embedding provider (`HttpEmbeddingProvider`) uses `urllib` from stdlib. Optional semantic search requires an external OpenAI-compatible embedding endpoint (e.g. Ollama, OpenAI).
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for a deep dive into the design.
