@@ -2,6 +2,7 @@ from vertical_brain.core.embedding_search import EmbeddingSearch
 from vertical_brain.core.models import Chunk
 from vertical_brain.llm.embedding import MockEmbeddingProvider
 from vertical_brain.storage.json_store import JsonStore
+from vertical_brain.storage.sqlite_store import SQLiteStore
 
 
 def test_semantic_search_returns_most_similar_chunk(tmp_path):
@@ -144,3 +145,37 @@ def test_embedding_search_without_root_path_spans_all_verticals(tmp_path):
     assert "WORK/DataArt/Databricks" in paths
     assert "TRADING/Bots" in paths
 
+
+def test_semantic_search_scoped_uses_backend_path_filter(tmp_path):
+    store = SQLiteStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="Delta Lake streaming ingestion"))
+    store.save_chunk(Chunk(node_path="TRADING/Bots", content="Delta Lake strategy execution"))
+
+    def fail_list_chunks():
+        raise AssertionError("scoped semantic search must not scan every chunk")
+
+    store.list_chunks = fail_list_chunks  # type: ignore[method-assign]
+
+    results = EmbeddingSearch(store, MockEmbeddingProvider()).search(
+        "Delta Lake streaming",
+        root_path="WORK",
+    )
+
+    assert [r.path for r in results] == ["WORK/DataArt/Databricks"]
+
+
+def test_trigger_reindexing_scoped_uses_backend_path_filter(tmp_path):
+    store = SQLiteStore(tmp_path)
+    in_scope = store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="Delta Lake streaming ingestion"))
+    out_scope = store.save_chunk(Chunk(node_path="TRADING/Bots", content="Delta Lake strategy execution"))
+
+    def fail_list_chunks():
+        raise AssertionError("scoped reindexing must not scan every chunk")
+
+    store.list_chunks = fail_list_chunks  # type: ignore[method-assign]
+
+    indexed = EmbeddingSearch(store, MockEmbeddingProvider()).trigger_reindexing(node_path="WORK")
+
+    assert indexed == 1
+    assert store.get_vector(in_scope.content_hash, "mock-v1") is not None
+    assert store.get_vector(out_scope.content_hash, "mock-v1") is None

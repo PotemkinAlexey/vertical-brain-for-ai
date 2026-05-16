@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from vertical_brain.core.models import SearchResult
-from vertical_brain.core.search import _path_in_scope
 from vertical_brain.llm.embedding import EmbeddingProvider, cosine_similarity
 
 if TYPE_CHECKING:
+    from vertical_brain.core.models import Chunk
     from vertical_brain.storage.protocol import StorageProvider
 
 
@@ -53,17 +53,25 @@ class EmbeddingSearch:
                 f"{stored['vector_dimension']}. Rebuild the embedding index before searching."
             )
 
-    def _get_vector(self, content_hash: str, content: str) -> list[float]:
+    def _get_vector(
+        self,
+        content_hash: str,
+        content: str,
+        *,
+        expected_dimension: int | None = None,
+    ) -> list[float]:
         """Return embedding vector, reading from persistent cache or computing on miss."""
         model_name = getattr(self._provider, "model_name", None)
+        expected_dimension = self._expected_dimension(expected_dimension)
         if model_name:
             get_vector = getattr(self._store, "get_vector", None)
             if callable(get_vector):
                 cached = get_vector(content_hash, model_name)
-                if cached is not None:
-                    return cached
+                cached_vector = _coerce_vector(cached, expected_dimension=expected_dimension)
+                if cached_vector is not None:
+                    return cached_vector
 
-        vec = self._provider.embed(content)
+        vec = self._embed(content, expected_dimension=expected_dimension)
 
         if model_name:
             set_vector = getattr(self._store, "set_vector", None)
@@ -71,6 +79,35 @@ class EmbeddingSearch:
                 set_vector(content_hash, model_name, vec)
 
         return vec
+
+    def _embed(self, text: str, *, expected_dimension: int | None = None) -> list[float]:
+        vector = _coerce_vector(
+            self._provider.embed(text),
+            expected_dimension=self._expected_dimension(expected_dimension),
+        )
+        if vector is None:
+            raise ValueError("Embedding provider returned an invalid vector")
+        return vector
+
+    def _expected_dimension(self, fallback: int | None = None) -> int | None:
+        provider_dim = getattr(self._provider, "embed_dimension", -1)
+        if isinstance(provider_dim, int) and not isinstance(provider_dim, bool) and provider_dim > 0:
+            return provider_dim
+        return fallback
+
+    def _candidate_chunks(
+        self,
+        *,
+        root_path: str | None,
+        include_stale: bool,
+    ) -> list["Chunk"]:
+        if root_path:
+            chunks = self._store.get_chunks_by_path(root_path, include_children=True)  # type: ignore[attr-defined]
+        else:
+            chunks = self._store.list_chunks()  # type: ignore[attr-defined]
+        if include_stale:
+            return chunks
+        return [chunk for chunk in chunks if chunk.status == "active"]
 
     def trigger_reindexing(
         self,
@@ -99,11 +136,7 @@ class EmbeddingSearch:
                     set_schema(new_model, new_dim)
 
         count = 0
-        for chunk in self._store.list_chunks():  # type: ignore[attr-defined]
-            if chunk.status != "active":
-                continue
-            if not _path_in_scope(chunk.node_path, node_path):
-                continue
+        for chunk in self._candidate_chunks(root_path=node_path, include_stale=False):
             self._get_vector(chunk.content_hash, chunk.content)
             count += 1
         return count
@@ -120,16 +153,18 @@ class EmbeddingSearch:
         if not query.strip() or limit <= 0:
             return []
 
-        query_vec = self._provider.embed(query)
+        query_vec = self._embed(query)
         results: list[SearchResult] = []
 
-        for chunk in self._store.list_chunks():  # type: ignore[attr-defined]
-            if not include_stale and chunk.status != "active":
-                continue
-            if not _path_in_scope(chunk.node_path, root_path):
-                continue
-
-            score = cosine_similarity(query_vec, self._get_vector(chunk.content_hash, chunk.content))
+        for chunk in self._candidate_chunks(root_path=root_path, include_stale=include_stale):
+            score = cosine_similarity(
+                query_vec,
+                self._get_vector(
+                    chunk.content_hash,
+                    chunk.content,
+                    expected_dimension=len(query_vec),
+                ),
+            )
             if score <= threshold:
                 continue
 
@@ -150,3 +185,16 @@ class EmbeddingSearch:
 
         results.sort(key=lambda r: (-r.score, r.path))
         return results[:limit]
+
+
+def _coerce_vector(vector: object, *, expected_dimension: int | None = None) -> list[float] | None:
+    if not isinstance(vector, list):
+        return None
+    if expected_dimension is not None and len(vector) != expected_dimension:
+        return None
+    coerced: list[float] = []
+    for value in vector:
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return None
+        coerced.append(float(value))
+    return coerced

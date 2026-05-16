@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
 
 from vertical_brain.core.embedding_search import EmbeddingSearch
 from vertical_brain.core.models import Chunk
@@ -128,6 +129,49 @@ def test_embedding_search_reads_from_cache_on_hit(tmp_path):
         # embed called once for the query, not again for the chunk
         calls = [call.args[0] for call in mock_embed.call_args_list]
         assert chunk.content not in calls
+
+
+def test_embedding_search_recomputes_wrong_dimension_cached_vector(tmp_path):
+    store = JsonStore(tmp_path)
+    chunk = store.save_chunk(Chunk(node_path="WORK/A", content="Delta Lake streaming"))
+    store.set_vector(chunk.content_hash, "mock-v1", [0.1])
+    provider = MockEmbeddingProvider()
+
+    with patch.object(provider, "embed", wraps=provider.embed) as mock_embed:
+        EmbeddingSearch(store, provider).search("Delta Lake")
+
+    calls = [call.args[0] for call in mock_embed.call_args_list]
+    assert chunk.content in calls
+    assert len(store.get_vector(chunk.content_hash, "mock-v1")) == provider.embed_dimension
+
+
+def test_embedding_search_recomputes_nonnumeric_cached_vector(tmp_path):
+    store = JsonStore(tmp_path)
+    chunk = store.save_chunk(Chunk(node_path="WORK/A", content="Delta Lake streaming"))
+    store.set_vector(chunk.content_hash, "mock-v1", ["bad"])  # type: ignore[list-item]
+    provider = MockEmbeddingProvider()
+
+    with patch.object(provider, "embed", wraps=provider.embed) as mock_embed:
+        EmbeddingSearch(store, provider).search("Delta Lake")
+
+    calls = [call.args[0] for call in mock_embed.call_args_list]
+    assert chunk.content in calls
+    assert len(store.get_vector(chunk.content_hash, "mock-v1")) == provider.embed_dimension
+
+
+def test_embedding_search_rejects_invalid_provider_vector(tmp_path):
+    class BadProvider:
+        model_name = "bad-provider"
+        embed_dimension = 3
+
+        def embed(self, text: str) -> list:
+            return [1.0, "bad", 3.0]
+
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/A", content="Delta Lake streaming"))
+
+    with pytest.raises(ValueError, match="invalid vector"):
+        EmbeddingSearch(store, BadProvider()).search("Delta Lake")
 
 
 def test_trigger_reindexing_warms_persistent_cache(tmp_path):
