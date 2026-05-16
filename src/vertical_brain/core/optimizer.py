@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from vertical_brain.core.models import (
@@ -30,15 +31,26 @@ class SimpleOptimizer:
       4. Build the report from the batch counters — no second read.
     """
 
-    def __init__(self, store: "StorageProvider", min_compaction_path_parts: int) -> None:
+    def __init__(
+        self,
+        store: "StorageProvider",
+        min_compaction_path_parts: int,
+        decay_rate: float = 1.0,
+        decay_days: int = 30,
+        stale_threshold: float = 0.2,
+    ) -> None:
         self.store = store
         self.min_compaction_path_parts = min_compaction_path_parts
+        self.decay_rate = decay_rate
+        self.decay_days = decay_days
+        self.stale_threshold = stale_threshold
 
     # ── public interface ──────────────────────────────────────────────────────
 
     def optimize_branch(self, path: str) -> str:
         chunks = self.store.get_chunks_by_path(path, include_children=True)  # single read
-        batch = self._build_plan(chunks, path)
+        linked_paths = self._linked_paths_if_decay_enabled()
+        batch = self._build_plan(chunks, path, linked_paths=linked_paths)
         if batch.operations:
             StorageOperationExecutor(self.store).apply_batch(batch)
         return self._build_report(path, chunks, batch)
@@ -46,11 +58,18 @@ class SimpleOptimizer:
     def plan_branch(self, path: str) -> StorageOperationBatch:
         """Return the operation batch optimize_branch would apply without mutating storage."""
         chunks = self.store.get_chunks_by_path(path, include_children=True)
-        return self._build_plan(chunks, path)
+        linked_paths = self._linked_paths_if_decay_enabled()
+        return self._build_plan(chunks, path, linked_paths=linked_paths)
 
     # ── core planning (pure over the already-fetched chunk list) ──────────────
 
-    def _build_plan(self, chunks: list[Chunk], path: str) -> StorageOperationBatch:
+    def _build_plan(
+        self,
+        chunks: list[Chunk],
+        path: str,
+        *,
+        linked_paths: set[str] | None = None,
+    ) -> StorageOperationBatch:
         operations: list[StorageOperation] = []
         seen: dict[tuple[str, str], str] = {}
         stale_ids: set[str] = set()
@@ -112,6 +131,36 @@ class SimpleOptimizer:
                 reasoning_summary="Original variants superseded by canonical namespace compaction.",
             ))
 
+        # Pass 3 — confidence decay for old unlinked Bronze/Silver chunks
+        if self.decay_rate < 1.0 and self.decay_days > 0:
+            _linked = linked_paths or set()
+            for chunk in chunks:
+                if chunk.status != "active":
+                    continue
+                if chunk.layer == "gold":
+                    continue
+                if chunk.id in stale_ids:
+                    continue
+                if chunk.node_path in _linked:
+                    continue
+                age_days = self._chunk_age_days(chunk)
+                periods = int(age_days // self.decay_days)
+                if periods == 0:
+                    continue
+                rate = chunk.decay_factor if chunk.decay_factor < 1.0 else self.decay_rate
+                effective_confidence = chunk.confidence * (rate ** periods)
+                if effective_confidence < self.stale_threshold:
+                    operations.append(StorageOperation(
+                        operation="mark_stale",
+                        target_path=chunk.node_path,
+                        chunk_ids=[chunk.id],
+                        reasoning_summary=(
+                            f"Confidence decayed below {self.stale_threshold:.2f} "
+                            f"after {age_days:.0f} days without links."
+                        ),
+                    ))
+                    stale_ids.add(chunk.id)
+
         return StorageOperationBatch(
             operations=operations,
             reasoning_summary=f"Compaction plan for {path}.",
@@ -127,10 +176,14 @@ class SimpleOptimizer:
     ) -> str:
         duplicates_by_node: dict[str, int] = defaultdict(int)
         compactions_by_node: dict[str, int] = defaultdict(int)
+        decayed_by_node: dict[str, int] = defaultdict(int)
 
         for op in batch.operations:
             if op.operation == "mark_stale":
-                duplicates_by_node[op.target_path] += len(op.chunk_ids or [])
+                if op.reasoning_summary and "decayed" in op.reasoning_summary:
+                    decayed_by_node[op.target_path] += len(op.chunk_ids or [])
+                else:
+                    duplicates_by_node[op.target_path] += len(op.chunk_ids or [])
             elif (
                 op.operation == "append_chunk"
                 and op.chunk is not None
@@ -162,16 +215,36 @@ class SimpleOptimizer:
             for node_path, node_chunks in sorted(self._group_by_node(initial_chunks).items()):
                 dups = duplicates_by_node[node_path]
                 comp = compactions_by_node[node_path]
-                if dups or comp:
+                decay = decayed_by_node[node_path]
+                if dups or comp or decay:
                     lines.append(
                         f"  - {node_path}: "
                         f"{dups} exact duplicates marked stale, "
-                        f"{comp} namespace compactions created"
+                        f"{comp} namespace compactions created, "
+                        f"{decay} chunks decayed to stale"
                     )
 
         return "\n".join(lines)
 
     # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _linked_paths_if_decay_enabled(self) -> set[str]:
+        if self.decay_rate >= 1.0:
+            return set()
+        linked: set[str] = set()
+        for lnk in self.store.list_links():
+            linked.add(lnk.source_path)
+            linked.add(lnk.target_path)
+        return linked
+
+    def _chunk_age_days(self, chunk: Chunk) -> float:
+        try:
+            created = datetime.fromisoformat(chunk.created_at)
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            return (datetime.now(timezone.utc) - created).total_seconds() / 86400
+        except (ValueError, TypeError):
+            return 0.0
 
     def _build_silver_compaction(self, node_path: str, chunks: list[Chunk]) -> str:
         lines = [f"Compacted Silver summary for namespace: {node_path}.", "Facts:"]
