@@ -221,8 +221,8 @@ def test_response_includes_request_id(tmp_path):
     assert resp["id"] == 42
 
 
-def test_read_message_parses_lsp_content_length_frame():
-    stream = BytesIO(b'Content-Length: 40\r\n\r\n{"jsonrpc":"2.0","id":1,"method":"ping"}')
+def test_read_message_parses_newline_delimited_json():
+    stream = BytesIO(b'{"jsonrpc":"2.0","id":1,"method":"ping"}\n')
 
     payload = _read_message(stream)
 
@@ -230,30 +230,27 @@ def test_read_message_parses_lsp_content_length_frame():
     assert payload["id"] == 1
 
 
-def test_read_message_rejects_missing_content_length():
-    stream = BytesIO(b'X-Test: value\r\n\r\n{}')
+def test_read_message_skips_blank_lines():
+    stream = BytesIO(b'\n\n{"jsonrpc":"2.0","id":2,"method":"ping"}\n')
+
+    payload = _read_message(stream)
+
+    assert payload["id"] == 2
+
+
+def test_read_message_rejects_invalid_json():
+    stream = BytesIO(b"not-json\n")
 
     try:
         _read_message(stream)
     except MessageParseError as exc:
-        assert "Missing Content-Length" in str(exc)
-    else:
-        raise AssertionError("expected MessageParseError")
-
-
-def test_read_message_rejects_short_body():
-    stream = BytesIO(b"Content-Length: 20\r\n\r\n{}")
-
-    try:
-        _read_message(stream)
-    except MessageParseError as exc:
-        assert "Unexpected EOF" in str(exc)
+        assert "Invalid JSON" in str(exc)
     else:
         raise AssertionError("expected MessageParseError")
 
 
 def test_read_message_rejects_non_object_body():
-    stream = BytesIO(b"Content-Length: 2\r\n\r\n[]")
+    stream = BytesIO(b"[]\n")
 
     try:
         _read_message(stream)
@@ -263,14 +260,17 @@ def test_read_message_rejects_non_object_body():
         raise AssertionError("expected MessageParseError")
 
 
-def test_write_message_emits_content_length_frame():
+def test_write_message_emits_newline_delimited_json():
     stream = BytesIO()
 
     _write_message(stream, {"jsonrpc": "2.0", "id": 1, "result": {}})
 
     payload = stream.getvalue()
-    assert payload.startswith(b"Content-Length: ")
-    assert b'\r\n\r\n{"jsonrpc": "2.0", "id": 1, "result": {}}' in payload
+    assert payload.endswith(b"\n")
+    assert b"Content-Length" not in payload
+    import json
+    parsed = json.loads(payload.decode("utf-8"))
+    assert parsed == {"jsonrpc": "2.0", "id": 1, "result": {}}
 
 
 def test_list_chunks_returns_full_content(tmp_path):

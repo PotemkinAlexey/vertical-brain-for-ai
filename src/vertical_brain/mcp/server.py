@@ -654,46 +654,34 @@ class VerticalBrainMCP:
 # ------------------------------------------------------------------
 
 def _read_message(stream: io.RawIOBase) -> dict[str, Any]:
-    headers: dict[str, str] = {}
+    """Read one newline-delimited JSON message from *stream*.
+
+    MCP stdio transport sends one JSON object per line (newline-delimited JSON).
+    Empty lines are skipped so the reader is tolerant of blank separators.
+    """
     while True:
         line = stream.readline()
         if not line:
             raise EOFError
         try:
-            decoded = line.decode("utf-8")
+            decoded = line.decode("utf-8").strip()
         except UnicodeDecodeError as exc:
-            raise MessageParseError("Header is not valid UTF-8") from exc
-        if decoded in ("\r\n", "\n"):
-            break
-        key, _, value = decoded.partition(":")
-        if not key or not value:
-            raise MessageParseError("Malformed header line")
-        headers[key.strip().lower()] = value.strip()
-
-    if "content-length" not in headers:
-        raise MessageParseError("Missing Content-Length header")
-    try:
-        length = int(headers["content-length"])
-    except ValueError as exc:
-        raise MessageParseError("Content-Length must be an integer") from exc
-    if length <= 0:
-        raise MessageParseError("Content-Length must be positive")
-    body = stream.read(length)
-    if len(body) != length:
-        raise MessageParseError("Unexpected EOF while reading message body")
-    try:
-        payload = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise MessageParseError("Invalid JSON body") from exc
-    if not isinstance(payload, dict):
-        raise MessageParseError("Message body must be a JSON object")
-    return payload
+            raise MessageParseError("Message line is not valid UTF-8") from exc
+        if not decoded:
+            continue  # skip blank lines
+        try:
+            payload = json.loads(decoded)
+        except json.JSONDecodeError as exc:
+            raise MessageParseError(f"Invalid JSON: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise MessageParseError("Message must be a JSON object")
+        return payload
 
 
 def _write_message(stream: io.RawIOBase, obj: dict[str, Any]) -> None:
-    body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-    header = f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8")
-    stream.write(header + body)
+    """Write one newline-delimited JSON message to *stream*."""
+    line = json.dumps(obj, ensure_ascii=False) + "\n"
+    stream.write(line.encode("utf-8"))
     stream.flush()
 
 
