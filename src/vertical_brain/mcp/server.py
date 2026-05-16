@@ -23,7 +23,7 @@ from vertical_brain.core.operations import StorageOperationExecutor
 from vertical_brain.core.search import BrainSearch
 from vertical_brain.llm.embedding import EmbeddingProvider, MockEmbeddingProvider
 
-_PROTOCOL_VERSION = "2024-11-05"
+_PROTOCOL_VERSION = "2025-03-26"
 _SERVER_VERSION = "0.1.0"
 
 _TOOLS: list[dict[str, Any]] = [
@@ -345,7 +345,9 @@ class VerticalBrainMCP:
         if method == "initialize":
             return self._reply(req_id, {
                 "protocolVersion": _PROTOCOL_VERSION,
-                "capabilities": {"tools": {}},
+                "capabilities": {
+                    "tools": {"listChanged": False},
+                },
                 "serverInfo": {"name": "vertical-brain", "version": _SERVER_VERSION},
             })
         if method == "initialized":
@@ -697,7 +699,7 @@ def run_stdio(store: object, embedding_provider: EmbeddingProvider | None = None
         except EOFError:
             break
         except MessageParseError as exc:
-            _write_message(stdout, VerticalBrainMCP._error(None, -32700, str(exc)))
+            _write_message(stdout, VerticalBrainMCP._error(0, -32700, str(exc)))
             break
         except Exception:
             traceback.print_exc(file=sys.stderr)
@@ -706,7 +708,8 @@ def run_stdio(store: object, embedding_provider: EmbeddingProvider | None = None
         try:
             response = server.handle(request)
         except Exception as exc:
-            response = VerticalBrainMCP._error(request.get("id"), -32603, str(exc))
+            req_id = request.get("id")
+            response = VerticalBrainMCP._error(req_id if req_id is not None else 0, -32603, str(exc))
 
         if response is not None:
             _write_message(stdout, response)

@@ -31,7 +31,7 @@ def _text(response: dict) -> str:
 def test_initialize_returns_protocol_version(tmp_path):
     mcp, _ = _mcp(tmp_path)
     resp = mcp.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
-    assert resp["result"]["protocolVersion"] == "2024-11-05"
+    assert resp["result"]["protocolVersion"] == "2025-03-26"
     assert resp["result"]["serverInfo"]["name"] == "vertical-brain"
 
 
