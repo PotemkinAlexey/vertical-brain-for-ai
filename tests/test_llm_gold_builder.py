@@ -101,15 +101,18 @@ def test_llm_gold_builder_falls_back_when_llm_raises():
 
 
 def test_llm_gold_builder_discards_source_ids_not_in_silver():
-    """Source IDs that don't match any input Silver chunk must be silently dropped."""
+    """Facts whose source IDs don't match any real Silver chunk are dropped; fallback fires."""
     chunks = [_silver("fact")]
     payload = json.dumps({
-        "facts": [{"content": "Fact", "source_silver_ids": ["nonexistent-id"], "confidence": 0.9}],
+        "facts": [{"content": "Hallucinated", "source_silver_ids": ["nonexistent-id"], "confidence": 0.9}],
         "entities": [],
         "rules": [],
     })
     doc = LlmGoldBuilder(_FakeLlm(payload)).build(chunks, node_path="WORK/Project")
-    assert doc.facts[0].source_silver_ids == []
+    # Hallucinated fact has no valid lineage → dropped → fallback builder fires.
+    contents = [f.content for f in doc.facts]
+    assert "Hallucinated" not in contents
+    assert chunks[0].content in contents
 
 
 # ── Empty input ────────────────────────────────────────────────────────────────

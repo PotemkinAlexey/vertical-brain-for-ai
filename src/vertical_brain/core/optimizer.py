@@ -48,25 +48,33 @@ class SimpleOptimizer:
     # ── public interface ──────────────────────────────────────────────────────
 
     def optimize_branch(self, path: str) -> str:
-        chunks = self.store.get_chunks_by_path(path, include_children=True)
-        links = self.store.list_links() if self._decay_enabled() else []
-        linked_paths = self._linked_paths_from(links)
+        chunks, linked_paths, node_version = self._snapshot_branch(path)
         batch = self._build_plan(chunks, path, linked_paths=linked_paths)
+        if node_version is not None:
+            batch.branch_path = path
+            batch.start_version = node_version
         if batch.operations:
             StorageOperationExecutor(self.store).apply_batch(batch)
         return self._build_report(path, chunks, batch)
 
     def plan_branch(self, path: str) -> StorageOperationBatch:
         """Return the operation batch optimize_branch would apply without mutating storage."""
-        chunks = self.store.get_chunks_by_path(path, include_children=True)
-        links = self.store.list_links() if self._decay_enabled() else []
-        linked_paths = self._linked_paths_from(links)
+        chunks, linked_paths, node_version = self._snapshot_branch(path)
         batch = self._build_plan(chunks, path, linked_paths=linked_paths)
-        node = self.store.get_node(path)
-        if node is not None:
+        if node_version is not None:
             batch.branch_path = path
-            batch.start_version = node.version
+            batch.start_version = node_version
         return batch
+
+    def _snapshot_branch(
+        self, path: str
+    ) -> tuple[list[Chunk], set[str], int | None]:
+        """Read chunks, linked paths, and current node version in a single pass."""
+        chunks = self.store.get_chunks_by_path(path, include_children=True)
+        linked_paths = self._linked_paths_if_decay_enabled()
+        node = self.store.get_node(path)
+        node_version = node.version if node is not None else None
+        return chunks, linked_paths, node_version
 
     # ── core planning (pure over the already-fetched chunk list) ──────────────
 
@@ -235,13 +243,11 @@ class SimpleOptimizer:
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
-    def _decay_enabled(self) -> bool:
-        return self.decay_rate < 1.0 and self.decay_days > 0
-
-    def _linked_paths_from(self, links: list) -> set[str]:
-        """Extract the set of directly-linked paths from an already-fetched link list."""
+    def _linked_paths_if_decay_enabled(self) -> set[str]:
+        if self.decay_rate >= 1.0:
+            return set()
         linked: set[str] = set()
-        for lnk in links:
+        for lnk in self.store.list_links():
             linked.add(lnk.source_path)
             linked.add(lnk.target_path)
         return linked

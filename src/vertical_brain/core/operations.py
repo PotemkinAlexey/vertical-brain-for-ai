@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any, get_args
 
 from vertical_brain.core.gold import (
     MAX_GOLD_ASPECTS,
+    GoldAspect,
     parse_gold_aspects,
-    parse_gold_content,
     serialize_gold_aspects,
 )
 from vertical_brain.core.models import (
@@ -65,17 +65,16 @@ class StorageOperationExecutor:
         if not validation.valid:
             raise ValueError(self._format_validation_errors(validation))
 
-        if batch.branch_path is not None and batch.start_version is not None:
-            current_node = self.store.get_node(batch.branch_path)
-            if current_node is not None and current_node.version != batch.start_version:
-                raise OptimisticLockException(
-                    f"Optimistic lock conflict on '{batch.branch_path}': "
-                    f"expected version {batch.start_version}, found {current_node.version}."
-                )
-
         transaction = getattr(self.store, "transaction", None)
         context = transaction() if callable(transaction) else nullcontext()
         with context:
+            if batch.branch_path is not None and batch.start_version is not None:
+                current_node = self.store.get_node(batch.branch_path)
+                if current_node is not None and current_node.version != batch.start_version:
+                    raise OptimisticLockException(
+                        f"Optimistic lock conflict on '{batch.branch_path}': "
+                        f"expected version {batch.start_version}, found {current_node.version}."
+                    )
             results = []
             for operation in batch.operations:
                 if not operation.reasoning_summary and batch.reasoning_summary:
@@ -153,6 +152,9 @@ class StorageOperationExecutor:
                 self.store.save_link(self._link_from_input(operation.target_path, link_input))
                 for link_input in operation.links
             ]
+            self._mark_ancestors_dirty(operation.target_path)
+            for link_input in operation.links:
+                self._mark_ancestors_dirty(link_input.target_path)
             return OperationResult(
                 operation=operation.operation,
                 target_path=operation.target_path,
@@ -172,6 +174,9 @@ class StorageOperationExecutor:
         if operation.operation == "append_gold_aspect":
             assert operation.gold_aspect is not None
             overflow_path = self._apply_append_gold_aspect(operation.target_path, operation.gold_aspect)
+            self._mark_ancestors_dirty(operation.target_path)
+            if overflow_path is not None:
+                self._mark_ancestors_dirty(overflow_path)
             return OperationResult(
                 operation=operation.operation,
                 target_path=operation.target_path,
@@ -181,13 +186,13 @@ class StorageOperationExecutor:
         if operation.operation == "rename_namespace":
             assert operation.new_path is not None
             self._do_rename_namespace(operation.target_path, operation.new_path)
+            self._mark_ancestors_dirty(operation.new_path)
             return OperationResult(operation=operation.operation, target_path=operation.target_path)
 
         raise ValueError(f"Unsupported storage operation: {operation.operation}")
 
     def _apply_append_gold_aspect(self, path: str, aspect: str) -> str | None:
         """Returns overflow path if a new sibling was created, otherwise None."""
-        from vertical_brain.core.gold import GoldAspect
         tail = self._gold_tail_path(path)
         gold_chunks = [
             c for c in self.store.get_chunks_by_path(tail)
@@ -195,31 +200,22 @@ class StorageOperationExecutor:
         ]
         if not gold_chunks:
             self.store.ensure_node(tail)
-            self.store.save_chunk(Chunk(
-                node_path=tail,
-                content=serialize_gold_aspects([GoldAspect(text=aspect)]),
-                layer="gold",
-                source="model",
-            ))
+            self.store.save_chunk(
+                Chunk(node_path=tail, content=serialize_gold_aspects([GoldAspect(text=aspect)]),
+                      layer="gold", source="model")
+            )
             return None
 
         latest = max(gold_chunks, key=lambda c: c.created_at)
         aspects = parse_gold_aspects(latest.content)
 
-        # Deduplicate: if same text already present, refresh updated_at in-place.
+        # Dedup: refresh updated_at if exact text match already exists.
         for existing in aspects:
             if existing.text == aspect:
                 existing.updated_at = utc_now()
-                latest.status = "superseded"
+                latest.content = serialize_gold_aspects(aspects)
                 latest.updated_at = utc_now()
                 self.store.update_chunk(latest)
-                self.store.save_chunk(Chunk(
-                    node_path=tail,
-                    content=serialize_gold_aspects(aspects),
-                    layer="gold",
-                    source="model",
-                    lineage=[latest.id],
-                ))
                 return None
 
         if len(aspects) < MAX_GOLD_ASPECTS:
@@ -227,23 +223,19 @@ class StorageOperationExecutor:
             latest.status = "superseded"
             latest.updated_at = utc_now()
             self.store.update_chunk(latest)
-            self.store.save_chunk(Chunk(
-                node_path=tail,
-                content=serialize_gold_aspects(aspects),
-                layer="gold",
-                source="model",
-                lineage=[latest.id],
-            ))
+            self.store.save_chunk(
+                Chunk(node_path=tail, content=serialize_gold_aspects(aspects),
+                      layer="gold", source="model", lineage=[latest.id])
+            )
             return None
         else:
             overflow = _next_overflow_path(tail)
             self.store.ensure_node(overflow)
-            self.store.save_chunk(Chunk(
-                node_path=overflow,
-                content=serialize_gold_aspects([GoldAspect(text=aspect)]),
-                layer="gold",
-                source="model",
-            ))
+            self.store.save_chunk(
+                Chunk(node_path=overflow,
+                      content=serialize_gold_aspects([GoldAspect(text=aspect)]),
+                      layer="gold", source="model")
+            )
             self.store.save_link(Link(
                 source_path=tail,
                 target_path=overflow,
@@ -394,19 +386,36 @@ class StorageOperationExecutor:
 
         if operation.operation == "rename_namespace":
             if not isinstance(operation.new_path, str) or not operation.new_path.strip():
-                issues.append(
-                    ValidationIssue(
+                issues.append(ValidationIssue(
+                    path=f"{path}.new_path",
+                    message="rename_namespace requires non-empty new_path",
+                ))
+                return
+            self._validate_namespace_path(operation.new_path, path=f"{path}.new_path", issues=issues)
+            if operation.new_path == operation.target_path:
+                issues.append(ValidationIssue(
+                    path=f"{path}.new_path",
+                    message="rename_namespace: new_path must differ from target_path",
+                ))
+                return
+            if operation.new_path.startswith(operation.target_path + "/"):
+                issues.append(ValidationIssue(
+                    path=f"{path}.new_path",
+                    message="rename_namespace: cannot rename a namespace into its own descendant",
+                ))
+                return
+            get_node = getattr(self.store, "get_node", None)
+            if callable(get_node):
+                if get_node(operation.target_path) is None:
+                    issues.append(ValidationIssue(
+                        path=f"{path}.target_path",
+                        message=f"rename_namespace: target_path '{operation.target_path}' does not exist",
+                    ))
+                if get_node(operation.new_path) is not None:
+                    issues.append(ValidationIssue(
                         path=f"{path}.new_path",
-                        message="rename_namespace requires non-empty new_path",
-                    )
-                )
-            elif operation.new_path == operation.target_path:
-                issues.append(
-                    ValidationIssue(
-                        path=f"{path}.new_path",
-                        message="rename_namespace: new_path must differ from target_path",
-                    )
-                )
+                        message=f"rename_namespace: new_path '{operation.new_path}' already exists",
+                    ))
             return
 
     def _validate_chunk_input(self, chunk: ChunkInput, *, path: str, issues: list[ValidationIssue]) -> None:
@@ -641,6 +650,28 @@ def _string_item(value: object, list_name: str) -> str:
     return value
 
 
+def operation_to_staging(content: str, original_target: str, reason: str) -> StorageOperation:
+    """Build an operation that writes a Bronze chunk to the staging buffer.
+
+    Used when the router cannot classify with enough confidence.  The chunk
+    will remain in STAGING/Unclassified until a future optimize pass or manual
+    reclassification.
+    """
+    from vertical_brain.core.models import STAGING_PATH
+    return StorageOperation(
+        operation="append_chunk",
+        target_path=STAGING_PATH,
+        chunk=ChunkInput(
+            content=content,
+            layer="bronze",
+            content_type="note",
+            source="staging",
+            confidence=0.0,
+        ),
+        reasoning_summary=f"Staged from '{original_target}': {reason}",
+    )
+
+
 def operation_from_route_decision(decision: RouteDecision, content: str) -> StorageOperation:
     return StorageOperation(
         operation="append_chunk",
@@ -666,26 +697,4 @@ def operation_from_route_decision(decision: RouteDecision, content: str) -> Stor
         ],
         confidence=decision.confidence,
         reasoning_summary=decision.reasoning_summary,
-    )
-
-
-def operation_to_staging(content: str, original_target: str, reason: str) -> StorageOperation:
-    """Build an operation that writes a Bronze chunk to the staging buffer.
-
-    Used when the router cannot classify with enough confidence.  The chunk
-    will remain in STAGING/Unclassified until a future optimize pass or manual
-    reclassification.
-    """
-    from vertical_brain.core.models import STAGING_PATH
-    return StorageOperation(
-        operation="append_chunk",
-        target_path=STAGING_PATH,
-        chunk=ChunkInput(
-            content=content,
-            layer="bronze",
-            content_type="note",
-            source="staging",
-            confidence=0.0,
-        ),
-        reasoning_summary=f"Staged from '{original_target}': {reason}",
     )

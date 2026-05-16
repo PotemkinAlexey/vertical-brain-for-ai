@@ -264,10 +264,7 @@ def test_mark_stale_all_active_non_gold_when_no_ids(tmp_path):
 def test_append_gold_aspect_reports_overflow_path(tmp_path):
     from vertical_brain.core.gold import MAX_GOLD_ASPECTS, GoldAspect, serialize_gold_aspects
     mcp, store = _mcp(tmp_path)
-    # Pre-fill a gold chunk that is already at the aspect limit.
-    full_content = serialize_gold_aspects(
-        [GoldAspect(text=f"aspect {i}") for i in range(MAX_GOLD_ASPECTS)]
-    )
+    full_content = serialize_gold_aspects([GoldAspect(text=f"a{i}") for i in range(MAX_GOLD_ASPECTS)])
     store.save_chunk(Chunk(node_path="WORK/DataArt", content=full_content, layer="gold"))
 
     resp = _call(mcp, "append_gold_aspect", {"path": "WORK/DataArt", "aspect": "overflow aspect"})

@@ -453,6 +453,20 @@ class SQLiteStore:
                 """,
                 (new_prefix, new_len + 1, old_exact, old_like),
             )
+            # Recalculate name and parent_path from the new path for all renamed nodes.
+            renamed_rows = self.conn.execute(
+                "SELECT path FROM nodes WHERE path = ? OR path LIKE ?",
+                (new_prefix, new_prefix + "/%"),
+            ).fetchall()
+            for row in renamed_rows:
+                new_path = row[0]
+                parts = new_path.split("/")
+                name = parts[-1]
+                parent_path = "/".join(parts[:-1]) if len(parts) > 1 else None
+                self.conn.execute(
+                    "UPDATE nodes SET name = ?, parent_path = ? WHERE path = ?",
+                    (name, parent_path, new_path),
+                )
         if self._fts_enabled:
             self.rebuild_search_index()
 

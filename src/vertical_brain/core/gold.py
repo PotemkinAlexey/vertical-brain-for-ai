@@ -2,44 +2,54 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from uuid import uuid4
 
 if TYPE_CHECKING:
-    from vertical_brain.core.models import Chunk, utc_now as _utc_now
-
-
-def _now() -> str:
-    from vertical_brain.core.models import utc_now
-    return utc_now()
+    from vertical_brain.core.models import Chunk
 
 
 @runtime_checkable
 class LlmProvider(Protocol):
-    """Minimal LLM interface required by GoldBuilder — compatible with router.LLMProvider."""
     def complete(self, prompt: str) -> str: ...
 
-
-# ── Structured Gold aspect ────────────────────────────────────────────────────
 
 MAX_GOLD_ASPECTS = 20
 
 
+def parse_gold_content(content: str) -> list[str]:
+    """Parse Gold chunk content into a list of aspect text strings.
+
+    Supports all three formats for backward compatibility:
+    - Plain text: ``"Delta migration | AutoLoader streaming"``
+    - v1 JSON: ``{"aspects": ["Delta migration", ...]}``
+    - v2 JSON: ``{"aspects": [{"id": "...", "text": "...", "updated_at": "..."}]}``
+    """
+    return [a.text for a in parse_gold_aspects(content)]
+
+
+# ── Structured Gold aspects (v2) ──────────────────────────────────────────────
+
+def _utc_now() -> str:
+    from vertical_brain.core.models import utc_now
+    return utc_now()
+
+
 @dataclass
 class GoldAspect:
-    """A single named knowledge aspect stored inside a Gold chunk."""
+    """A single Gold aspect with stable identity for dedup and refresh tracking."""
     text: str
-    id: str = field(default_factory=lambda: str(uuid4())[:8])
-    updated_at: str = field(default_factory=_now)
+    id: str = field(default_factory=lambda: str(uuid4()))
+    updated_at: str = field(default_factory=_utc_now)
 
 
 def parse_gold_aspects(content: str) -> list[GoldAspect]:
     """Parse Gold chunk content into a list of GoldAspect objects.
 
-    Handles three formats (newest-first for backward compatibility):
-    - Structured v2 JSON: ``{"aspects": [{"id": "...", "text": "...", "updated_at": "..."}]}``
-    - Structured v1 JSON: ``{"aspects": ["plain string", ...], ...}``
-    - Plain text:         ``"Delta migration | AutoLoader streaming"``
+    Handles all three storage formats:
+    - Plain text: ``"Delta migration | AutoLoader streaming"``
+    - v1 JSON: ``{"aspects": ["Delta migration", ...]}``
+    - v2 JSON: ``{"aspects": [{"id": "...", "text": "...", "updated_at": "..."}]}``
     """
     text = content.strip()
     if not text:
@@ -50,42 +60,31 @@ def parse_gold_aspects(content: str) -> list[GoldAspect]:
         except json.JSONDecodeError:
             parsed = None
         if isinstance(parsed, dict) and isinstance(parsed.get("aspects"), list):
-            result: list[GoldAspect] = []
+            aspects: list[GoldAspect] = []
             for item in parsed["aspects"]:
                 if isinstance(item, dict):
-                    t = str(item.get("text", "")).strip()
+                    t = item.get("text", "")
+                    if not t or not str(t).strip():
+                        continue
+                    aspects.append(GoldAspect(
+                        text=str(t).strip(),
+                        id=item.get("id", str(uuid4())),
+                        updated_at=item.get("updated_at", _utc_now()),
+                    ))
+                else:
+                    t = str(item).strip()
                     if t:
-                        result.append(GoldAspect(
-                            text=t,
-                            id=str(item.get("id", str(uuid4())[:8])),
-                            updated_at=str(item.get("updated_at", _now())),
-                        ))
-                elif isinstance(item, str) and item.strip():
-                    result.append(GoldAspect(text=item.strip()))
-            return result
-    return [GoldAspect(text=part) for part in content.split(" | ") if part.strip()]
+                        aspects.append(GoldAspect(text=t))
+            return aspects
+    return [GoldAspect(text=part) for part in (s.strip() for s in text.split(" | ")) if part]
 
 
 def serialize_gold_aspects(aspects: list[GoldAspect]) -> str:
-    """Serialize a list of GoldAspect objects to a Gold chunk content string."""
+    """Serialize a list of GoldAspects to the v2 JSON storage format."""
     return json.dumps(
-        {
-            "aspects": [
-                {"id": a.id, "text": a.text, "updated_at": a.updated_at}
-                for a in aspects
-            ]
-        },
+        {"aspects": [{"id": a.id, "text": a.text, "updated_at": a.updated_at} for a in aspects]},
         ensure_ascii=False,
     )
-
-
-def parse_gold_content(content: str) -> list[str]:
-    """Parse Gold chunk content into a list of plain aspect strings.
-
-    Supports all three formats — see ``parse_gold_aspects`` for details.
-    Kept for backward compatibility with callers that only need text strings.
-    """
-    return [a.text for a in parse_gold_aspects(content)]
 
 
 # ── Immutable Gold reduction structures ──────────────────────────────────────
@@ -240,20 +239,16 @@ class GoldBuilder:
 
 
 class LlmGoldBuilder(GoldBuilder):
-    """GoldBuilder that uses an LLM to distil Silver chunks into a GoldDocument.
+    """GoldBuilder that calls an LLM provider for distillation.
 
-    The LLM is called with the structured prompt from ``distil_prompt()``.
-    If the model returns malformed JSON, or if ``silver_chunks`` is empty,
-    the call transparently falls back to the deterministic ``GoldBuilder.build()``.
-
-    Usage::
-
-        builder = LlmGoldBuilder(llm=my_llm_provider)
-        doc = builder.build(silver_chunks, node_path="WORK/Project")
+    Falls back to the deterministic GoldBuilder when:
+    - the provider raises an exception
+    - the response is not valid JSON
+    - no returned fact has at least one source_silver_id matching a real Silver chunk
     """
 
-    def __init__(self, llm: LlmProvider) -> None:
-        self._llm = llm
+    def __init__(self, provider: Any) -> None:
+        self._provider = provider
 
     def build(
         self,
@@ -264,73 +259,61 @@ class LlmGoldBuilder(GoldBuilder):
     ) -> GoldDocument:
         if not silver_chunks:
             return GoldDocument(node_path=node_path)
-
         prompt = self.distil_prompt(silver_chunks, previous_gold)
         try:
-            raw = self._llm.complete(prompt)
-            doc = self._parse_llm_response(raw, silver_chunks, node_path)
-            if doc is not None:
-                return doc
+            response = self._provider.complete(prompt)
+            doc = self._parse_llm_response(response, silver_chunks, node_path)
         except Exception:
-            pass
-        return super().build(silver_chunks, node_path=node_path, previous_gold=previous_gold)
+            doc = None
+        if doc is None:
+            return super().build(silver_chunks, node_path=node_path, previous_gold=previous_gold)
+        return doc
 
     def _parse_llm_response(
         self,
-        raw: str,
+        response: str,
         silver_chunks: list[Chunk],
         node_path: str,
     ) -> GoldDocument | None:
-        """Parse LLM JSON response into GoldDocument; return None on any parse failure."""
-        text = raw.strip()
-        # Strip markdown code fences if the model wrapped the JSON.
-        if text.startswith("```"):
-            lines = text.splitlines()
-            text = "\n".join(
-                line for line in lines
-                if not line.startswith("```")
-            ).strip()
+        """Parse and validate the LLM JSON response.
+
+        Returns None (triggering fallback) if JSON is malformed or every fact
+        lacks a valid source_silver_id that maps back to a real Silver chunk.
+        """
         try:
-            payload = json.loads(text)
-        except (json.JSONDecodeError, ValueError):
+            parsed = json.loads(response)
+        except (json.JSONDecodeError, TypeError, ValueError):
             return None
-        if not isinstance(payload, dict):
-            return None
-
-        silver_ids = {c.id for c in silver_chunks}
-        facts_raw = payload.get("facts", [])
-        if not isinstance(facts_raw, list):
+        if not isinstance(parsed, dict):
             return None
 
+        valid_silver_ids = {c.id for c in silver_chunks}
         facts: list[GoldFact] = []
-        for item in facts_raw:
-            if not isinstance(item, dict):
-                continue
-            content = item.get("content", "")
-            if not isinstance(content, str) or not content.strip():
+        for f in parsed.get("facts", []):
+            if not isinstance(f, dict):
                 continue
             source_ids = [
-                sid for sid in item.get("source_silver_ids", [])
-                if isinstance(sid, str) and sid in silver_ids
+                sid for sid in f.get("source_silver_ids", [])
+                if isinstance(sid, str) and sid in valid_silver_ids
             ]
-            confidence = item.get("confidence", 1.0)
-            if not isinstance(confidence, (int, float)):
-                confidence = 1.0
+            if not source_ids:
+                continue
+            content = f.get("content", "")
+            if not isinstance(content, str) or not content.strip():
+                continue
             facts.append(GoldFact(
                 content=content.strip(),
                 source_silver_ids=source_ids,
-                confidence=float(confidence),
+                confidence=float(f.get("confidence", 1.0)),
             ))
 
         if not facts:
             return None
 
-        entities = [str(e) for e in payload.get("entities", []) if str(e).strip()]
-        rules = [str(r) for r in payload.get("rules", []) if str(r).strip()]
         return GoldDocument(
             facts=facts,
-            entities=entities[:20],
-            rules=rules,
+            entities=parsed.get("entities", []),
+            rules=parsed.get("rules", []),
             node_path=node_path,
-            built_from_silver_ids=[c.id for c in silver_chunks],
+            built_from_silver_ids=sorted(valid_silver_ids),
         )

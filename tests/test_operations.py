@@ -190,7 +190,6 @@ def test_dry_run_batch_returns_invalid_result_without_mutating_store(tmp_path):
 
 
 def test_append_gold_aspect_creates_gold_chunk_and_extends_on_fit(tmp_path):
-    from vertical_brain.core.gold import parse_gold_content
     store = JsonStore(tmp_path)
     executor = StorageOperationExecutor(store)
 
@@ -199,6 +198,7 @@ def test_append_gold_aspect_creates_gold_chunk_and_extends_on_fit(tmp_path):
 
     gold = [c for c in store.get_chunks_by_path("WORK/DataArt") if c.layer == "gold" and c.status == "active"]
     assert len(gold) == 1
+    from vertical_brain.core.gold import parse_gold_content
     assert parse_gold_content(gold[0].content) == ["migration", "clusters"]
 
 
@@ -207,12 +207,9 @@ def test_append_gold_aspect_creates_overflow_sibling_when_full(tmp_path):
     store = JsonStore(tmp_path)
     executor = StorageOperationExecutor(store)
 
-    # Pre-fill a gold chunk at the aspect limit.
-    full_content = serialize_gold_aspects(
-        [GoldAspect(text=f"aspect {i}") for i in range(MAX_GOLD_ASPECTS)]
-    )
+    # Fill the primary node to MAX_GOLD_ASPECTS
+    full_content = serialize_gold_aspects([GoldAspect(text=f"a{i}") for i in range(MAX_GOLD_ASPECTS)])
     store.save_chunk(Chunk(node_path="WORK/DataArt", content=full_content, layer="gold"))
-
     executor.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/DataArt", gold_aspect="overflow"))
 
     primary_gold = [c for c in store.get_chunks_by_path("WORK/DataArt") if c.layer == "gold" and c.status == "active"]
