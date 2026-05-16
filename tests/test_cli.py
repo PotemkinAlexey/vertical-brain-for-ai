@@ -193,13 +193,16 @@ def test_cli_ingest_prints_stale_candidates_without_mutating_old_chunks(monkeypa
     assert {chunk.status for chunk in chunks} == {"active"}
 
 
-def test_cli_unknown_ingest_asks_clarification_without_writing_chunk(monkeypatch, capsys, tmp_path):
+def test_cli_unknown_ingest_routes_to_staging(monkeypatch, capsys, tmp_path):
     output = run_cli(monkeypatch, capsys, tmp_path, "ingest", "random note")
 
     assert "Action: ask_clarification" in output
-    assert "Clarification needed:" in output
+    assert "staged to STAGING/Unclassified" in output
     store = JsonStore(tmp_path / "data")
-    assert store.list_chunks() == []
+    chunks = store.list_chunks()
+    assert len(chunks) == 1
+    assert chunks[0].node_path == "STAGING/Unclassified"
+    assert chunks[0].source == "staging"
 
 
 def test_cli_unknown_ask_requests_clarification(monkeypatch, capsys, tmp_path):

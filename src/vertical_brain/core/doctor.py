@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
+
+from vertical_brain.core.models import STAGING_PATH
 
 if TYPE_CHECKING:
     from vertical_brain.storage.protocol import StorageProvider
+
+
+STAGING_AGE_WARNING_DAYS = 3
 
 
 _VALID_LAYERS = {"bronze", "silver", "gold"}
@@ -42,6 +48,7 @@ class Doctor:
         issues += self._check_invalid_chunk_fields()
         issues += self._check_links_missing_reason()
         issues += self._check_fts_index_stale_leak()
+        issues += self._check_stale_staging_chunks()
         return issues
 
     def _node_paths(self) -> set[str]:
@@ -202,4 +209,29 @@ class Doctor:
                 message=f"chunk {row[0]} has status '{row[1]}' but is still in the FTS search index",
                 path=None,
             ))
+        return issues
+
+    def _check_stale_staging_chunks(self) -> list[DoctorIssue]:
+        issues: list[DoctorIssue] = []
+        now = datetime.now(timezone.utc)
+        for chunk in self._store.list_chunks():
+            if chunk.node_path != STAGING_PATH or chunk.status != "active":
+                continue
+            try:
+                created = datetime.fromisoformat(chunk.created_at)
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                age_days = (now - created).total_seconds() / 86400
+            except (ValueError, TypeError):
+                age_days = 0.0
+            if age_days >= STAGING_AGE_WARNING_DAYS:
+                issues.append(DoctorIssue(
+                    severity="warning",
+                    check="stale_staging_chunk",
+                    message=(
+                        f"chunk {chunk.id} has been in {STAGING_PATH} for "
+                        f"{age_days:.0f} days without reclassification"
+                    ),
+                    path=STAGING_PATH,
+                ))
         return issues

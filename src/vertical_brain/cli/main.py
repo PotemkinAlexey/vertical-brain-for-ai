@@ -11,12 +11,13 @@ from vertical_brain.core.embedding_router import EmbeddingRouter
 from vertical_brain.core.embedding_search import EmbeddingSearch
 from vertical_brain.mcp.server import run_stdio
 from vertical_brain.core.json_schema import format_json_schema_errors, validate_json_schema
-from vertical_brain.core.models import ContextPolicy, OperationBatchResult
+from vertical_brain.core.models import ContextPolicy, OperationBatchResult, STAGING_PATH
 from vertical_brain.core.optimizer import SimpleOptimizer
 from vertical_brain.core.operations import (
     StorageOperationExecutor,
     operation_batch_from_dict,
     operation_from_route_decision,
+    operation_to_staging,
 )
 from vertical_brain.core.router import LLMRouter, StorageModel
 from vertical_brain.core.search import BrainSearch
@@ -186,7 +187,13 @@ def main() -> None:
             print(decision.to_json())
 
         if router.requires_clarification(decision):
-            print("Clarification needed: provide a more specific domain or namespace hint.")
+            operation = operation_to_staging(
+                args.text,
+                original_target=decision.target_path,
+                reason=f"confidence={decision.confidence:.2f}, action={decision.action}",
+            )
+            StorageOperationExecutor(store).apply(operation)
+            print(f"Low confidence — staged to {STAGING_PATH} for re-evaluation during next optimize.")
             return
 
         operation = operation_from_route_decision(decision, args.text)

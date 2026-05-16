@@ -6,7 +6,12 @@ from contextlib import nullcontext
 from dataclasses import replace as dc_replace
 from typing import TYPE_CHECKING, Any, get_args
 
-from vertical_brain.core.gold import parse_gold_content
+from vertical_brain.core.gold import (
+    MAX_GOLD_ASPECTS,
+    parse_gold_aspects,
+    parse_gold_content,
+    serialize_gold_aspects,
+)
 from vertical_brain.core.models import (
     Chunk,
     ChunkInput,
@@ -33,7 +38,6 @@ if TYPE_CHECKING:
 VALID_CONTENT_TYPES = set(get_args(ContentType))
 VALID_LAYERS = set(get_args(Layer))
 VALID_OPERATIONS = set(get_args(OperationType))
-MAX_GOLD_CHARS = 200
 
 
 def _next_overflow_path(path: str) -> str:
@@ -183,6 +187,7 @@ class StorageOperationExecutor:
 
     def _apply_append_gold_aspect(self, path: str, aspect: str) -> str | None:
         """Returns overflow path if a new sibling was created, otherwise None."""
+        from vertical_brain.core.gold import GoldAspect
         tail = self._gold_tail_path(path)
         gold_chunks = [
             c for c in self.store.get_chunks_by_path(tail)
@@ -190,24 +195,55 @@ class StorageOperationExecutor:
         ]
         if not gold_chunks:
             self.store.ensure_node(tail)
-            self.store.save_chunk(Chunk(node_path=tail, content=aspect, layer="gold", source="model"))
+            self.store.save_chunk(Chunk(
+                node_path=tail,
+                content=serialize_gold_aspects([GoldAspect(text=aspect)]),
+                layer="gold",
+                source="model",
+            ))
             return None
 
         latest = max(gold_chunks, key=lambda c: c.created_at)
-        existing_aspects = parse_gold_content(latest.content)
-        new_content = " | ".join(existing_aspects + [aspect])
-        if len(new_content) <= MAX_GOLD_CHARS:
+        aspects = parse_gold_aspects(latest.content)
+
+        # Deduplicate: if same text already present, refresh updated_at in-place.
+        for existing in aspects:
+            if existing.text == aspect:
+                existing.updated_at = utc_now()
+                latest.status = "superseded"
+                latest.updated_at = utc_now()
+                self.store.update_chunk(latest)
+                self.store.save_chunk(Chunk(
+                    node_path=tail,
+                    content=serialize_gold_aspects(aspects),
+                    layer="gold",
+                    source="model",
+                    lineage=[latest.id],
+                ))
+                return None
+
+        if len(aspects) < MAX_GOLD_ASPECTS:
+            aspects.append(GoldAspect(text=aspect))
             latest.status = "superseded"
             latest.updated_at = utc_now()
             self.store.update_chunk(latest)
-            self.store.save_chunk(
-                Chunk(node_path=tail, content=new_content, layer="gold", source="model", lineage=[latest.id])
-            )
+            self.store.save_chunk(Chunk(
+                node_path=tail,
+                content=serialize_gold_aspects(aspects),
+                layer="gold",
+                source="model",
+                lineage=[latest.id],
+            ))
             return None
         else:
             overflow = _next_overflow_path(tail)
             self.store.ensure_node(overflow)
-            self.store.save_chunk(Chunk(node_path=overflow, content=aspect, layer="gold", source="model"))
+            self.store.save_chunk(Chunk(
+                node_path=overflow,
+                content=serialize_gold_aspects([GoldAspect(text=aspect)]),
+                layer="gold",
+                source="model",
+            ))
             self.store.save_link(Link(
                 source_path=tail,
                 target_path=overflow,
@@ -300,6 +336,8 @@ class StorageOperationExecutor:
                 raise ValueError(f"Chunk {chunk_id} does not belong to {operation.target_path}")
             chunk.status = status
             chunk.updated_at = utc_now()
+            if status in ("stale", "superseded", "legacy", "contradicted"):
+                chunk.valid_to = utc_now()
             self.store.update_chunk(chunk)
 
     def _validate_operation(
@@ -628,4 +666,26 @@ def operation_from_route_decision(decision: RouteDecision, content: str) -> Stor
         ],
         confidence=decision.confidence,
         reasoning_summary=decision.reasoning_summary,
+    )
+
+
+def operation_to_staging(content: str, original_target: str, reason: str) -> StorageOperation:
+    """Build an operation that writes a Bronze chunk to the staging buffer.
+
+    Used when the router cannot classify with enough confidence.  The chunk
+    will remain in STAGING/Unclassified until a future optimize pass or manual
+    reclassification.
+    """
+    from vertical_brain.core.models import STAGING_PATH
+    return StorageOperation(
+        operation="append_chunk",
+        target_path=STAGING_PATH,
+        chunk=ChunkInput(
+            content=content,
+            layer="bronze",
+            content_type="note",
+            source="staging",
+            confidence=0.0,
+        ),
+        reasoning_summary=f"Staged from '{original_target}': {reason}",
     )

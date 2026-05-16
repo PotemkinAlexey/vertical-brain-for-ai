@@ -3,9 +3,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from uuid import uuid4
 
 if TYPE_CHECKING:
-    from vertical_brain.core.models import Chunk
+    from vertical_brain.core.models import Chunk, utc_now as _utc_now
+
+
+def _now() -> str:
+    from vertical_brain.core.models import utc_now
+    return utc_now()
 
 
 @runtime_checkable
@@ -14,12 +20,26 @@ class LlmProvider(Protocol):
     def complete(self, prompt: str) -> str: ...
 
 
-def parse_gold_content(content: str) -> list[str]:
-    """Parse Gold chunk content into a list of aspects.
+# ── Structured Gold aspect ────────────────────────────────────────────────────
 
-    Supports both formats for backward compatibility:
-    - Plain text: ``"Delta migration | AutoLoader streaming"``
-    - Structured JSON: ``{"aspects": ["Delta migration", ...], "last_updated": "..."}``
+MAX_GOLD_ASPECTS = 20
+
+
+@dataclass
+class GoldAspect:
+    """A single named knowledge aspect stored inside a Gold chunk."""
+    text: str
+    id: str = field(default_factory=lambda: str(uuid4())[:8])
+    updated_at: str = field(default_factory=_now)
+
+
+def parse_gold_aspects(content: str) -> list[GoldAspect]:
+    """Parse Gold chunk content into a list of GoldAspect objects.
+
+    Handles three formats (newest-first for backward compatibility):
+    - Structured v2 JSON: ``{"aspects": [{"id": "...", "text": "...", "updated_at": "..."}]}``
+    - Structured v1 JSON: ``{"aspects": ["plain string", ...], ...}``
+    - Plain text:         ``"Delta migration | AutoLoader streaming"``
     """
     text = content.strip()
     if not text:
@@ -30,8 +50,42 @@ def parse_gold_content(content: str) -> list[str]:
         except json.JSONDecodeError:
             parsed = None
         if isinstance(parsed, dict) and isinstance(parsed.get("aspects"), list):
-            return [str(aspect) for aspect in parsed["aspects"] if str(aspect).strip()]
-    return [aspect.strip() for aspect in text.split(" | ") if aspect.strip()]
+            result: list[GoldAspect] = []
+            for item in parsed["aspects"]:
+                if isinstance(item, dict):
+                    t = str(item.get("text", "")).strip()
+                    if t:
+                        result.append(GoldAspect(
+                            text=t,
+                            id=str(item.get("id", str(uuid4())[:8])),
+                            updated_at=str(item.get("updated_at", _now())),
+                        ))
+                elif isinstance(item, str) and item.strip():
+                    result.append(GoldAspect(text=item.strip()))
+            return result
+    return [GoldAspect(text=part) for part in content.split(" | ") if part.strip()]
+
+
+def serialize_gold_aspects(aspects: list[GoldAspect]) -> str:
+    """Serialize a list of GoldAspect objects to a Gold chunk content string."""
+    return json.dumps(
+        {
+            "aspects": [
+                {"id": a.id, "text": a.text, "updated_at": a.updated_at}
+                for a in aspects
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+
+def parse_gold_content(content: str) -> list[str]:
+    """Parse Gold chunk content into a list of plain aspect strings.
+
+    Supports all three formats — see ``parse_gold_aspects`` for details.
+    Kept for backward compatibility with callers that only need text strings.
+    """
+    return [a.text for a in parse_gold_aspects(content)]
 
 
 # ── Immutable Gold reduction structures ──────────────────────────────────────
