@@ -4,6 +4,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterator
 from uuid import uuid4
@@ -16,6 +17,9 @@ from vertical_brain.core.search import fts_query, lexical_search, make_snippet, 
 
 
 class SQLiteStore:
+    VACUUM_INACTIVE_STATUSES = ("stale", "superseded", "legacy", "contradicted")
+    VACUUM_MIN_RETENTION_HOURS = 168.0
+
     def __init__(self, root: str | Path = "data", db_name: str = "vertical_brain.sqlite"):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -261,6 +265,108 @@ class SQLiteStore:
             "checkpointed": int(row[2]),
         }
 
+    def vacuum(
+        self,
+        *,
+        retention_hours: float = VACUUM_MIN_RETENTION_HOURS,
+        dry_run: bool = True,
+        force: bool = False,
+        prune_empty_nodes: bool = True,
+        prune_vector_cache: bool = True,
+        reclaim_space: bool = False,
+    ) -> dict[str, Any]:
+        """Purge old inactive chunks and service indexes.
+
+        This is the storage-maintenance equivalent of Databricks VACUUM:
+        inactive chunks stay query-invisible immediately, then this command
+        physically removes them after a retention window. Applying a retention
+        below seven days requires *force*.
+        """
+        if retention_hours < 0:
+            raise ValueError("retention_hours must be non-negative")
+        if not dry_run and retention_hours < self.VACUUM_MIN_RETENTION_HOURS and not force:
+            raise ValueError("Vacuum retention below 168 hours requires force=True")
+
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=retention_hours)).isoformat()
+        candidate_rows = self._vacuum_candidate_rows(cutoff)
+        candidates = [
+            {
+                "id": row["id"],
+                "path": row["node_path"],
+                "layer": row["layer"],
+                "content_type": row["content_type"],
+                "status": row["status"],
+                "source": row["source"],
+                "valid_to": row["valid_to"],
+                "updated_at": row["updated_at"],
+            }
+            for row in candidate_rows
+        ]
+        by_status: dict[str, int] = {}
+        for candidate in candidates:
+            status = candidate["status"]
+            by_status[status] = by_status.get(status, 0) + 1
+
+        result: dict[str, Any] = {
+            "dry_run": dry_run,
+            "retention_hours": retention_hours,
+            "cutoff": cutoff,
+            "statuses": list(self.VACUUM_INACTIVE_STATUSES),
+            "eligible_chunks": len(candidates),
+            "eligible_by_status": by_status,
+            "deleted_chunks": 0,
+            "deleted_empty_nodes": 0,
+            "deleted_vectors": 0,
+            "reclaimed_space": False,
+            "checkpoint": None,
+            "candidates": candidates,
+        }
+        if dry_run:
+            return result
+
+        candidate_ids = [row["id"] for row in candidate_rows]
+        with self.transaction():
+            if candidate_ids:
+                placeholders = ",".join("?" for _ in candidate_ids)
+                if self._fts_enabled:
+                    self.conn.execute(
+                        f"""
+                        DELETE FROM search_index
+                        WHERE record_type = 'chunk'
+                          AND record_id IN ({placeholders})
+                        """,
+                        candidate_ids,
+                    )
+                cursor = self.conn.execute(
+                    f"DELETE FROM chunks WHERE id IN ({placeholders})",
+                    candidate_ids,
+                )
+                result["deleted_chunks"] = cursor.rowcount
+
+            if prune_vector_cache:
+                cursor = self.conn.execute(
+                    """
+                    DELETE FROM vector_cache
+                    WHERE content_hash NOT IN (
+                        SELECT DISTINCT content_hash
+                        FROM chunks
+                        WHERE content_hash <> ''
+                    )
+                    """
+                )
+                result["deleted_vectors"] = cursor.rowcount
+
+            if prune_empty_nodes:
+                result["deleted_empty_nodes"] = self._delete_empty_nodes()
+
+        if self._fts_enabled:
+            self.rebuild_search_index()
+        if reclaim_space:
+            self.conn.execute("VACUUM")
+            result["reclaimed_space"] = True
+        result["checkpoint"] = self.checkpoint("TRUNCATE")
+        return result
+
     def backup_to(self, destination: str | Path, *, overwrite: bool = False) -> Path:
         if self._transaction_depth != 0:
             raise RuntimeError("Cannot create a SQLite backup while a transaction is open")
@@ -285,6 +391,42 @@ class SQLiteStore:
                 pass
             raise
         return backup_file
+
+    def _vacuum_candidate_rows(self, cutoff: str) -> list[sqlite3.Row]:
+        placeholders = ",".join("?" for _ in self.VACUUM_INACTIVE_STATUSES)
+        return self.conn.execute(
+            f"""
+            SELECT *
+            FROM chunks
+            WHERE status IN ({placeholders})
+              AND COALESCE(NULLIF(valid_to, ''), updated_at, created_at) <= ?
+            ORDER BY node_path ASC, created_at ASC
+            """,
+            (*self.VACUUM_INACTIVE_STATUSES, cutoff),
+        ).fetchall()
+
+    def _delete_empty_nodes(self) -> int:
+        deleted = 0
+        while True:
+            cursor = self.conn.execute(
+                """
+                DELETE FROM nodes
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM chunks WHERE chunks.node_path = nodes.path
+                )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM links
+                    WHERE links.source_path = nodes.path
+                       OR links.target_path = nodes.path
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM nodes AS child WHERE child.parent_path = nodes.path
+                  )
+                """
+            )
+            if cursor.rowcount == 0:
+                return deleted
+            deleted += cursor.rowcount
 
     def ensure_node(self, path: str) -> Node:
         existing = self.get_node(path)

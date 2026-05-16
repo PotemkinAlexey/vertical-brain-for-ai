@@ -381,6 +381,78 @@ def test_cli_checkpoint_prints_sqlite_status(monkeypatch, capsys, tmp_path):
     assert set(payload) == {"busy", "checkpointed", "log"}
 
 
+def test_cli_vacuum_defaults_to_dry_run(monkeypatch, capsys, tmp_path):
+    data_dir = tmp_path / "data"
+    store = SQLiteStore(data_dir)
+    stale = store.save_chunk(
+        Chunk(
+            node_path="WORK/Old",
+            content="old fact",
+            status="stale",
+            valid_to="2000-01-01T00:00:00+00:00",
+            updated_at="2000-01-01T00:00:00+00:00",
+        )
+    )
+
+    output = run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--data-dir",
+        str(data_dir),
+        "--storage-backend",
+        "sqlite",
+        "vacuum",
+        "--retention-hours",
+        "0",
+        "--json",
+    )
+
+    payload = json.loads(output)
+    assert payload["dry_run"] is True
+    assert payload["eligible_chunks"] == 1
+    assert SQLiteStore(data_dir).get_chunks_by_path("WORK/Old")[0].id == stale.id
+
+
+def test_cli_vacuum_apply_deletes_with_force_and_backup(monkeypatch, capsys, tmp_path):
+    data_dir = tmp_path / "data"
+    SQLiteStore(data_dir).save_chunk(
+        Chunk(
+            node_path="WORK/Old",
+            content="old fact",
+            status="stale",
+            valid_to="2000-01-01T00:00:00+00:00",
+            updated_at="2000-01-01T00:00:00+00:00",
+        )
+    )
+    backup_file = tmp_path / "before-vacuum.sqlite"
+
+    output = run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--data-dir",
+        str(data_dir),
+        "--storage-backend",
+        "sqlite",
+        "vacuum",
+        "--apply",
+        "--force",
+        "--retention-hours",
+        "0",
+        "--backup",
+        str(backup_file),
+        "--json",
+    )
+
+    payload = json.loads(output)
+    assert payload["dry_run"] is False
+    assert payload["deleted_chunks"] == 1
+    assert payload["backup_file"] == str(backup_file)
+    assert backup_file.exists()
+    assert SQLiteStore(data_dir).get_chunks_by_path("WORK/Old") == []
+
+
 def test_cli_operation_apply_writes_operation_batch(monkeypatch, capsys, tmp_path):
     operation_file = tmp_path / "operation_batch.json"
     operation_file.write_text(

@@ -166,6 +166,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     checkpoint.add_argument("--json", action="store_true", help="Print JSON result")
 
+    vacuum = sub.add_parser("vacuum", help="Purge old inactive chunks and maintenance debris")
+    vacuum.add_argument(
+        "--retention-hours",
+        type=float,
+        default=168.0,
+        help="Only purge inactive chunks whose valid_to/updated_at is older than this window",
+    )
+    vacuum.add_argument("--apply", action="store_true", help="Actually delete eligible data; default is dry-run")
+    vacuum.add_argument("--force", action="store_true", help="Allow retention below 168 hours when applying")
+    vacuum.add_argument("--backup", default=None, help="SQLite backup file to write before applying")
+    vacuum.add_argument("--overwrite-backup", action="store_true", help="Replace backup file if it already exists")
+    vacuum.add_argument("--no-prune-empty-nodes", action="store_true", help="Keep empty namespace nodes")
+    vacuum.add_argument("--no-prune-vector-cache", action="store_true", help="Keep orphan embedding vectors")
+    vacuum.add_argument("--reclaim-space", action="store_true", help="Run SQLite VACUUM after purging")
+    vacuum.add_argument("--json", action="store_true", help="Print JSON result")
+
     operation = sub.add_parser("operation")
     operation_sub = operation.add_subparsers(dest="operation_command", required=True)
     operation_dry_run = operation_sub.add_parser("dry-run")
@@ -517,6 +533,41 @@ def main() -> None:
                 "Checkpoint complete: "
                 f"busy={result['busy']}, log={result['log']}, checkpointed={result['checkpointed']}"
             )
+
+    elif args.command == "vacuum":
+        vacuum_store = getattr(store, "vacuum", None)
+        if not callable(vacuum_store):
+            raise ValueError("vacuum is only supported by the SQLite storage backend")
+        backup_file = None
+        if args.apply and args.backup:
+            backup_to = getattr(store, "backup_to", None)
+            if not callable(backup_to):
+                raise ValueError("backup is only supported by the SQLite storage backend")
+            backup_file = backup_to(args.backup, overwrite=args.overwrite_backup)
+        result = vacuum_store(
+            retention_hours=args.retention_hours,
+            dry_run=not args.apply,
+            force=args.force,
+            prune_empty_nodes=not args.no_prune_empty_nodes,
+            prune_vector_cache=not args.no_prune_vector_cache,
+            reclaim_space=args.reclaim_space,
+        )
+        if backup_file is not None:
+            result["backup_file"] = str(backup_file)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        else:
+            mode = "dry run" if result["dry_run"] else "applied"
+            print(
+                f"Vacuum {mode}: eligible={result['eligible_chunks']}, "
+                f"deleted={result['deleted_chunks']}, "
+                f"empty_nodes={result['deleted_empty_nodes']}, "
+                f"vectors={result['deleted_vectors']}"
+            )
+            if backup_file is not None:
+                print(f"Backup written: {backup_file}")
+            if result["dry_run"] and result["eligible_chunks"]:
+                print("Re-run with --apply to delete eligible data.")
 
     elif args.command == "operation":
         payload = json.loads(Path(args.file).read_text(encoding="utf-8"))

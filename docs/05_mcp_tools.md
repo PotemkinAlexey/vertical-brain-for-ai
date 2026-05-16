@@ -241,6 +241,25 @@ No parameters.
 
 ---
 
+### `vacuum`
+
+Databricks-style maintenance cleanup. Dry-run by default. Physically purges old inactive chunks and service debris when `dry_run=false`.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `retention_hours` | number | Retention window before an inactive chunk is eligible (default 168) |
+| `dry_run` | boolean | Preview candidates without deleting (default true) |
+| `force` | boolean | Required to apply retention below 168 hours |
+| `prune_empty_nodes` | boolean | Remove namespace nodes with no chunks, links, or children (default true) |
+| `prune_vector_cache` | boolean | Remove embedding vectors no remaining chunk uses (default true) |
+| `reclaim_space` | boolean | Run SQLite `VACUUM` after purging |
+
+The tool returns counts, candidate metadata, and checkpoint status. Use CLI
+`vb vacuum --apply --backup FILE` when you need an automatic backup before
+deletion.
+
+---
+
 ## Protocol Notes
 
 - The server speaks JSON-RPC 2.0 with Content-Length headers (same framing as LSP)

@@ -50,7 +50,7 @@ def test_tools_list_contains_expected_tools(tmp_path):
         "search", "search_semantic", "context_search", "context_search_semantic",
         "route", "append_chunk", "append_gold_aspect", "create_link",
         "mark_stale", "batch_append", "session_end", "optimize",
-        "operations", "doctor",
+        "operations", "doctor", "vacuum",
     }
 
 
@@ -598,6 +598,50 @@ def test_doctor_detects_duplicate_active_chunks(tmp_path):
         assert "severity" in issue
         assert "check" in issue
         assert "message" in issue
+
+
+# ── vacuum tool ───────────────────────────────────────────────────────────────
+
+def test_vacuum_tool_defaults_to_dry_run(tmp_path):
+    store = SQLiteStore(tmp_path)
+    mcp = VerticalBrainMCP(store)
+    stale = store.save_chunk(
+        Chunk(
+            node_path="WORK/Old",
+            content="obsolete fact",
+            status="stale",
+            valid_to="2000-01-01T00:00:00+00:00",
+            updated_at="2000-01-01T00:00:00+00:00",
+        )
+    )
+
+    resp = _call(mcp, "vacuum", {"retention_hours": 0})
+    data = json.loads(_text(resp))
+
+    assert data["dry_run"] is True
+    assert data["eligible_chunks"] == 1
+    assert store.get_chunks_by_path("WORK/Old")[0].id == stale.id
+
+
+def test_vacuum_tool_can_apply_with_force(tmp_path):
+    store = SQLiteStore(tmp_path)
+    mcp = VerticalBrainMCP(store)
+    store.save_chunk(
+        Chunk(
+            node_path="WORK/Old",
+            content="obsolete fact",
+            status="stale",
+            valid_to="2000-01-01T00:00:00+00:00",
+            updated_at="2000-01-01T00:00:00+00:00",
+        )
+    )
+
+    resp = _call(mcp, "vacuum", {"retention_hours": 0, "dry_run": False, "force": True})
+    data = json.loads(_text(resp))
+
+    assert data["dry_run"] is False
+    assert data["deleted_chunks"] == 1
+    assert store.get_chunks_by_path("WORK/Old") == []
 
 
 # ── batch_append default reasoning_summary ────────────────────────────────────

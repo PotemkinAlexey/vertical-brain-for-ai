@@ -316,6 +316,27 @@ _TOOLS: list[dict[str, Any]] = [
             "properties": {},
         },
     },
+    {
+        "name": "vacuum",
+        "description": (
+            "Databricks-style maintenance vacuum. Dry-run by default. "
+            "Physically purges old stale/superseded chunks, orphan vectors, and empty namespaces."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "retention_hours": {"type": "number", "description": "Default 168 hours"},
+                "dry_run": {"type": "boolean", "description": "Default true"},
+                "force": {
+                    "type": "boolean",
+                    "description": "Required to apply retention below 168 hours",
+                },
+                "prune_empty_nodes": {"type": "boolean", "description": "Default true"},
+                "prune_vector_cache": {"type": "boolean", "description": "Default true"},
+                "reclaim_space": {"type": "boolean", "description": "Run SQLite VACUUM after purging"},
+            },
+        },
+    },
 ]
 
 _TOOLS_BY_NAME: dict[str, dict[str, Any]] = {tool["name"]: tool for tool in _TOOLS}
@@ -642,6 +663,20 @@ class VerticalBrainMCP:
                 {"severity": i.severity, "check": i.check, "message": i.message, "path": i.path}
                 for i in issues
             ], ensure_ascii=False, indent=2)
+
+        if name == "vacuum":
+            vacuum = getattr(self._store, "vacuum", None)
+            if not callable(vacuum):
+                raise ValueError("vacuum is only supported by the SQLite storage backend")
+            result = vacuum(
+                retention_hours=args.get("retention_hours", 168.0),
+                dry_run=args.get("dry_run", True),
+                force=args.get("force", False),
+                prune_empty_nodes=args.get("prune_empty_nodes", True),
+                prune_vector_cache=args.get("prune_vector_cache", True),
+                reclaim_space=args.get("reclaim_space", False),
+            )
+            return json.dumps(result, ensure_ascii=False, indent=2)
 
         raise KeyError(name)
 

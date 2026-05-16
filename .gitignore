@@ -7,4 +7,7 @@ __pycache__/
 data/chunks.json
 data/links.json
 data/nodes.json
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
 data/gold/

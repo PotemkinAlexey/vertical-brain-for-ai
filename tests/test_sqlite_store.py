@@ -184,6 +184,85 @@ def test_sqlite_checkpoint_rejects_unknown_mode(tmp_path):
         store.checkpoint("vacuum")
 
 
+def test_sqlite_vacuum_dry_run_reports_inactive_chunks_without_mutating(tmp_path):
+    store = SQLiteStore(tmp_path)
+    stale = store.save_chunk(
+        Chunk(
+            node_path="WORK/Old",
+            content="old fact",
+            status="stale",
+            valid_to="2000-01-01T00:00:00+00:00",
+            updated_at="2000-01-01T00:00:00+00:00",
+        )
+    )
+    store.set_vector(stale.content_hash, "mock", [1.0, 0.0])
+
+    result = store.vacuum(retention_hours=0, dry_run=True)
+
+    assert result["dry_run"] is True
+    assert result["eligible_chunks"] == 1
+    assert result["eligible_by_status"] == {"stale": 1}
+    assert result["deleted_chunks"] == 0
+    assert store.get_chunks_by_path("WORK/Old")[0].id == stale.id
+    assert store.get_vector(stale.content_hash, "mock") == [1.0, 0.0]
+
+
+def test_sqlite_vacuum_refuses_low_retention_apply_without_force(tmp_path):
+    store = SQLiteStore(tmp_path)
+
+    with pytest.raises(ValueError, match="requires force=True"):
+        store.vacuum(retention_hours=0, dry_run=False)
+
+
+def test_sqlite_vacuum_deletes_inactive_chunks_vectors_and_empty_nodes(tmp_path):
+    store = SQLiteStore(tmp_path)
+    active = store.save_chunk(Chunk(node_path="WORK/Keep", content="current fact"))
+    stale = store.save_chunk(
+        Chunk(
+            node_path="WORK/Old/Leaf",
+            content="obsolete searchable phrase",
+            status="stale",
+            valid_to="2000-01-01T00:00:00+00:00",
+            updated_at="2000-01-01T00:00:00+00:00",
+        )
+    )
+    store.set_vector(active.content_hash, "mock", [1.0, 0.0])
+    store.set_vector(stale.content_hash, "mock", [0.0, 1.0])
+
+    assert store.search("obsolete searchable phrase", include_stale=True)
+
+    result = store.vacuum(retention_hours=0, dry_run=False, force=True)
+
+    assert result["deleted_chunks"] == 1
+    assert result["deleted_vectors"] == 1
+    assert result["deleted_empty_nodes"] == 2
+    assert result["checkpoint"] is not None
+    assert store.get_chunks_by_path("WORK/Old/Leaf") == []
+    assert store.get_node("WORK/Old") is None
+    assert store.get_node("WORK/Old/Leaf") is None
+    assert store.get_node("WORK/Keep") is not None
+    assert store.get_vector(active.content_hash, "mock") == [1.0, 0.0]
+    assert store.get_vector(stale.content_hash, "mock") is None
+    assert store.search("obsolete searchable phrase", include_stale=True) == []
+
+
+def test_sqlite_vacuum_respects_retention_window(tmp_path):
+    store = SQLiteStore(tmp_path)
+    stale = store.save_chunk(
+        Chunk(
+            node_path="WORK/Recent",
+            content="recent stale fact",
+            status="stale",
+        )
+    )
+
+    result = store.vacuum(retention_hours=168, dry_run=False)
+
+    assert result["eligible_chunks"] == 0
+    assert result["deleted_chunks"] == 0
+    assert store.get_chunks_by_path("WORK/Recent")[0].id == stale.id
+
+
 def test_sqlite_close_closes_connection(tmp_path):
     store = SQLiteStore(tmp_path)
     store.close()

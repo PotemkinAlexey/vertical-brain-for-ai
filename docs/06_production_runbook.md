@@ -40,6 +40,31 @@ vb --data-dir /path/to/brain checkpoint --mode truncate
 Use `--json` when automation needs the `busy`, `log`, and `checkpointed`
 counters.
 
+## Vacuum
+
+`mark_stale` and `supersede_chunk` make old facts invisible to normal reads and
+search immediately, but keep them on disk for audit-friendly retention. Use
+`vacuum` for Databricks-style physical cleanup after the retention window:
+
+```bash
+vb --data-dir /path/to/brain vacuum --retention-hours 168
+```
+
+The command is a dry run by default. To apply, create a backup and pass
+`--apply`:
+
+```bash
+vb --data-dir /path/to/brain vacuum \
+  --apply \
+  --backup /path/to/backups/before-vacuum.sqlite
+```
+
+Vacuum deletes eligible `stale`, `superseded`, `legacy`, and `contradicted`
+chunks, prunes orphan embedding vectors, removes empty namespace nodes,
+rebuilds the FTS index, and checkpoints the WAL. Retention below 168 hours
+requires `--force`. Use `--reclaim-space` when you also want SQLite to run a
+full `VACUUM` and shrink the database file.
+
 ## Restore
 
 Stop writers, copy the backup file into the data directory as

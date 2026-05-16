@@ -72,6 +72,22 @@ class AuditableStorageProvider(Protocol):
 
 
 @runtime_checkable
+class VacuumCapableStorageProvider(Protocol):
+    """Optional extension for backends that can physically purge inactive data."""
+
+    def vacuum(
+        self,
+        *,
+        retention_hours: float = 168.0,
+        dry_run: bool = True,
+        force: bool = False,
+        prune_empty_nodes: bool = True,
+        prune_vector_cache: bool = True,
+        reclaim_space: bool = False,
+    ) -> Dict[str, Any]: ...
+
+
+@runtime_checkable
 class VectorCacheStorageProvider(Protocol):
     """Optional extension for backends that persist embedding vectors across restarts."""
 

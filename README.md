@@ -138,6 +138,7 @@ vb [--data-dir DIR] [--storage-backend sqlite|json] [--model-file FILE] COMMAND
 | `doctor` | Run storage integrity checks |
 | `backup FILE` | Create a SQLite backup |
 | `checkpoint` | Run a SQLite WAL checkpoint |
+| `vacuum` | Purge old stale/superseded chunks after a retention window |
 | `operation dry-run FILE` | Validate an operation batch JSON file |
 | `operation apply FILE` | Apply an operation batch JSON file |
 | `mcp` | Start the MCP stdio server |
@@ -176,6 +177,12 @@ vb backup ./backups/vertical_brain.sqlite
 
 # Force a WAL checkpoint after maintenance
 vb checkpoint --mode truncate
+
+# Preview Databricks-style cleanup of inactive chunks
+vb vacuum --retention-hours 168
+
+# Apply vacuum with a backup first
+vb vacuum --apply --backup ./backups/before-vacuum.sqlite
 ```
 
 ---
@@ -193,6 +200,7 @@ Use SQLite for durable personal or agent-backed memory. It is the production sto
 Operational commands:
 - `vb backup FILE` creates a consistent SQLite copy using the SQLite backup API.
 - `vb checkpoint --mode truncate` checkpoints the WAL file after maintenance or before external file-level backup.
+- `vb vacuum` previews old inactive chunks (`stale`, `superseded`, `legacy`, `contradicted`) eligible for physical deletion; `vb vacuum --apply` purges them, prunes orphan vectors/empty namespaces, rebuilds FTS, and checkpoints the WAL. Applying retention below 168 hours requires `--force`.
 
 ```bash
 vb --data-dir ./brain ...
@@ -286,6 +294,7 @@ The MCP server exposes these tools to Claude:
 | `operations` | Apply a `StorageOperationBatch` JSON object |
 | `optimize` | Run optimizer on a subtree |
 | `doctor` | Run storage integrity checks |
+| `vacuum` | Databricks-style dry-run/apply cleanup of inactive chunks |
 
 See [docs/05_mcp_tools.md](docs/05_mcp_tools.md) for full parameter reference.
 
