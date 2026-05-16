@@ -15,6 +15,7 @@ from vertical_brain.core.models import (
 )
 from vertical_brain.core.namespace_map import NamespaceMapBuilder
 from vertical_brain.core.search import BrainSearch
+from vertical_brain.llm.embedding import EmbeddingProvider
 
 
 class ContextSession:
@@ -160,6 +161,47 @@ class ContextSession:
             link_type=link.link_type,
             reason=link.reason,
             locked_context=locked_context,
+        )
+
+
+    def search_locked_context_semantic(
+        self,
+        query: str,
+        provider: EmbeddingProvider,
+        *,
+        root_path: str | None = None,
+        search_limit: int = 10,
+        context_limit: int = 3,
+        items_per_context: int = 6,
+        include_ancestors: bool = True,
+        link_expansion: str = "handles_only",
+        threshold: float = 0.0,
+    ) -> SearchContextResult:
+        from vertical_brain.core.embedding_search import EmbeddingSearch
+        results = EmbeddingSearch(self.store, provider).search(
+            query,
+            root_path=root_path,
+            limit=search_limit,
+            threshold=threshold,
+        )
+        handles = [_handle_from_result(result) for result in results]
+        candidate_paths = _unique_paths(results)
+        selected_paths = candidate_paths[: max(0, context_limit)]
+        policy = ContextPolicy(
+            include_ancestors=include_ancestors,
+            include_target=True,
+            link_expansion=link_expansion,
+        )
+        budget = ContextBudget(max_items=max(0, items_per_context))
+        locked_contexts = [
+            self.lock.open_locked_context(path, policy=policy, budget=budget)
+            for path in selected_paths
+        ]
+        return SearchContextResult(
+            query=query,
+            candidate_handles=handles,
+            locked_contexts=locked_contexts,
+            omitted_candidates=max(0, len(candidate_paths) - len(selected_paths)),
         )
 
 
