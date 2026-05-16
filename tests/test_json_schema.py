@@ -46,6 +46,36 @@ def test_storage_operation_schema_accepts_batch():
     assert validation.valid is True
 
 
+def test_storage_operation_schema_accepts_occ_batch_fields():
+    payload = {
+        "operations": [
+            {
+                "operation": "create_node",
+                "target_path": "WORK/Vertical/Node",
+            }
+        ],
+        "reasoning_summary": "Create a namespace.",
+        "branch_path": "WORK/Vertical",
+        "start_version": 7,
+    }
+
+    validation = validate_json_schema(payload, load_operation_schema())
+
+    assert validation.valid is True
+
+
+def test_storage_operation_schema_accepts_rename_namespace():
+    payload = {
+        "operation": "rename_namespace",
+        "target_path": "WORK/Old",
+        "new_path": "WORK/New",
+    }
+
+    validation = validate_json_schema(payload, load_operation_schema())
+
+    assert validation.valid is True
+
+
 def test_storage_operation_schema_rejects_unknown_fields_and_bad_enums():
     payload = {
         "operation": "append_magic",
@@ -58,7 +88,10 @@ def test_storage_operation_schema_rejects_unknown_fields_and_bad_enums():
     messages = [issue.message for issue in validation.issues]
     assert validation.valid is False
     assert "must match exactly one allowed schema" in messages
-    assert "must be one of: create_node, append_chunk, create_link, mark_stale, supersede_chunk, append_gold_aspect" in messages
+    assert (
+        "must be one of: create_node, append_chunk, create_link, mark_stale, "
+        "supersede_chunk, append_gold_aspect, rename_namespace"
+    ) in messages
     assert "is not allowed" in messages
 
 

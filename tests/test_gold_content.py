@@ -22,6 +22,22 @@ def test_parse_gold_content_handles_structured_json():
     assert parse_gold_content(content) == ["Delta migration", "AutoLoader streaming"]
 
 
+def test_parse_gold_content_handles_gold_document_json():
+    content = json.dumps({
+        "facts": [
+            {"content": "Delta migration requires cluster policy review."},
+            {"content": "AutoLoader schema drift needs explicit handling."},
+        ],
+        "entities": ["Delta", "AutoLoader"],
+        "rules": [],
+    })
+
+    assert parse_gold_content(content) == [
+        "Delta migration requires cluster policy review.",
+        "AutoLoader schema drift needs explicit handling.",
+    ]
+
+
 def test_parse_gold_content_handles_empty():
     assert parse_gold_content("") == []
     assert parse_gold_content("   ") == []

@@ -193,3 +193,18 @@ def test_context_lock_silver_fills_before_bronze(tmp_path):
 
     assert locked.items[0].layer == "silver"
     assert locked.omitted_items == 2
+
+
+def test_context_lock_does_not_duplicate_target_gold(tmp_path):
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/A", content="gold summary", layer="gold"))
+    store.save_chunk(Chunk(node_path="WORK/A", content="bronze fact", layer="bronze"))
+
+    locked = ContextLock(store).open_locked_context(
+        "WORK/A",
+        policy=ContextPolicy(include_ancestors=False),
+    )
+
+    contents = [(item.layer, item.content) for item in locked.items]
+    assert contents.count(("gold", "gold summary")) == 1
+    assert ("bronze", "bronze fact") in contents

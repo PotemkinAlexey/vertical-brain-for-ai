@@ -122,6 +122,30 @@ class StorageOperationExecutor:
 
     def validate_batch(self, batch: StorageOperationBatch) -> ValidationResult:
         issues: list[ValidationIssue] = []
+        if (batch.branch_path is None) != (batch.start_version is None):
+            issues.append(
+                ValidationIssue(
+                    path="batch",
+                    message="branch_path and start_version must be provided together",
+                )
+            )
+        if batch.branch_path is not None:
+            self._validate_namespace_path(batch.branch_path, path="batch.branch_path", issues=issues)
+        if batch.start_version is not None:
+            if not isinstance(batch.start_version, int) or isinstance(batch.start_version, bool):
+                issues.append(
+                    ValidationIssue(
+                        path="batch.start_version",
+                        message="start_version must be a non-negative integer",
+                    )
+                )
+            elif batch.start_version < 0:
+                issues.append(
+                    ValidationIssue(
+                        path="batch.start_version",
+                        message="start_version must be a non-negative integer",
+                    )
+                )
         for index, operation in enumerate(batch.operations):
             self._validate_operation(operation, path=f"operations[{index}]", issues=issues)
         return ValidationResult(valid=not issues, issues=issues)
@@ -527,12 +551,15 @@ def operation_batch_from_dict(payload: Mapping[str, Any]) -> StorageOperationBat
     if not isinstance(operations_payload, list):
         raise ValueError("StorageOperationBatch.operations must be a list")
     start_version = payload.get("start_version")
-    if start_version is not None and not isinstance(start_version, int):
+    if start_version is not None and (not isinstance(start_version, int) or isinstance(start_version, bool)):
         raise ValueError("StorageOperationBatch.start_version must be an integer")
+    branch_path = payload.get("branch_path")
+    if branch_path is not None and not isinstance(branch_path, str):
+        raise ValueError("StorageOperationBatch.branch_path must be a string")
     return StorageOperationBatch(
         operations=[operation_from_dict(operation) for operation in operations_payload],
         reasoning_summary=_string_value(payload, "reasoning_summary", default=""),
-        branch_path=payload.get("branch_path"),
+        branch_path=branch_path,
         start_version=start_version,
     )
 

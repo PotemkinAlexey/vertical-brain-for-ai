@@ -70,10 +70,10 @@ class SimpleOptimizer:
         self, path: str
     ) -> tuple[list[Chunk], set[str], int | None]:
         """Read chunks, linked paths, and current node version in a single pass."""
-        chunks = self.store.get_chunks_by_path(path, include_children=True)
-        linked_paths = self._linked_paths_if_decay_enabled()
         node = self.store.get_node(path)
         node_version = node.version if node is not None else None
+        chunks = self.store.get_chunks_by_path(path, include_children=True)
+        linked_paths = self._linked_paths_if_decay_enabled()
         return chunks, linked_paths, node_version
 
     # ── core planning (pure over the already-fetched chunk list) ──────────────

@@ -43,10 +43,11 @@ class MockEmbeddingProvider:
 class HttpEmbeddingProvider:
     """OpenAI-compatible embeddings endpoint (works with OpenAI, Ollama, etc.)."""
 
-    def __init__(self, url: str, model: str, api_key: str = ""):
+    def __init__(self, url: str, model: str, api_key: str = "", timeout: float = 30.0):
         self.url = url
         self.model = model
         self.api_key = api_key
+        self.timeout = timeout
 
     @property
     def model_name(self) -> str:
@@ -62,6 +63,12 @@ class HttpEmbeddingProvider:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         req = urllib.request.Request(self.url, data=payload, headers=headers)
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             result = json.loads(resp.read())
-        return result["data"][0]["embedding"]
+        try:
+            embedding = result["data"][0]["embedding"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ValueError("Embedding endpoint returned an invalid OpenAI-compatible response") from exc
+        if not isinstance(embedding, list) or not all(isinstance(v, (int, float)) for v in embedding):
+            raise ValueError("Embedding endpoint returned a non-numeric embedding vector")
+        return [float(v) for v in embedding]

@@ -79,7 +79,7 @@ class ContextLock:
                 self.store.get_chunks_by_path(target_path),
                 key=lambda c: (_LAYER_PRIORITY.get(c.layer, 3), c.created_at),
             ):
-                if chunk.status == "active":
+                if chunk.status == "active" and chunk.layer != "gold":
                     omitted_items += self._append_with_budget(
                         items,
                         ContextItem(

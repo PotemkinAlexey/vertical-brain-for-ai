@@ -23,6 +23,28 @@ def test_plan_branch_captures_start_version(tmp_path):
     assert batch.start_version == 0
 
 
+def test_plan_branch_captures_version_before_chunk_snapshot_for_race_detection(tmp_path):
+    store = JsonStore(tmp_path)
+    store.ensure_node("WORK/Project")
+    original_get_chunks = store.get_chunks_by_path
+
+    def racing_get_chunks(path: str, include_children: bool = False):
+        chunks = original_get_chunks(path, include_children=include_children)
+        node = store.get_node("WORK/Project")
+        assert node is not None
+        node.version += 1
+        store.update_node(node)
+        return chunks
+
+    store.get_chunks_by_path = racing_get_chunks  # type: ignore[method-assign]
+
+    batch = SimpleOptimizer(store, min_compaction_path_parts=2).plan_branch("WORK/Project")
+
+    assert batch.start_version == 0
+    with pytest.raises(OptimisticLockException, match="version"):
+        StorageOperationExecutor(store).apply_batch(batch)
+
+
 def test_apply_batch_succeeds_when_version_matches(tmp_path):
     store = JsonStore(tmp_path)
     store.ensure_node("WORK/Project")

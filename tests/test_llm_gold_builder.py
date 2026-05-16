@@ -68,6 +68,7 @@ def test_llm_gold_builder_strips_markdown_code_fence():
     raw = "```json\n" + _valid_response(chunks) + "\n```"
     doc = LlmGoldBuilder(_FakeLlm(raw)).build(chunks, node_path="WORK/Project")
     assert len(doc.facts) == 1
+    assert doc.facts[0].content == "Distilled: fact one"
 
 
 # ── Fallback on bad LLM output ────────────────────────────────────────────────

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterator
 from uuid import uuid4
 
 from vertical_brain.core.models import Chunk, Link, Node, SearchResult, utc_now
@@ -24,10 +25,11 @@ class JsonStore:
         self.gold_dir = self.root / "gold"
         self.gold_dir.mkdir(parents=True, exist_ok=True)
         self.audit_file = self.root / "operation_audit.jsonl"
+        self._transaction_depth = 0
 
         for file in [self.nodes_file, self.chunks_file, self.links_file]:
             if not file.exists():
-                file.write_text("[]", encoding="utf-8")
+                self._write_json(file, [])
         self._seed_namespace_roots()
 
     def _seed_namespace_roots(self) -> None:
@@ -43,7 +45,61 @@ class JsonStore:
         return json.loads(file.read_text(encoding="utf-8"))
 
     def _write(self, file: Path, rows: list[dict[str, Any]]) -> None:
-        file.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._write_json(file, rows, indent=2)
+
+    def _write_json(self, file: Path, payload: Any, *, indent: int | None = None) -> None:
+        """Atomically replace a JSON file.
+
+        JsonStore is intended for local/dev use, but atomic replace avoids
+        corrupting files when a process is interrupted during a write.
+        """
+        file.parent.mkdir(parents=True, exist_ok=True)
+        tmp = file.with_name(f".{file.name}.{uuid4().hex}.tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=indent), encoding="utf-8")
+        tmp.replace(file)
+
+    def _transaction_files(self) -> list[Path]:
+        return [
+            self.nodes_file,
+            self.chunks_file,
+            self.links_file,
+            self.audit_file,
+            self.root / "embedding_schema.json",
+            self.root / "vector_cache.json",
+        ]
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Rollback file-backed state if a batch fails mid-transaction.
+
+        This is not a substitute for SQLite's crash-safe ACID behavior, but it
+        preserves the executor's all-or-nothing guarantee for normal in-process
+        exceptions and keeps the JSON backend useful for deterministic tests.
+        """
+        outermost = self._transaction_depth == 0
+        snapshot: dict[Path, bytes | None] = {}
+        if outermost:
+            for file in self._transaction_files():
+                snapshot[file] = file.read_bytes() if file.exists() else None
+
+        self._transaction_depth += 1
+        try:
+            yield
+        except Exception:
+            self._transaction_depth -= 1
+            if outermost:
+                for file, content in snapshot.items():
+                    if content is None:
+                        try:
+                            file.unlink()
+                        except FileNotFoundError:
+                            pass
+                    else:
+                        file.parent.mkdir(parents=True, exist_ok=True)
+                        file.write_bytes(content)
+            raise
+        else:
+            self._transaction_depth -= 1
 
     def ensure_node(self, path: str) -> Node:
         nodes = self._read(self.nodes_file)
@@ -245,12 +301,9 @@ class JsonStore:
 
     def set_embedding_schema(self, model_name: str, vector_dimension: int) -> None:
         schema_file = self.root / "embedding_schema.json"
-        schema_file.write_text(
-            json.dumps(
-                {"model_name": model_name, "vector_dimension": vector_dimension},
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
+        self._write_json(
+            schema_file,
+            {"model_name": model_name, "vector_dimension": vector_dimension},
         )
 
     def _read_vector_cache(self) -> dict[str, Any]:
@@ -263,9 +316,7 @@ class JsonStore:
             return {}
 
     def _write_vector_cache(self, cache: dict[str, Any]) -> None:
-        (self.root / "vector_cache.json").write_text(
-            json.dumps(cache, ensure_ascii=False), encoding="utf-8"
-        )
+        self._write_json(self.root / "vector_cache.json", cache)
 
     def get_vector(self, content_hash: str, model_name: str) -> list[float] | None:
         entry = self._read_vector_cache().get(content_hash, {})

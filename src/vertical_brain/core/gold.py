@@ -24,8 +24,32 @@ def parse_gold_content(content: str) -> list[str]:
     - Plain text: ``"Delta migration | AutoLoader streaming"``
     - v1 JSON: ``{"aspects": ["Delta migration", ...]}``
     - v2 JSON: ``{"aspects": [{"id": "...", "text": "...", "updated_at": "..."}]}``
+    - Structured GoldDocument JSON: ``{"facts": [{"content": "..."}]}``
     """
+    structured_facts = _parse_structured_gold_facts(content)
+    if structured_facts is not None:
+        return structured_facts
     return [a.text for a in parse_gold_aspects(content)]
+
+
+def _parse_structured_gold_facts(content: str) -> list[str] | None:
+    text = content.strip()
+    if not text.startswith("{"):
+        return None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("facts"), list):
+        return None
+    facts: list[str] = []
+    for item in parsed["facts"]:
+        if not isinstance(item, dict):
+            continue
+        fact = item.get("content")
+        if isinstance(fact, str) and fact.strip():
+            facts.append(fact.strip())
+    return facts
 
 
 # ── Structured Gold aspects (v2) ──────────────────────────────────────────────
@@ -281,7 +305,7 @@ class LlmGoldBuilder(GoldBuilder):
         lacks a valid source_silver_id that maps back to a real Silver chunk.
         """
         try:
-            parsed = json.loads(response)
+            parsed = json.loads(_strip_json_code_fence(response))
         except (json.JSONDecodeError, TypeError, ValueError):
             return None
         if not isinstance(parsed, dict):
@@ -317,3 +341,13 @@ class LlmGoldBuilder(GoldBuilder):
             node_path=node_path,
             built_from_silver_ids=sorted(valid_silver_ids),
         )
+
+
+def _strip_json_code_fence(response: str) -> str:
+    text = response.strip()
+    if not text.startswith("```"):
+        return text
+    lines = text.splitlines()
+    if len(lines) >= 2 and lines[0].strip().startswith("```") and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1]).strip()
+    return text

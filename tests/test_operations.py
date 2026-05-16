@@ -101,6 +101,46 @@ def test_operation_batch_appends_canonical_chunk_and_supersedes_variants(tmp_pat
     assert {chunk.status for chunk in originals} == {"superseded"}
 
 
+def test_json_store_batch_rolls_back_when_apply_fails_mid_write(tmp_path):
+    store = JsonStore(tmp_path)
+    batch = StorageOperationBatch(
+        operations=[
+            StorageOperation(
+                operation="append_chunk",
+                target_path="WORK/Vertical/Node",
+                chunk=ChunkInput(content="must be rolled back"),
+            )
+        ]
+    )
+
+    def failing_update_node(node):
+        raise RuntimeError("simulated node update failure")
+
+    store.update_node = failing_update_node  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="simulated node update failure"):
+        StorageOperationExecutor(store).apply_batch(batch)
+
+    assert store.list_chunks() == []
+    assert store.list_nodes() == []
+    assert store.list_audit() == []
+
+
+def test_batch_validation_requires_complete_occ_pair(tmp_path):
+    store = JsonStore(tmp_path)
+    batch = StorageOperationBatch(
+        operations=[],
+        branch_path="WORK/Vertical",
+        start_version=None,
+    )
+
+    result = StorageOperationExecutor(store).dry_run_batch(batch)
+
+    assert result.status == "invalid"
+    assert result.validation is not None
+    assert any("provided together" in issue.message for issue in result.validation.issues)
+
+
 def test_dry_run_reports_valid_operation_without_mutating_store(tmp_path):
     store = JsonStore(tmp_path)
     operation = StorageOperation(
