@@ -233,11 +233,3 @@ def _get_link(store: object, link_id: str) -> "Link | None":
     return next((link for link in store.list_links() if link.id == link_id), None)  # type: ignore[union-attr]
 
 
-def _expanded_path(link: "Link", from_path: "str | None") -> str:
-    if from_path is None:
-        return link.target_path
-    if from_path == link.source_path:
-        return link.target_path
-    if from_path == link.target_path:
-        return link.source_path
-    raise ValueError(f"Link {link.id} is not connected to {from_path}")

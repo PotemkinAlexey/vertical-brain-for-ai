@@ -82,3 +82,46 @@ def test_embedding_router_uses_append_gold_aspect_chunks(tmp_path):
     assert len(candidates) == 1
     assert candidates[0].path == "WORK/DataArt"
     assert "AutoLoader" in candidates[0].gold_summary
+
+
+def test_embedding_router_finds_namespace_with_gold_chunk(tmp_path):
+    store = JsonStore(tmp_path)
+    _seed_gold(store, "WORK/DataArt/Databricks", "Databricks Delta Lake streaming")
+
+    candidates = EmbeddingRouter(store, MockEmbeddingProvider()).find_candidates("Delta Lake")
+
+    assert any(c.path == "WORK/DataArt/Databricks" for c in candidates)
+    match = next(c for c in candidates if c.path == "WORK/DataArt/Databricks")
+    assert match.gold_summary != ""
+
+
+def test_embedding_router_fallback_finds_empty_namespace_by_path_keyword(tmp_path):
+    store = JsonStore(tmp_path)
+    store.ensure_node("WORK/DataArt/Databricks")
+    # No Gold chunk — only path match should surface this namespace.
+
+    candidates = EmbeddingRouter(store, MockEmbeddingProvider()).find_candidates("Databricks")
+
+    assert any(c.path == "WORK/DataArt/Databricks" for c in candidates)
+    match = next(c for c in candidates if c.path == "WORK/DataArt/Databricks")
+    assert match.gold_summary == ""
+    assert 0 < match.score <= 0.45
+
+
+def test_embedding_router_semantic_gold_outranks_path_match(tmp_path):
+    store = JsonStore(tmp_path)
+    # Gold chunk: semantically very close to query.
+    _seed_gold(store, "WORK/DataArt/Databricks", "Databricks Delta Lake autoloader streaming ingestion")
+    # Empty namespace whose path contains "Databricks" but has no Gold.
+    store.ensure_node("WORK/Other/Databricks")
+
+    candidates = EmbeddingRouter(store, MockEmbeddingProvider()).find_candidates(
+        "Databricks Delta streaming"
+    )
+
+    paths = [c.path for c in candidates]
+    assert "WORK/DataArt/Databricks" in paths
+    assert "WORK/Other/Databricks" in paths
+    gold_rank = paths.index("WORK/DataArt/Databricks")
+    path_rank = paths.index("WORK/Other/Databricks")
+    assert gold_rank < path_rank, "semantic Gold score must outrank pure path match"

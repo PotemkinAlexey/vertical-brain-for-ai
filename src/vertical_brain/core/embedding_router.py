@@ -8,9 +8,25 @@ from vertical_brain.llm.embedding import EmbeddingProvider, cosine_similarity
 if TYPE_CHECKING:
     from vertical_brain.storage.protocol import StorageProvider
 
+_PATH_MATCH_CAP = 0.45
+
+
+def _path_score(query_tokens: set[str], path: str) -> float:
+    """Normalized overlap between query tokens and path segments (case-insensitive)."""
+    if not query_tokens:
+        return 0.0
+    path_tokens = {seg.lower() for seg in path.replace("_", " ").split("/") if seg}
+    overlap = len(query_tokens & path_tokens)
+    return min(_PATH_MATCH_CAP, overlap / len(query_tokens))
+
 
 class EmbeddingRouter:
-    """Routes text to namespaces by comparing against Gold chunk embeddings."""
+    """Routes text to namespaces by comparing against Gold chunk embeddings.
+
+    Fallback: namespaces with no Gold chunk can still appear as candidates
+    based on lexical path/name overlap with the query.  Semantic Gold scores
+    always outrank pure path matches because the path cap is 0.45.
+    """
 
     def __init__(self, store: "StorageProvider", provider: EmbeddingProvider) -> None:
         self._store = store
@@ -24,6 +40,9 @@ class EmbeddingRouter:
         limit: int = 5,
     ) -> list[EmbeddingRouteCandidate]:
         query_vec = self._provider.embed(text)
+        query_tokens = {t.lower() for t in text.replace("/", " ").split() if t}
+
+        # --- semantic scoring against active Gold chunks ---
         gold_chunks = [
             c for c in self._store.list_chunks()  # type: ignore[attr-defined]
             if c.layer == "gold" and c.status == "active"
@@ -38,10 +57,19 @@ class EmbeddingRouter:
             if path not in best or sim > best[path][0]:
                 best[path] = (sim, chunk.content)
 
+        # --- path fallback for nodes with no Gold chunk ---
+        gold_paths = set(best.keys())
+        for node in self._store.list_nodes():  # type: ignore[attr-defined]
+            if node.path in gold_paths:
+                continue
+            score = _path_score(query_tokens, node.path)
+            if score > 0:
+                best[node.path] = (score, "")
+
         candidates = [
             EmbeddingRouteCandidate(path=path, score=score, gold_summary=summary)
             for path, (score, summary) in best.items()
             if score >= threshold
         ]
-        candidates.sort(key=lambda c: c.score, reverse=True)
+        candidates.sort(key=lambda c: (-c.score, c.path))
         return candidates[:limit]

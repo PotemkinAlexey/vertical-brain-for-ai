@@ -391,3 +391,22 @@ def test_batch_append_writes_audit_for_each_operation(tmp_path):
     assert len(audit) == 2
     assert all(r["reasoning_summary"] == "batch rationale" for r in audit)
     assert all(r["status"] == "applied" for r in audit)
+
+
+def test_batch_append_is_all_or_nothing_on_validation_failure(tmp_path):
+    """A batch with one invalid item (empty content) must write nothing and create no audit."""
+    store = SQLiteStore(tmp_path)
+    mcp = VerticalBrainMCP(store)
+
+    resp = _call(mcp, "batch_append", {"chunks": [
+        {"path": "WORK/A", "content": "valid fact"},
+        {"path": "WORK/B", "content": ""},  # invalid: empty content
+    ]})
+
+    # MCP returns an error, not a success result.
+    assert "error" in resp
+    # No chunks written anywhere.
+    assert store.get_chunks_by_path("WORK/A") == []
+    assert store.get_chunks_by_path("WORK/B") == []
+    # No audit records created.
+    assert store.list_audit() == []
