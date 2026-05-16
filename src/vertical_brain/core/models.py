@@ -143,6 +143,7 @@ class OperationResult(JsonSerializable):
     stale_candidates: list[StaleCandidateInput] = field(default_factory=list)
     status: str = "applied"
     validation: ValidationResult | None = None
+    overflow_path: str | None = None
 
 
 @dataclass

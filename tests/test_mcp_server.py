@@ -44,8 +44,10 @@ def test_tools_list_contains_expected_tools(tmp_path):
     resp = mcp.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     names = {t["name"] for t in resp["result"]["tools"]}
     assert names == {
-        "session_start", "namespace_map", "search", "search_semantic",
-        "context_search", "route", "append_chunk", "append_gold_aspect",
+        "session_start", "namespace_map", "list_chunks", "read_context",
+        "search", "search_semantic", "context_search", "context_search_semantic",
+        "route", "append_chunk", "append_gold_aspect", "create_link",
+        "mark_stale", "batch_append", "session_end", "optimize",
     }
 
 
@@ -162,3 +164,177 @@ def test_response_includes_request_id(tmp_path):
     mcp, _ = _mcp(tmp_path)
     resp = mcp.handle({"jsonrpc": "2.0", "id": 42, "method": "tools/list"})
     assert resp["id"] == 42
+
+
+def test_list_chunks_returns_full_content(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="Delta Lake fact", layer="silver"))
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="stale chunk", status="stale"))
+
+    resp = _call(mcp, "list_chunks", {"path": "WORK/DataArt"})
+    chunks = json.loads(_text(resp))
+
+    assert len(chunks) == 1
+    assert chunks[0]["content"] == "Delta Lake fact"
+    assert chunks[0]["layer"] == "silver"
+
+
+def test_list_chunks_include_stale(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="active"))
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="stale", status="stale"))
+
+    resp = _call(mcp, "list_chunks", {"path": "WORK/DataArt", "include_stale": True})
+    chunks = json.loads(_text(resp))
+
+    assert len(chunks) == 2
+
+
+def test_list_chunks_filter_by_layer(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="bronze fact", layer="bronze"))
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="gold label", layer="gold"))
+
+    resp = _call(mcp, "list_chunks", {"path": "WORK/DataArt", "layer": "gold"})
+    chunks = json.loads(_text(resp))
+
+    assert len(chunks) == 1
+    assert chunks[0]["layer"] == "gold"
+
+
+def test_read_context_returns_chunks_and_links(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="Delta Lake fact"))
+
+    resp = _call(mcp, "read_context", {"path": "WORK/DataArt"})
+    data = json.loads(_text(resp))
+
+    assert "items" in data
+    assert any(item["content"] == "Delta Lake fact" for item in data["items"])
+
+
+def test_create_link_connects_two_namespaces(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    store.ensure_node("WORK/DataArt/Databricks")
+    store.ensure_node("WORK/DataArt/FXDB")
+
+    resp = _call(mcp, "create_link", {
+        "source_path": "WORK/DataArt/Databricks",
+        "target_path": "WORK/DataArt/FXDB",
+        "link_type": "peer",
+        "reason": "Related data pipelines.",
+    })
+    result = json.loads(_text(resp))
+
+    assert result["status"] == "applied"
+    assert len(result["link_ids"]) == 1
+    assert store.get_peer_paths("WORK/DataArt/Databricks") == ["WORK/DataArt/FXDB"]
+
+
+def test_mark_stale_by_chunk_ids(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    chunk = store.save_chunk(Chunk(node_path="WORK/DataArt", content="old fact"))
+
+    resp = _call(mcp, "mark_stale", {"path": "WORK/DataArt", "chunk_ids": [chunk.id]})
+    result = json.loads(_text(resp))
+
+    assert result["marked"] == 1
+    assert store.get_chunks_by_path("WORK/DataArt")[0].status == "stale"
+
+
+def test_mark_stale_all_active_non_gold_when_no_ids(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="fact one"))
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="fact two"))
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="gold label", layer="gold"))
+
+    resp = _call(mcp, "mark_stale", {"path": "WORK/DataArt"})
+    result = json.loads(_text(resp))
+
+    assert result["marked"] == 2
+    chunks = store.get_chunks_by_path("WORK/DataArt")
+    gold = [c for c in chunks if c.layer == "gold"]
+    non_gold = [c for c in chunks if c.layer != "gold"]
+    assert gold[0].status == "active"
+    assert all(c.status == "stale" for c in non_gold)
+
+
+def test_append_gold_aspect_reports_overflow_path(tmp_path):
+    from vertical_brain.core.operations import MAX_GOLD_CHARS
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="x" * (MAX_GOLD_CHARS - 5), layer="gold"))
+
+    resp = _call(mcp, "append_gold_aspect", {"path": "WORK/DataArt", "aspect": "overflow aspect"})
+    result = json.loads(_text(resp))
+
+    assert result["overflow_path"] == "WORK/DataArt_2"
+
+
+def test_batch_append_writes_all_chunks(tmp_path):
+    mcp, store = _mcp(tmp_path)
+
+    resp = _call(mcp, "batch_append", {"chunks": [
+        {"path": "WORK/A", "content": "fact A", "layer": "silver"},
+        {"path": "WORK/B", "content": "fact B", "layer": "bronze"},
+    ]})
+    result = json.loads(_text(resp))
+
+    assert result["status"] == "applied"
+    assert len(result["chunk_ids"]) == 2
+    assert len(store.get_chunks_by_path("WORK/A")) == 1
+    assert len(store.get_chunks_by_path("WORK/B")) == 1
+
+
+def test_session_end_writes_silver_note(tmp_path):
+    mcp, store = _mcp(tmp_path)
+
+    resp = _call(mcp, "session_end", {
+        "path": "WORK/DataArt",
+        "summary": "Discussed Delta Lake schema evolution.",
+    })
+    result = json.loads(_text(resp))
+
+    assert result["status"] == "applied"
+    chunks = store.get_chunks_by_path("WORK/DataArt")
+    assert any(c.layer == "silver" and c.content_type == "note" for c in chunks)
+
+
+def test_session_end_with_gold_aspect(tmp_path):
+    mcp, store = _mcp(tmp_path)
+
+    resp = _call(mcp, "session_end", {
+        "path": "WORK/DataArt",
+        "summary": "Session summary.",
+        "gold_aspect": "schema evolution",
+    })
+    result = json.loads(_text(resp))
+
+    assert result["gold_status"] == "applied"
+    gold = [c for c in store.get_chunks_by_path("WORK/DataArt") if c.layer == "gold"]
+    assert gold[0].content == "schema evolution"
+
+
+def test_context_search_semantic_returns_locked_contexts(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="Delta Lake streaming ingestion pipeline"))
+
+    resp = _call(mcp, "context_search_semantic", {"query": "Delta streaming"})
+    data = json.loads(_text(resp))
+
+    assert "locked_contexts" in data
+    assert "candidate_handles" in data
+
+
+def test_append_chunk_respects_source_and_confidence(tmp_path):
+    mcp, store = _mcp(tmp_path)
+
+    _call(mcp, "append_chunk", {
+        "path": "WORK/DataArt",
+        "content": "Verified Delta fact.",
+        "source": "user",
+        "confidence": 0.95,
+    })
+
+    chunk = store.get_chunks_by_path("WORK/DataArt")[0]
+    assert chunk.source == "user"
+    assert chunk.confidence == 0.95
