@@ -52,6 +52,33 @@ def test_schema_persisted_in_sqlite(tmp_path):
     assert schema["model_name"] == "sqlite-model-v1"
 
 
+def test_old_sqlite_embedding_schema_table_migrates(tmp_path):
+    import sqlite3
+
+    conn = sqlite3.connect(tmp_path / "vertical_brain.sqlite")
+    conn.executescript(
+        """
+        CREATE TABLE embedding_schema (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            model_name TEXT NOT NULL,
+            vector_dimension INTEGER NOT NULL
+        );
+        """
+    )
+    conn.execute("INSERT INTO embedding_schema VALUES (1, ?, ?)", ("old-model", 3))
+    conn.commit()
+    conn.close()
+
+    store = SQLiteStore(tmp_path)
+    store.set_embedding_schema("new-model", 64)
+
+    schema = store.get_embedding_schema()
+    assert schema is not None
+    assert schema["model_name"] == "new-model"
+    assert schema["vector_dimension"] == 64
+    assert "updated_at" in schema
+
+
 def test_incompatible_model_raises_in_sqlite(tmp_path):
     store = SQLiteStore(tmp_path)
     EmbeddingSearch(store, MockEmbeddingProvider("model-A"))

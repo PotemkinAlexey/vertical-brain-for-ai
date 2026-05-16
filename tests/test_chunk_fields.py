@@ -101,6 +101,41 @@ def test_old_sqlite_chunk_migrates_automatically(tmp_path):
     assert chunk.valid_to is None
 
 
+def test_old_sqlite_node_table_migrates_automatically(tmp_path):
+    db_file = tmp_path / "vertical_brain.sqlite"
+    conn = sqlite3.connect(db_file)
+    conn.executescript(
+        """
+        CREATE TABLE nodes (
+            id TEXT PRIMARY KEY,
+            path TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            parent_path TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO nodes VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            "work-id", "WORK", "WORK", None,
+            "2020-01-01T00:00:00+00:00",
+            "2020-01-01T00:00:00+00:00",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    store = SQLiteStore(tmp_path)
+    store.ensure_node("WORK/A")
+    nodes = {node.path: node for node in store.list_nodes()}
+
+    assert nodes["WORK"].node_type == "default"
+    assert nodes["WORK"].version == 0
+    assert nodes["WORK/A"].parent_path == "WORK"
+
+
 def test_json_store_persists_new_chunk_fields(tmp_path):
     store = JsonStore(tmp_path)
     store.ensure_node("WORK/A")

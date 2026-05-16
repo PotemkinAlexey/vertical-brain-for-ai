@@ -118,10 +118,14 @@ class SQLiteStore:
         self.conn.commit()
         self._migrate_node_columns()
         self._migrate_chunk_columns()
+        self._migrate_embedding_schema_columns()
+        self._migrate_vector_cache_columns()
 
     def _migrate_node_columns(self) -> None:
         existing = {row["name"] for row in self.conn.execute("PRAGMA table_info(nodes)").fetchall()}
         migrations = {
+            "node_type": "ALTER TABLE nodes ADD COLUMN node_type TEXT NOT NULL DEFAULT 'default'",
+            "gold_summary": "ALTER TABLE nodes ADD COLUMN gold_summary TEXT NOT NULL DEFAULT ''",
             "is_dirty": "ALTER TABLE nodes ADD COLUMN is_dirty INTEGER NOT NULL DEFAULT 0",
             "version": "ALTER TABLE nodes ADD COLUMN version INTEGER NOT NULL DEFAULT 0",
         }
@@ -145,6 +149,39 @@ class SQLiteStore:
             "valid_from": "ALTER TABLE chunks ADD COLUMN valid_from TEXT NOT NULL DEFAULT ''",
             "valid_to": "ALTER TABLE chunks ADD COLUMN valid_to TEXT",
             "decay_factor": "ALTER TABLE chunks ADD COLUMN decay_factor REAL NOT NULL DEFAULT 1.0",
+        }
+        changed = False
+        for column, ddl in migrations.items():
+            if column not in existing:
+                try:
+                    self.conn.execute(ddl)
+                    changed = True
+                except sqlite3.OperationalError:
+                    pass
+        if changed:
+            self.conn.commit()
+
+    def _migrate_embedding_schema_columns(self) -> None:
+        existing = {row["name"] for row in self.conn.execute("PRAGMA table_info(embedding_schema)").fetchall()}
+        migrations = {
+            "created_at": "ALTER TABLE embedding_schema ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+            "updated_at": "ALTER TABLE embedding_schema ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+        }
+        changed = False
+        for column, ddl in migrations.items():
+            if column not in existing:
+                try:
+                    self.conn.execute(ddl)
+                    changed = True
+                except sqlite3.OperationalError:
+                    pass
+        if changed:
+            self.conn.commit()
+
+    def _migrate_vector_cache_columns(self) -> None:
+        existing = {row["name"] for row in self.conn.execute("PRAGMA table_info(vector_cache)").fetchall()}
+        migrations = {
+            "created_at": "ALTER TABLE vector_cache ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
         }
         changed = False
         for column, ddl in migrations.items():

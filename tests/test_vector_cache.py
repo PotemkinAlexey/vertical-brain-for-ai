@@ -101,6 +101,31 @@ def test_sqlite_store_vector_cache_survives_restart(tmp_path):
     assert store2.get_vector("abc123", "mock-v1") == [0.1, 0.2, 0.3]
 
 
+def test_old_sqlite_vector_cache_table_migrates(tmp_path):
+    import sqlite3
+
+    conn = sqlite3.connect(tmp_path / "vertical_brain.sqlite")
+    conn.executescript(
+        """
+        CREATE TABLE vector_cache (
+            content_hash TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            vector_json TEXT NOT NULL,
+            PRIMARY KEY (content_hash, model_name)
+        );
+        """
+    )
+    conn.execute("INSERT INTO vector_cache VALUES (?, ?, ?)", ("h1", "mock-v1", "[0.1]"))
+    conn.commit()
+    conn.close()
+
+    store = SQLiteStore(tmp_path)
+    store.set_vector("h2", "mock-v1", [0.2])
+
+    assert store.get_vector("h1", "mock-v1") == [0.1]
+    assert store.get_vector("h2", "mock-v1") == [0.2]
+
+
 # ── EmbeddingSearch cache integration ────────────────────────────────────────
 
 def test_embedding_search_stores_vector_on_miss(tmp_path):
