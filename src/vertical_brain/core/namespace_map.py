@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from vertical_brain.core.gold import parse_gold_content
 from vertical_brain.core.models import Link, LinkHandle, NamespaceMap, NamespaceMapNode, Node
+
+if TYPE_CHECKING:
+    from vertical_brain.storage.protocol import StorageProvider
 
 
 class NamespaceMapBuilder:
     """Builds a model-facing map without exposing raw chunk content."""
 
-    def __init__(self, store):
+    def __init__(self, store: "StorageProvider"):
         self.store = store
 
     def build(
@@ -31,7 +37,10 @@ class NamespaceMapBuilder:
 
         for node in sorted(visible_nodes, key=lambda item: item.path):
             node_gold = sorted(gold_chunks_by_path.get(node.path, []), key=lambda c: c.created_at)
-            gold_text = " | ".join(c.content for c in node_gold)
+            gold_aspects: list[str] = []
+            for chunk in node_gold:
+                gold_aspects.extend(parse_gold_content(chunk.content))
+            gold_text = " | ".join(gold_aspects)
             gold_summary, omitted_summary_chars = _truncate(gold_text, summary_max_chars)
             map_nodes.append(
                 NamespaceMapNode(

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from vertical_brain.core.gold import parse_gold_content
 from vertical_brain.core.models import (
     ContextBudget,
     ContextItem,
@@ -7,7 +10,12 @@ from vertical_brain.core.models import (
     LinkHandle,
     LockedContext,
 )
-from vertical_brain.storage.json_store import JsonStore
+
+if TYPE_CHECKING:
+    from vertical_brain.storage.protocol import StorageProvider
+
+
+_SYMMETRIC_LINK_TYPES = {"peer", "related_to"}
 
 
 class ContextLock:
@@ -17,7 +25,7 @@ class ContextLock:
     the prompt unless the caller explicitly asks for expanded links.
     """
 
-    def __init__(self, store: JsonStore):
+    def __init__(self, store: "StorageProvider"):
         self.store = store
 
     def open_locked_context(
@@ -43,7 +51,7 @@ class ContextLock:
                         ContextItem(
                             path=ancestor_path,
                             layer="gold",
-                            content=" | ".join(c.content for c in gold_chunks),
+                            content=self._render_gold(gold_chunks),
                             source="chunk",
                         ),
                         budget,
@@ -59,7 +67,7 @@ class ContextLock:
                 ContextItem(
                     path=target_path,
                     layer="gold",
-                    content=" | ".join(c.content for c in target_gold),
+                    content=self._render_gold(target_gold),
                     source="chunk",
                 ),
                 budget,
@@ -120,6 +128,38 @@ class ContextLock:
             ),
         )
         return locked_context.as_prompt_lines()
+
+    def _render_gold(self, gold_chunks: list) -> str:
+        aspects: list[str] = []
+        for chunk in gold_chunks:
+            aspects.extend(parse_gold_content(chunk.content))
+        return " | ".join(aspects)
+
+    def expand_link(self, link_id: str, from_path: str | None = None) -> str:
+        """Resolve the far endpoint of a link.
+
+        For directional (non-symmetric) link types, ``from_path`` is required
+        to disambiguate which endpoint the caller is expanding from.
+        """
+        link = self.store.get_link(link_id)
+        if link is None:
+            raise ValueError(f"Link not found: {link_id}")
+
+        if link.link_type in _SYMMETRIC_LINK_TYPES:
+            if from_path is None:
+                return link.target_path
+            return link.target_path if from_path == link.source_path else link.source_path
+
+        if from_path is None:
+            raise ValueError(
+                f"from_path is required to expand this link because link type "
+                f"'{link.link_type}' is directional."
+            )
+        if from_path == link.source_path:
+            return link.target_path
+        if from_path == link.target_path:
+            return link.source_path
+        raise ValueError(f"from_path {from_path} is not an endpoint of link {link_id}")
 
     def _append_with_budget(
         self,

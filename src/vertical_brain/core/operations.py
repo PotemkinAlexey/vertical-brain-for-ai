@@ -3,8 +3,9 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from contextlib import nullcontext
-from typing import Any, get_args
+from typing import TYPE_CHECKING, Any, get_args
 
+from vertical_brain.core.gold import parse_gold_content
 from vertical_brain.core.models import (
     Chunk,
     ChunkInput,
@@ -23,7 +24,8 @@ from vertical_brain.core.models import (
     ValidationResult,
     utc_now,
 )
-from vertical_brain.storage.json_store import JsonStore
+if TYPE_CHECKING:
+    from vertical_brain.storage.protocol import StorageProvider
 
 
 VALID_CONTENT_TYPES = set(get_args(ContentType))
@@ -40,7 +42,7 @@ def _next_overflow_path(path: str) -> str:
 
 
 class StorageOperationExecutor:
-    def __init__(self, store: JsonStore):
+    def __init__(self, store: "StorageProvider"):
         self.store = store
 
     def apply(self, operation: StorageOperation) -> OperationResult:
@@ -48,7 +50,9 @@ class StorageOperationExecutor:
         if not validation.valid:
             raise ValueError(self._format_validation_errors(validation))
 
-        return self._apply_validated(operation)
+        result = self._apply_validated(operation)
+        self._log_audit(operation, result)
+        return result
 
     def apply_batch(self, batch: StorageOperationBatch) -> OperationBatchResult:
         validation = self.validate_batch(batch)
@@ -58,13 +62,22 @@ class StorageOperationExecutor:
         transaction = getattr(self.store, "transaction", None)
         context = transaction() if callable(transaction) else nullcontext()
         with context:
-            results = [self._apply_validated(operation) for operation in batch.operations]
+            results = []
+            for operation in batch.operations:
+                result = self._apply_validated(operation)
+                self._log_audit(operation, result)
+                results.append(result)
 
         return OperationBatchResult(
             results=results,
             status="applied",
             validation=validation,
         )
+
+    def _log_audit(self, operation: StorageOperation, result: OperationResult) -> None:
+        log_audit = getattr(self.store, "log_audit", None)
+        if callable(log_audit):
+            log_audit(operation, result)
 
     def dry_run(self, operation: StorageOperation) -> OperationResult:
         validation = self.validate(operation)
@@ -161,7 +174,8 @@ class StorageOperationExecutor:
             return None
 
         latest = max(gold_chunks, key=lambda c: c.created_at)
-        new_content = latest.content + " | " + aspect
+        existing_aspects = parse_gold_content(latest.content)
+        new_content = " | ".join(existing_aspects + [aspect])
         if len(new_content) <= MAX_GOLD_CHARS:
             latest.status = "superseded"
             latest.updated_at = utc_now()

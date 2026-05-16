@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from vertical_brain.core.models import SearchResult
 from vertical_brain.core.search import _path_in_scope
 from vertical_brain.llm.embedding import EmbeddingProvider, cosine_similarity
+
+if TYPE_CHECKING:
+    from vertical_brain.storage.protocol import StorageProvider
 
 
 class EmbeddingSearch:
     """Semantic chunk search using cosine similarity against embedded chunk content."""
 
-    def __init__(self, store: object, provider: EmbeddingProvider) -> None:
+    def __init__(self, store: "StorageProvider", provider: EmbeddingProvider) -> None:
         self._store = store
         self._provider = provider
         self._cache: dict[str, list[float]] = {}

@@ -9,7 +9,10 @@ import io
 import json
 import sys
 import traceback
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from vertical_brain.storage.protocol import StorageProvider
 
 from vertical_brain.core.context_session import ContextSession
 from vertical_brain.core.embedding_router import EmbeddingRouter
@@ -293,11 +296,11 @@ _TOOLS: list[dict[str, Any]] = [
 class VerticalBrainMCP:
     """JSON-RPC 2.0 handler. Protocol-agnostic — call handle() with parsed dicts."""
 
-    def __init__(self, store: object, embedding_provider: EmbeddingProvider | None = None) -> None:
+    def __init__(self, store: "StorageProvider", embedding_provider: EmbeddingProvider | None = None) -> None:
         self._store = store
         self._provider = embedding_provider or MockEmbeddingProvider()
-        self._session = ContextSession(store)  # type: ignore[arg-type]
-        self._executor = StorageOperationExecutor(store)  # type: ignore[arg-type]
+        self._session = ContextSession(store)
+        self._executor = StorageOperationExecutor(store)
 
     # ------------------------------------------------------------------
     # Protocol dispatch

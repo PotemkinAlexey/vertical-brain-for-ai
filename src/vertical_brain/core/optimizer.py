@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import TYPE_CHECKING
 
 from vertical_brain.core.models import Chunk, ChunkInput, ContentType, StorageOperation, StorageOperationBatch
 from vertical_brain.core.operations import StorageOperationExecutor
-from vertical_brain.storage.json_store import JsonStore
+
+if TYPE_CHECKING:
+    from vertical_brain.storage.protocol import StorageProvider
 
 
 COMPACTION_SOURCE = "optimizer:namespace_compaction"
@@ -20,7 +23,7 @@ class SimpleOptimizer:
     - returns a simple summary report
     """
 
-    def __init__(self, store: JsonStore, min_compaction_path_parts: int):
+    def __init__(self, store: "StorageProvider", min_compaction_path_parts: int):
         self.store = store
         self.min_compaction_path_parts = min_compaction_path_parts
 
@@ -66,6 +69,79 @@ class SimpleOptimizer:
             )
 
         return "\n".join(lines)
+
+    def plan_branch(self, path: str) -> StorageOperationBatch:
+        """Build the operation batch optimize_branch would apply, without mutating storage."""
+        operations: list[StorageOperation] = []
+
+        chunks = self.store.get_chunks_by_path(path, include_children=True)
+        seen: dict[tuple[str, str], str] = {}
+        stale_ids: set[str] = set()
+        for chunk in chunks:
+            if chunk.status != "active":
+                continue
+            key = (chunk.node_path, chunk.content)
+            if key in seen:
+                operations.append(
+                    StorageOperation(
+                        operation="mark_stale",
+                        target_path=chunk.node_path,
+                        chunk_ids=[chunk.id],
+                        reasoning_summary="Exact duplicate marked stale during optimize.",
+                    )
+                )
+                stale_ids.add(chunk.id)
+            else:
+                seen[key] = chunk.id
+
+        active_chunks = [
+            chunk
+            for chunk in chunks
+            if chunk.status == "active"
+            and chunk.id not in stale_ids
+            and chunk.layer != "gold"
+            and chunk.source != COMPACTION_SOURCE
+            and not chunk.lineage
+        ]
+        grouped: dict[str, list[Chunk]] = defaultdict(list)
+        for chunk in active_chunks:
+            if len(chunk.node_path.split("/")) < self.min_compaction_path_parts:
+                continue
+            grouped[chunk.node_path].append(chunk)
+
+        for node_path, node_chunks in sorted(grouped.items()):
+            if len(node_chunks) < 2:
+                continue
+            lineage = [chunk.id for chunk in node_chunks]
+            operations.append(
+                StorageOperation(
+                    operation="append_chunk",
+                    target_path=node_path,
+                    chunk=ChunkInput(
+                        content=self._build_silver_compaction(node_path, node_chunks),
+                        layer="silver",
+                        content_type=self._dominant_content_type(node_chunks),
+                        source=COMPACTION_SOURCE,
+                        confidence=min(chunk.confidence for chunk in node_chunks),
+                        lineage=lineage,
+                    ),
+                    confidence=min(chunk.confidence for chunk in node_chunks),
+                    reasoning_summary="Canonical namespace variant created from active chunk variants.",
+                )
+            )
+            operations.append(
+                StorageOperation(
+                    operation="supersede_chunk",
+                    target_path=node_path,
+                    chunk_ids=lineage,
+                    reasoning_summary="Original variants superseded by canonical namespace compaction.",
+                )
+            )
+
+        return StorageOperationBatch(
+            operations=operations,
+            reasoning_summary=f"Compaction plan for {path}.",
+        )
 
     def _compact_related_chunks(self, path: str) -> dict[str, int]:
         active_chunks = [

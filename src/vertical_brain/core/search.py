@@ -1,15 +1,48 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from vertical_brain.core.models import Chunk, SearchResult
+
+if TYPE_CHECKING:
+    from vertical_brain.storage.protocol import StorageProvider
 
 
 TOKEN_PATTERN = re.compile(r"\w+", re.UNICODE)
 
 
+@dataclass
+class PathRank:
+    path: str
+    score: float
+    max_score: float
+    hit_count: int
+
+
+def rank_paths_from_results(results: list[SearchResult]) -> list[PathRank]:
+    path_scores: dict[str, list[float]] = defaultdict(list)
+    for result in results:
+        path_scores[result.path].append(result.score)
+
+    ranks: list[PathRank] = []
+    for path, scores in path_scores.items():
+        scores_sorted = sorted(scores, reverse=True)
+        max_score = scores_sorted[0]
+        avg_top = sum(scores_sorted[:3]) / min(len(scores_sorted), 3)
+        hit_count = len(scores)
+        final = max_score + 0.2 * avg_top + 0.05 * min(hit_count, 5)
+        ranks.append(
+            PathRank(path=path, score=final, max_score=max_score, hit_count=hit_count)
+        )
+
+    return sorted(ranks, key=lambda r: (-r.score, r.path))
+
+
 class BrainSearch:
-    def __init__(self, store):
+    def __init__(self, store: "StorageProvider"):
         self.store = store
 
     def search(

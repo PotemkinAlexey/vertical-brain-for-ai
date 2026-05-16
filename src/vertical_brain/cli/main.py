@@ -6,6 +6,7 @@ from pathlib import Path
 
 from vertical_brain.core.context_lock import ContextLock
 from vertical_brain.core.context_session import ContextSession
+from vertical_brain.core.doctor import Doctor
 from vertical_brain.core.embedding_router import EmbeddingRouter
 from vertical_brain.core.embedding_search import EmbeddingSearch
 from vertical_brain.mcp.server import run_stdio
@@ -34,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--storage-backend",
         choices=["json", "sqlite"],
-        default="json",
+        default="sqlite",
         help="Storage backend to use",
     )
     parser.add_argument(
@@ -83,14 +84,20 @@ def build_parser() -> argparse.ArgumentParser:
     context_sub = context.add_subparsers(dest="context_command", required=True)
     context_search = context_sub.add_parser("search")
     context_search.add_argument("--path", default=None, help="Limit search to a namespace branch")
-    context_search.add_argument("--search-limit", type=int, default=10, help="Maximum candidate handles")
-    context_search.add_argument("--context-limit", type=int, default=3, help="Maximum locked contexts to open")
-    context_search.add_argument("--items-per-context", type=int, default=6, help="Maximum items per locked context")
+    context_search.add_argument(
+        "--search-limit", type=int, default=None, help="Maximum candidate handles"
+    )
+    context_search.add_argument(
+        "--context-limit", type=int, default=None, help="Maximum locked contexts to open"
+    )
+    context_search.add_argument(
+        "--items-per-context", type=int, default=None, help="Maximum items per locked context"
+    )
     context_search.add_argument("--no-ancestors", action="store_true", help="Do not include ancestor Gold summaries")
     context_search.add_argument(
         "--link-expansion",
         choices=["handles_only", "expanded", "none"],
-        default="handles_only",
+        default=None,
         help="How to expose horizontal links in locked contexts",
     )
     context_search.add_argument("--json", action="store_true", help="Print strict JSON result")
@@ -127,6 +134,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     optimize = sub.add_parser("optimize")
     optimize.add_argument("path")
+    optimize.add_argument("--plan", action="store_true", help="Print compaction plan without applying")
+
+    doctor_cmd = sub.add_parser("doctor")
+    doctor_cmd.add_argument("--json", action="store_true", help="Print JSON report")
 
     operation = sub.add_parser("operation")
     operation_sub = operation.add_subparsers(dest="operation_command", required=True)
@@ -314,14 +325,23 @@ def main() -> None:
 
     elif args.command == "context":
         if args.context_command == "search":
+            cfg = storage_model.context_session_config
             result = ContextSession(store).search_locked_context(
                 args.query,
                 root_path=args.path,
-                search_limit=args.search_limit,
-                context_limit=args.context_limit,
-                items_per_context=args.items_per_context,
+                search_limit=args.search_limit
+                if args.search_limit is not None
+                else cfg.default_search_limit,
+                context_limit=args.context_limit
+                if args.context_limit is not None
+                else cfg.default_context_limit,
+                items_per_context=args.items_per_context
+                if args.items_per_context is not None
+                else cfg.default_items_per_context,
                 include_ancestors=not args.no_ancestors,
-                link_expansion=args.link_expansion,
+                link_expansion=args.link_expansion
+                if args.link_expansion is not None
+                else cfg.default_link_expansion,
             )
             if args.json:
                 print(result.to_json())
@@ -385,7 +405,34 @@ def main() -> None:
             store,
             min_compaction_path_parts=storage_model.min_compaction_path_parts,
         )
-        print(optimizer.optimize_branch(args.path))
+        if args.plan:
+            print(optimizer.plan_branch(args.path).to_json())
+        else:
+            print(optimizer.optimize_branch(args.path))
+
+    elif args.command == "doctor":
+        issues = Doctor(store).run()
+        if args.json:
+            print(json.dumps(
+                [
+                    {
+                        "severity": issue.severity,
+                        "check": issue.check,
+                        "message": issue.message,
+                        "path": issue.path,
+                    }
+                    for issue in issues
+                ],
+                indent=2,
+            ))
+        else:
+            if not issues:
+                print("No issues found.")
+            else:
+                for issue in issues:
+                    prefix = "ERROR" if issue.severity == "error" else "WARN"
+                    path_info = f" [{issue.path}]" if issue.path else ""
+                    print(f"{prefix} [{issue.check}]{path_info} {issue.message}")
 
     elif args.command == "operation":
         payload = json.loads(Path(args.file).read_text(encoding="utf-8"))

@@ -1,0 +1,180 @@
+from __future__ import annotations
+
+from collections import defaultdict
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from vertical_brain.storage.protocol import StorageProvider
+
+
+_VALID_LAYERS = {"bronze", "silver", "gold"}
+_VALID_CONTENT_TYPES = {
+    "fact", "correction", "decision", "question", "note", "code", "artifact",
+}
+_VALID_STATUSES = {
+    "active", "stale", "legacy", "superseded", "contradicted", "uncertain",
+}
+
+
+@dataclass
+class DoctorIssue:
+    severity: str  # "error" | "warning"
+    check: str
+    message: str
+    path: str | None = None
+
+
+class Doctor:
+    """Runs integrity checks against a storage backend."""
+
+    def __init__(self, store: "StorageProvider") -> None:
+        self._store = store
+
+    def run(self) -> list[DoctorIssue]:
+        issues: list[DoctorIssue] = []
+        issues += self._check_orphan_links()
+        issues += self._check_chunks_missing_nodes()
+        issues += self._check_duplicate_active_chunks_by_hash()
+        issues += self._check_broken_gold_overflow_chains()
+        issues += self._check_invalid_namespace_paths()
+        issues += self._check_empty_chunk_content()
+        issues += self._check_invalid_chunk_fields()
+        issues += self._check_links_missing_reason()
+        return issues
+
+    def _node_paths(self) -> set[str]:
+        return {node.path for node in self._store.list_nodes()}
+
+    def _check_orphan_links(self) -> list[DoctorIssue]:
+        issues: list[DoctorIssue] = []
+        node_paths = self._node_paths()
+        for link in self._store.list_links():
+            if link.source_path not in node_paths:
+                issues.append(DoctorIssue(
+                    severity="error",
+                    check="orphan_link",
+                    message=f"link {link.id} source_path is not a known node",
+                    path=link.source_path,
+                ))
+            if link.target_path not in node_paths:
+                issues.append(DoctorIssue(
+                    severity="error",
+                    check="orphan_link",
+                    message=f"link {link.id} target_path is not a known node",
+                    path=link.target_path,
+                ))
+        return issues
+
+    def _check_chunks_missing_nodes(self) -> list[DoctorIssue]:
+        issues: list[DoctorIssue] = []
+        node_paths = self._node_paths()
+        for chunk in self._store.list_chunks():
+            if chunk.node_path not in node_paths:
+                issues.append(DoctorIssue(
+                    severity="error",
+                    check="chunk_missing_node",
+                    message=f"chunk {chunk.id} references an unknown node",
+                    path=chunk.node_path,
+                ))
+        return issues
+
+    def _check_duplicate_active_chunks_by_hash(self) -> list[DoctorIssue]:
+        issues: list[DoctorIssue] = []
+        by_key: dict[tuple[str, str], list[str]] = defaultdict(list)
+        for chunk in self._store.list_chunks():
+            if chunk.status != "active":
+                continue
+            by_key[(chunk.node_path, chunk.content_hash)].append(chunk.id)
+        for (path, _hash), chunk_ids in by_key.items():
+            if len(chunk_ids) > 1:
+                issues.append(DoctorIssue(
+                    severity="warning",
+                    check="duplicate_active_chunk",
+                    message=f"{len(chunk_ids)} active chunks share the same content hash",
+                    path=path,
+                ))
+        return issues
+
+    def _check_broken_gold_overflow_chains(self) -> list[DoctorIssue]:
+        issues: list[DoctorIssue] = []
+        node_paths = self._node_paths()
+        for link in self._store.list_links():
+            if link.link_type == "gold_overflow" and link.target_path not in node_paths:
+                issues.append(DoctorIssue(
+                    severity="error",
+                    check="broken_gold_overflow",
+                    message=f"gold_overflow link {link.id} points to a missing node",
+                    path=link.target_path,
+                ))
+        return issues
+
+    def _check_invalid_namespace_paths(self) -> list[DoctorIssue]:
+        issues: list[DoctorIssue] = []
+        for node in self._store.list_nodes():
+            path = node.path
+            if path.startswith("/") or path.endswith("/") or "//" in path:
+                issues.append(DoctorIssue(
+                    severity="error",
+                    check="invalid_namespace_path",
+                    message="namespace path has a leading/trailing slash or empty segment",
+                    path=path,
+                ))
+        return issues
+
+    def _check_empty_chunk_content(self) -> list[DoctorIssue]:
+        issues: list[DoctorIssue] = []
+        for chunk in self._store.list_chunks():
+            if not chunk.content or not chunk.content.strip():
+                issues.append(DoctorIssue(
+                    severity="error",
+                    check="empty_chunk_content",
+                    message=f"chunk {chunk.id} has empty content",
+                    path=chunk.node_path,
+                ))
+        return issues
+
+    def _check_invalid_chunk_fields(self) -> list[DoctorIssue]:
+        issues: list[DoctorIssue] = []
+        for chunk in self._store.list_chunks():
+            if chunk.layer not in _VALID_LAYERS:
+                issues.append(DoctorIssue(
+                    severity="error",
+                    check="invalid_chunk_field",
+                    message=f"chunk {chunk.id} has invalid layer '{chunk.layer}'",
+                    path=chunk.node_path,
+                ))
+            if chunk.content_type not in _VALID_CONTENT_TYPES:
+                issues.append(DoctorIssue(
+                    severity="error",
+                    check="invalid_chunk_field",
+                    message=f"chunk {chunk.id} has invalid content_type '{chunk.content_type}'",
+                    path=chunk.node_path,
+                ))
+            if chunk.status not in _VALID_STATUSES:
+                issues.append(DoctorIssue(
+                    severity="error",
+                    check="invalid_chunk_field",
+                    message=f"chunk {chunk.id} has invalid status '{chunk.status}'",
+                    path=chunk.node_path,
+                ))
+        return issues
+
+    def _check_links_missing_reason(self) -> list[DoctorIssue]:
+        issues: list[DoctorIssue] = []
+        for link in self._store.list_links():
+            if not link.reason or not link.reason.strip():
+                issues.append(DoctorIssue(
+                    severity="warning",
+                    check="link_missing_reason",
+                    message=f"link {link.id} has an empty reason",
+                    path=link.source_path,
+                ))
+            if not link.link_type or not link.link_type.strip():
+                issues.append(DoctorIssue(
+                    severity="error",
+                    check="link_missing_reason",
+                    message=f"link {link.id} has an empty link_type",
+                    path=link.source_path,
+                ))
+        return issues
