@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 from vertical_brain.core.context_session import ContextSession
 from vertical_brain.core.embedding_router import EmbeddingRouter
 from vertical_brain.core.embedding_search import EmbeddingSearch
-from vertical_brain.core.models import Chunk, ChunkInput, LinkInput, StorageOperation
+from vertical_brain.core.models import Chunk, ChunkInput, LinkInput, StorageOperation, StorageOperationBatch
 from vertical_brain.core.operations import StorageOperationExecutor
 from vertical_brain.core.search import BrainSearch
 from vertical_brain.llm.embedding import EmbeddingProvider, MockEmbeddingProvider
@@ -503,29 +503,35 @@ class VerticalBrainMCP:
                 operation="mark_stale",
                 target_path=args["path"],
                 chunk_ids=chunk_ids,
+                reasoning_summary=args.get("reason", ""),
             )
             self._executor.apply(op)
             return json.dumps({"status": "applied", "marked": len(chunk_ids)})
 
         if name == "batch_append":
             chunks_data: list[dict[str, Any]] = args.get("chunks", [])
-            chunk_ids_written: list[str] = []
-            for item in chunks_data:
-                op = StorageOperation(
-                    operation="append_chunk",
-                    target_path=item["path"],
-                    chunk=ChunkInput(
-                        content=item["content"],
-                        layer=item.get("layer", "bronze"),
-                        content_type=item.get("content_type", "fact"),
-                        source=item.get("source", "model"),
-                        confidence=item.get("confidence", 1.0),
-                    ),
-                )
-                result = self._executor.apply(op)
-                if result.chunk_id:
-                    chunk_ids_written.append(result.chunk_id)
-            return json.dumps({"status": "applied", "chunk_ids": chunk_ids_written})
+            if not chunks_data:
+                return json.dumps({"status": "applied", "chunk_ids": []})
+            batch = StorageOperationBatch(
+                operations=[
+                    StorageOperation(
+                        operation="append_chunk",
+                        target_path=item["path"],
+                        chunk=ChunkInput(
+                            content=item["content"],
+                            layer=item.get("layer", "bronze"),
+                            content_type=item.get("content_type", "fact"),
+                            source=item.get("source", "model"),
+                            confidence=item.get("confidence", 1.0),
+                        ),
+                    )
+                    for item in chunks_data
+                ],
+                reasoning_summary=args.get("reasoning_summary", ""),
+            )
+            batch_result = self._executor.apply_batch(batch)
+            chunk_ids_written = [r.chunk_id for r in batch_result.results if r.chunk_id]
+            return json.dumps({"status": batch_result.status, "chunk_ids": chunk_ids_written})
 
         if name == "session_end":
             op = StorageOperation(

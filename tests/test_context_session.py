@@ -159,5 +159,5 @@ def test_context_session_rejects_link_expand_from_unconnected_path(tmp_path):
         )
     )
 
-    with pytest.raises(ValueError, match="not connected"):
+    with pytest.raises(ValueError, match="not an endpoint"):
         ContextSession(store).expand_link(link.id, from_path="WORK/Other")

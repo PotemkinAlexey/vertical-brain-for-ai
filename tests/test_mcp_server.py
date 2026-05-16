@@ -6,6 +6,7 @@ from typing import Optional
 from vertical_brain.core.models import Chunk
 from vertical_brain.mcp.server import VerticalBrainMCP
 from vertical_brain.storage.json_store import JsonStore
+from vertical_brain.storage.sqlite_store import SQLiteStore
 
 
 def _mcp(tmp_path):
@@ -338,3 +339,55 @@ def test_append_chunk_respects_source_and_confidence(tmp_path):
     chunk = store.get_chunks_by_path("WORK/DataArt")[0]
     assert chunk.source == "user"
     assert chunk.confidence == 0.95
+
+
+def test_mark_stale_passes_reason_to_audit(tmp_path):
+    store = SQLiteStore(tmp_path)
+    mcp = VerticalBrainMCP(store)
+    chunk = store.save_chunk(Chunk(node_path="WORK/DataArt", content="outdated fact"))
+
+    _call(mcp, "mark_stale", {
+        "path": "WORK/DataArt",
+        "chunk_ids": [chunk.id],
+        "reason": "superseded by new analysis",
+    })
+
+    audit = store.list_audit()
+    assert len(audit) == 1
+    assert audit[0]["reasoning_summary"] == "superseded by new analysis"
+
+
+def test_batch_append_uses_atomic_transaction_sqlite(tmp_path):
+    store = SQLiteStore(tmp_path)
+    mcp = VerticalBrainMCP(store)
+
+    resp = _call(mcp, "batch_append", {"chunks": [
+        {"path": "WORK/A", "content": "fact A", "layer": "silver"},
+        {"path": "WORK/B", "content": "fact B"},
+        {"path": "WORK/C", "content": "fact C"},
+    ]})
+    result = json.loads(_text(resp))
+
+    assert result["status"] == "applied"
+    assert len(result["chunk_ids"]) == 3
+    assert len(store.get_chunks_by_path("WORK/A")) == 1
+    assert len(store.get_chunks_by_path("WORK/B")) == 1
+    assert len(store.get_chunks_by_path("WORK/C")) == 1
+
+
+def test_batch_append_writes_audit_for_each_operation(tmp_path):
+    store = SQLiteStore(tmp_path)
+    mcp = VerticalBrainMCP(store)
+
+    _call(mcp, "batch_append", {
+        "reasoning_summary": "batch rationale",
+        "chunks": [
+            {"path": "WORK/A", "content": "one"},
+            {"path": "WORK/B", "content": "two"},
+        ],
+    })
+
+    audit = store.list_audit()
+    assert len(audit) == 2
+    assert all(r["reasoning_summary"] == "batch rationale" for r in audit)
+    assert all(r["status"] == "applied" for r in audit)

@@ -41,6 +41,7 @@ class Doctor:
         issues += self._check_empty_chunk_content()
         issues += self._check_invalid_chunk_fields()
         issues += self._check_links_missing_reason()
+        issues += self._check_fts_index_stale_leak()
         return issues
 
     def _node_paths(self) -> set[str]:
@@ -177,4 +178,27 @@ class Doctor:
                     message=f"link {link.id} has an empty link_type",
                     path=link.source_path,
                 ))
+        return issues
+
+    def _check_fts_index_stale_leak(self) -> list[DoctorIssue]:
+        conn = getattr(self._store, "conn", None)
+        fts_enabled = getattr(self._store, "_fts_enabled", False)
+        if conn is None or not fts_enabled:
+            return []
+        issues: list[DoctorIssue] = []
+        rows = conn.execute(
+            """
+            SELECT s.record_id, c.status
+            FROM search_index s
+            JOIN chunks c ON s.record_id = c.id
+            WHERE s.record_type = 'chunk' AND c.status != 'active'
+            """
+        ).fetchall()
+        for row in rows:
+            issues.append(DoctorIssue(
+                severity="warning",
+                check="fts_stale_leak",
+                message=f"chunk {row[0]} has status '{row[1]}' but is still in the FTS search index",
+                path=None,
+            ))
         return issues

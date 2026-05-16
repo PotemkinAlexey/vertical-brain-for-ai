@@ -148,7 +148,11 @@ class ContextLock:
         if link.link_type in _SYMMETRIC_LINK_TYPES:
             if from_path is None:
                 return link.target_path
-            return link.target_path if from_path == link.source_path else link.source_path
+            if from_path == link.source_path:
+                return link.target_path
+            if from_path == link.target_path:
+                return link.source_path
+            raise ValueError(f"from_path {from_path} is not an endpoint of link {link_id}")
 
         if from_path is None:
             raise ValueError(

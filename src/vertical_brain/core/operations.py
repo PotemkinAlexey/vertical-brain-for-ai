@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from contextlib import nullcontext
+from dataclasses import replace as dc_replace
 from typing import TYPE_CHECKING, Any, get_args
 
 from vertical_brain.core.gold import parse_gold_content
@@ -64,6 +65,8 @@ class StorageOperationExecutor:
         with context:
             results = []
             for operation in batch.operations:
+                if not operation.reasoning_summary and batch.reasoning_summary:
+                    operation = dc_replace(operation, reasoning_summary=batch.reasoning_summary)
                 result = self._apply_validated(operation)
                 self._log_audit(operation, result)
                 results.append(result)

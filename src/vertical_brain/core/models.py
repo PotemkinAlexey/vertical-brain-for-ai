@@ -233,9 +233,9 @@ class LinkExpansionResult(JsonSerializable):
     link_id: str
     source_path: str
     expanded_path: str
-    link_type: str
-    reason: str
     locked_context: LockedContext
+    link_type: str = ""
+    reason: str = ""
 
 
 @dataclass

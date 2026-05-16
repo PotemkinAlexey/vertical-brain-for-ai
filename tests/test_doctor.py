@@ -1,8 +1,11 @@
 import json
 
+import pytest
+
 from vertical_brain.core.doctor import Doctor
 from vertical_brain.core.models import Chunk, Link
 from vertical_brain.storage.json_store import JsonStore
+from vertical_brain.storage.sqlite_store import SQLiteStore
 
 
 def test_doctor_clean_store_reports_no_issues(tmp_path):
@@ -78,3 +81,33 @@ def test_doctor_json_output_is_stable(tmp_path):
     ]
     # round-trips through JSON without error
     assert json.loads(json.dumps(serialized)) == serialized
+
+
+def test_doctor_skips_fts_check_for_json_store(tmp_path):
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/A", content="fact"))
+    issues = Doctor(store).run()
+    assert not any(i.check == "fts_stale_leak" for i in issues)
+
+
+def test_doctor_detects_fts_stale_leak_in_sqlite(tmp_path):
+    store = SQLiteStore(tmp_path)
+    chunk = store.save_chunk(Chunk(node_path="WORK/A", content="stale fact"))
+    # Simulate stale leak: chunk indexed as active but status changed in DB without re-indexing.
+    store.conn.execute(
+        "UPDATE chunks SET status = 'stale' WHERE id = ?", (chunk.id,)
+    )
+    store.conn.commit()
+    # Do NOT call rebuild_search_index so FTS still has the old record.
+    issues = Doctor(store).run()
+    stale_issues = [i for i in issues if i.check == "fts_stale_leak"]
+    assert len(stale_issues) == 1
+    assert chunk.id in stale_issues[0].message
+    assert stale_issues[0].severity == "warning"
+
+
+def test_doctor_no_fts_stale_leak_when_index_is_clean(tmp_path):
+    store = SQLiteStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/A", content="active fact"))
+    issues = Doctor(store).run()
+    assert not any(i.check == "fts_stale_leak" for i in issues)
