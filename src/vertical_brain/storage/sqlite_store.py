@@ -105,6 +105,14 @@ class SQLiteStore:
                 reasoning_summary TEXT,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS vector_cache (
+                content_hash TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                vector_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (content_hash, model_name)
+            );
             """
         )
         self.conn.commit()
@@ -370,6 +378,35 @@ class SQLiteStore:
             (model_name, vector_dimension, now, now),
         )
         self._commit_if_needed()
+
+    def get_vector(self, content_hash: str, model_name: str) -> list[float] | None:
+        row = self.conn.execute(
+            "SELECT vector_json FROM vector_cache WHERE content_hash = ? AND model_name = ?",
+            (content_hash, model_name),
+        ).fetchone()
+        if row is None:
+            return None
+        return json.loads(row[0])
+
+    def set_vector(self, content_hash: str, model_name: str, vector: list[float]) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO vector_cache (content_hash, model_name, vector_json, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(content_hash, model_name) DO UPDATE SET
+                vector_json = excluded.vector_json,
+                created_at = excluded.created_at
+            """,
+            (content_hash, model_name, json.dumps(vector, ensure_ascii=False), utc_now()),
+        )
+        self._commit_if_needed()
+
+    def delete_vectors_for_model(self, model_name: str) -> int:
+        cursor = self.conn.execute(
+            "DELETE FROM vector_cache WHERE model_name = ?", (model_name,)
+        )
+        self._commit_if_needed()
+        return cursor.rowcount
 
     def rename_namespace(self, old_prefix: str, new_prefix: str) -> None:
         old_exact = old_prefix

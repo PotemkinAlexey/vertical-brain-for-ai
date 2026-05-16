@@ -253,6 +253,37 @@ class JsonStore:
             encoding="utf-8",
         )
 
+    def _read_vector_cache(self) -> dict[str, Any]:
+        cache_file = self.root / "vector_cache.json"
+        if not cache_file.exists():
+            return {}
+        try:
+            return json.loads(cache_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _write_vector_cache(self, cache: dict[str, Any]) -> None:
+        (self.root / "vector_cache.json").write_text(
+            json.dumps(cache, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def get_vector(self, content_hash: str, model_name: str) -> list[float] | None:
+        entry = self._read_vector_cache().get(content_hash, {})
+        return entry.get(model_name)
+
+    def set_vector(self, content_hash: str, model_name: str, vector: list[float]) -> None:
+        cache = self._read_vector_cache()
+        cache.setdefault(content_hash, {})[model_name] = vector
+        self._write_vector_cache(cache)
+
+    def delete_vectors_for_model(self, model_name: str) -> int:
+        cache = self._read_vector_cache()
+        count = sum(1 for entry in cache.values() if model_name in entry)
+        for entry in cache.values():
+            entry.pop(model_name, None)
+        self._write_vector_cache(cache)
+        return count
+
     def rename_namespace(self, old_prefix: str, new_prefix: str) -> None:
         chunks = self._read(self.chunks_file)
         for row in chunks:

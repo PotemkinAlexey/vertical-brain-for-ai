@@ -26,7 +26,6 @@ class EmbeddingSearch:
     ) -> None:
         self._store = store
         self._provider = provider
-        self._cache: dict[str, list[float]] = {}
         if validate_schema:
             self._init_embedding_schema()
 
@@ -54,16 +53,53 @@ class EmbeddingSearch:
                 f"{stored['vector_dimension']}. Rebuild the embedding index before searching."
             )
 
+    def _get_vector(self, content_hash: str, content: str) -> list[float]:
+        """Return embedding vector, reading from persistent cache or computing on miss."""
+        model_name = getattr(self._provider, "model_name", None)
+        if model_name:
+            get_vector = getattr(self._store, "get_vector", None)
+            if callable(get_vector):
+                cached = get_vector(content_hash, model_name)
+                if cached is not None:
+                    return cached
+
+        vec = self._provider.embed(content)
+
+        if model_name:
+            set_vector = getattr(self._store, "set_vector", None)
+            if callable(set_vector):
+                set_vector(content_hash, model_name, vec)
+
+        return vec
+
     def trigger_reindexing(
         self,
         node_path: str | None = None,
         new_provider: EmbeddingProvider | None = None,
     ) -> None:
-        """Schedule reindexing under a new embedding model. Not yet implemented."""
-        raise NotImplementedError(
-            "Reindexing is not yet implemented. To migrate to a new embedding model, "
-            "clear the embedding schema and rebuild the index with the new provider."
-        )
+        """Warm in-memory cache (and persistent cache) for all active chunks.
+
+        If *new_provider* is given the old model's cached vectors are purged first,
+        the embedding schema is updated, and the provider is replaced before
+        re-embedding.
+        """
+        if new_provider is not None:
+            old_model = getattr(self._provider, "model_name", None)
+            if old_model:
+                delete_vectors = getattr(self._store, "delete_vectors_for_model", None)
+                if callable(delete_vectors):
+                    delete_vectors(old_model)
+            self._provider = new_provider
+            set_schema = getattr(self._store, "set_embedding_schema", None)
+            if callable(set_schema):
+                new_model = getattr(new_provider, "model_name", None)
+                new_dim = getattr(new_provider, "embed_dimension", -1)
+                if new_model:
+                    set_schema(new_model, new_dim)
+
+        for chunk in self._store.list_chunks():  # type: ignore[attr-defined]
+            if chunk.status == "active":
+                self._get_vector(chunk.content_hash, chunk.content)
 
     def search(
         self,
@@ -86,9 +122,7 @@ class EmbeddingSearch:
             if not _path_in_scope(chunk.node_path, root_path):
                 continue
 
-            if chunk.content not in self._cache:
-                self._cache[chunk.content] = self._provider.embed(chunk.content)
-            score = cosine_similarity(query_vec, self._cache[chunk.content])
+            score = cosine_similarity(query_vec, self._get_vector(chunk.content_hash, chunk.content))
             if score <= threshold:
                 continue
 
