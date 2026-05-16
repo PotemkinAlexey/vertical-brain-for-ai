@@ -70,7 +70,7 @@ class EmbeddingRouter:
         limit: int = 5,
     ) -> list[EmbeddingRouteCandidate]:
         query_vec = self._provider.embed(text)
-        query_tokens = {t.lower() for t in text.replace("/", " ").split() if t}
+        query_tokens = _path_tokens(text)
 
         # --- semantic scoring against active Gold chunks ---
         gold_chunks = [

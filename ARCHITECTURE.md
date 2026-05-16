@@ -121,6 +121,10 @@ connection is not thread-safe by default.  The right pattern for
 multi-threaded code is one `SQLiteStore` per thread (or per request),
 each opening its own connection to the same file.
 
+For agent and MCP usage, prefer one `SQLiteStore` instance per
+process/worker.  The MCP stdio server is single-process, so a single
+instance is the right default.
+
 ## Known limitations / MVP status
 
 - Routing uses a mock LLM unless a real provider or `--llm-response-file` is

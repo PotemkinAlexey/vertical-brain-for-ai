@@ -1,3 +1,5 @@
+import pytest
+
 from vertical_brain.core.embedding_router import EmbeddingRouter
 from vertical_brain.core.models import Chunk
 from vertical_brain.core.operations import StorageOperationExecutor
@@ -129,21 +131,29 @@ def test_embedding_router_semantic_gold_outranks_path_match(tmp_path):
 
 # ── camelCase / PascalCase path tokenization ─────────────────────────────────
 
-def test_router_path_fallback_matches_camel_case_segment_auto_loader(tmp_path):
+@pytest.mark.parametrize("query", [
+    "auto loader",
+    "auto-loader",
+    "AutoLoader",
+])
+def test_router_path_fallback_matches_autoloader_namespace(tmp_path, query):
     store = JsonStore(tmp_path)
     store.ensure_node("WORK/DataArt/Databricks/AutoLoader")
 
-    candidates = EmbeddingRouter(store, MockEmbeddingProvider()).find_candidates("auto loader")
+    candidates = EmbeddingRouter(store, MockEmbeddingProvider()).find_candidates(query)
 
     assert any(c.path == "WORK/DataArt/Databricks/AutoLoader" for c in candidates)
 
 
-def test_router_path_fallback_matches_pascal_case_segment_structured_streaming(tmp_path):
+@pytest.mark.parametrize("query", [
+    "structured streaming",
+    "structuredStreaming",
+    "StructuredStreaming",
+])
+def test_router_path_fallback_matches_structuredstreaming_namespace(tmp_path, query):
     store = JsonStore(tmp_path)
     store.ensure_node("WORK/DataArt/Databricks/StructuredStreaming")
 
-    candidates = EmbeddingRouter(store, MockEmbeddingProvider()).find_candidates(
-        "structured streaming"
-    )
+    candidates = EmbeddingRouter(store, MockEmbeddingProvider()).find_candidates(query)
 
     assert any(c.path == "WORK/DataArt/Databricks/StructuredStreaming" for c in candidates)
