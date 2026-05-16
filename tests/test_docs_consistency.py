@@ -6,6 +6,8 @@ They are not exhaustive — they guard specific contracts that have drifted befo
 from __future__ import annotations
 
 import inspect
+import re
+from pathlib import Path
 
 from vertical_brain.storage.protocol import StorageProvider
 from vertical_brain.mcp.server import _TOOLS, VerticalBrainMCP
@@ -83,9 +85,6 @@ def test_mcp_no_undeclared_tools(tmp_path):
 
 
 # ── docs/05_mcp_tools.md headings ────────────────────────────────────────────
-
-import re
-from pathlib import Path
 
 
 def _mcp_tools_doc_names() -> set[str]:
