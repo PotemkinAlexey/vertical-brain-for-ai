@@ -161,6 +161,57 @@ def test_unknown_tool_returns_error(tmp_path):
     resp = _call(mcp, "nonexistent_tool")
     assert "error" in resp
     assert resp["error"]["code"] == -32602
+    assert "Unknown tool" in resp["error"]["message"]
+
+
+def test_tool_call_rejects_missing_required_argument(tmp_path):
+    mcp, _ = _mcp(tmp_path)
+
+    resp = _call(mcp, "list_chunks", {})
+
+    assert "error" in resp
+    assert resp["error"]["code"] == -32602
+    assert "$.path: is required" in resp["error"]["message"]
+
+
+def test_tool_call_rejects_bad_enum_argument(tmp_path):
+    mcp, _ = _mcp(tmp_path)
+
+    resp = _call(mcp, "read_context", {"path": "WORK/A", "link_expansion": "everything"})
+
+    assert "error" in resp
+    assert resp["error"]["code"] == -32602
+    assert "must be one of: handles_only, expanded, none" in resp["error"]["message"]
+
+
+def test_tool_call_rejects_non_object_arguments(tmp_path):
+    mcp, _ = _mcp(tmp_path)
+
+    resp = mcp.handle({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "search", "arguments": "Delta"},
+    })
+
+    assert "error" in resp
+    assert resp["error"]["code"] == -32602
+    assert "arguments must be an object" in resp["error"]["message"]
+
+
+def test_tool_call_rejects_non_object_params(tmp_path):
+    mcp, _ = _mcp(tmp_path)
+
+    resp = mcp.handle({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": "search",
+    })
+
+    assert "error" in resp
+    assert resp["error"]["code"] == -32602
+    assert "params must be an object" in resp["error"]["message"]
 
 
 def test_response_includes_request_id(tmp_path):

@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 from vertical_brain.core.context_session import ContextSession
 from vertical_brain.core.embedding_router import EmbeddingRouter
 from vertical_brain.core.embedding_search import EmbeddingSearch
+from vertical_brain.core.json_schema import format_json_schema_errors, validate_json_schema
 from vertical_brain.core.models import ChunkInput, LinkInput, StorageOperation, StorageOperationBatch
 from vertical_brain.core.operations import StorageOperationExecutor
 from vertical_brain.core.search import BrainSearch
@@ -317,6 +318,8 @@ _TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+_TOOLS_BY_NAME: dict[str, dict[str, Any]] = {tool["name"]: tool for tool in _TOOLS}
+
 
 class VerticalBrainMCP:
     """JSON-RPC 2.0 handler. Protocol-agnostic — call handle() with parsed dicts."""
@@ -356,13 +359,22 @@ class VerticalBrainMCP:
     # ------------------------------------------------------------------
 
     def _dispatch_tool(self, req_id: Any, params: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(params, dict):
+            return self._error(req_id, -32602, "tools/call params must be an object")
         name = params.get("name", "")
-        args: dict[str, Any] = params.get("arguments") or {}
+        if name not in _TOOLS_BY_NAME:
+            return self._error(req_id, -32602, f"Unknown tool: {name}")
+        args = params.get("arguments") or {}
+        if not isinstance(args, dict):
+            return self._error(req_id, -32602, "tool arguments must be an object")
+        validation = validate_json_schema(args, _TOOLS_BY_NAME[name].get("inputSchema", {"type": "object"}))
+        if not validation.valid:
+            return self._error(req_id, -32602, f"Invalid tool arguments: {format_json_schema_errors(validation)}")
         try:
             text = self._call_tool(name, args)
             return self._reply(req_id, {"content": [{"type": "text", "text": text}]})
         except KeyError as exc:
-            return self._error(req_id, -32602, f"Unknown tool: {name} ({exc})")
+            return self._error(req_id, -32602, f"Invalid tool arguments: missing {exc}")
         except Exception as exc:
             return self._error(req_id, -32603, f"{type(exc).__name__}: {exc}")
 
