@@ -25,6 +25,13 @@ class MockEmbeddingProvider:
 
     DIM = 64
 
+    def __init__(self, model_name: str = "mock-v1") -> None:
+        self.model_name = model_name
+
+    @property
+    def embed_dimension(self) -> int:
+        return self.DIM
+
     def embed(self, text: str) -> list[float]:
         vec = [0.0] * self.DIM
         for word in text.lower().split():
@@ -40,6 +47,14 @@ class HttpEmbeddingProvider:
         self.url = url
         self.model = model
         self.api_key = api_key
+
+    @property
+    def model_name(self) -> str:
+        return self.model
+
+    @property
+    def embed_dimension(self) -> int:
+        return -1  # not known until first embed call
 
     def embed(self, text: str) -> list[float]:
         payload = json.dumps({"input": text, "model": self.model}).encode()

@@ -125,9 +125,10 @@ class JsonStore:
         return [Node(**self._clean_node_row(row)) for row in self._read(self.nodes_file)]
 
     def _clean_node_row(self, row: dict[str, Any]) -> dict[str, Any]:
-        known = {"id", "path", "name", "parent_path", "node_type", "is_dirty", "created_at", "updated_at"}
+        known = {"id", "path", "name", "parent_path", "node_type", "is_dirty", "version", "created_at", "updated_at"}
         data = {k: v for k, v in row.items() if k in known}
         data.setdefault("is_dirty", False)
+        data.setdefault("version", 0)
         return data
 
     def update_node(self, node: Node) -> Node:
@@ -235,6 +236,47 @@ class JsonStore:
             if line:
                 records.append(json.loads(line))
         return records
+
+    def get_embedding_schema(self) -> dict | None:
+        schema_file = self.root / "embedding_schema.json"
+        if not schema_file.exists():
+            return None
+        return json.loads(schema_file.read_text(encoding="utf-8"))
+
+    def set_embedding_schema(self, model_name: str, vector_dimension: int) -> None:
+        schema_file = self.root / "embedding_schema.json"
+        schema_file.write_text(
+            json.dumps(
+                {"model_name": model_name, "vector_dimension": vector_dimension},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+    def rename_namespace(self, old_prefix: str, new_prefix: str) -> None:
+        chunks = self._read(self.chunks_file)
+        for row in chunks:
+            if row["node_path"] == old_prefix or row["node_path"].startswith(old_prefix + "/"):
+                row["node_path"] = new_prefix + row["node_path"][len(old_prefix):]
+        self._write(self.chunks_file, chunks)
+
+        links = self._read(self.links_file)
+        for row in links:
+            if row["source_path"] == old_prefix or row["source_path"].startswith(old_prefix + "/"):
+                row["source_path"] = new_prefix + row["source_path"][len(old_prefix):]
+            if row["target_path"] == old_prefix or row["target_path"].startswith(old_prefix + "/"):
+                row["target_path"] = new_prefix + row["target_path"][len(old_prefix):]
+        self._write(self.links_file, links)
+
+        nodes = self._read(self.nodes_file)
+        for row in nodes:
+            if row["path"] == old_prefix or row["path"].startswith(old_prefix + "/"):
+                row["path"] = new_prefix + row["path"][len(old_prefix):]
+            if row.get("parent_path") and (
+                row["parent_path"] == old_prefix or row["parent_path"].startswith(old_prefix + "/")
+            ):
+                row["parent_path"] = new_prefix + row["parent_path"][len(old_prefix):]
+        self._write(self.nodes_file, nodes)
 
     def tree_text(self) -> str:
         paths = sorted(n.path for n in self.list_nodes())

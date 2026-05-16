@@ -28,6 +28,21 @@ class StorageProvider(Protocol):
 
 
 @runtime_checkable
+class EmbeddingSchemaStorageProvider(Protocol):
+    """Optional extension for backends that persist embedding model schema."""
+
+    def get_embedding_schema(self) -> Optional[Dict[str, Any]]: ...
+    def set_embedding_schema(self, model_name: str, vector_dimension: int) -> None: ...
+
+
+@runtime_checkable
+class RenameCapableStorageProvider(Protocol):
+    """Optional extension for backends that support atomic namespace rename."""
+
+    def rename_namespace(self, old_prefix: str, new_prefix: str) -> None: ...
+
+
+@runtime_checkable
 class SearchableStorageProvider(Protocol):
     """Optional extension for backends with native full-text search support."""
 

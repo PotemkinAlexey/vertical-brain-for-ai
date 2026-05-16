@@ -59,7 +59,12 @@ class SimpleOptimizer:
         """Return the operation batch optimize_branch would apply without mutating storage."""
         chunks = self.store.get_chunks_by_path(path, include_children=True)
         linked_paths = self._linked_paths_if_decay_enabled()
-        return self._build_plan(chunks, path, linked_paths=linked_paths)
+        batch = self._build_plan(chunks, path, linked_paths=linked_paths)
+        node = self.store.get_node(path)
+        if node is not None:
+            batch.branch_path = path
+            batch.start_version = node.version
+        return batch
 
     # ── core planning (pure over the already-fetched chunk list) ──────────────
 

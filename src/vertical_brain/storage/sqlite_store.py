@@ -47,6 +47,15 @@ class SQLiteStore:
                 node_type TEXT NOT NULL,
                 gold_summary TEXT NOT NULL,
                 is_dirty INTEGER NOT NULL DEFAULT 0,
+                version INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS embedding_schema (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                model_name TEXT NOT NULL,
+                vector_dimension INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -106,6 +115,7 @@ class SQLiteStore:
         existing = {row["name"] for row in self.conn.execute("PRAGMA table_info(nodes)").fetchall()}
         migrations = {
             "is_dirty": "ALTER TABLE nodes ADD COLUMN is_dirty INTEGER NOT NULL DEFAULT 0",
+            "version": "ALTER TABLE nodes ADD COLUMN version INTEGER NOT NULL DEFAULT 0",
         }
         changed = False
         for column, ddl in migrations.items():
@@ -212,13 +222,14 @@ class SQLiteStore:
             row = asdict(node)
             row["gold_summary"] = ""
             row["is_dirty"] = 0
+            row["version"] = node.version
             self.conn.execute(
                 """
                 INSERT INTO nodes (
-                    id, path, name, parent_path, node_type, gold_summary, is_dirty, created_at, updated_at
+                    id, path, name, parent_path, node_type, gold_summary, is_dirty, version, created_at, updated_at
                 )
                 VALUES (
-                    :id, :path, :name, :parent_path, :node_type, :gold_summary, :is_dirty, :created_at, :updated_at
+                    :id, :path, :name, :parent_path, :node_type, :gold_summary, :is_dirty, :version, :created_at, :updated_at
                 )
                 """,
                 row,
@@ -326,17 +337,87 @@ class SQLiteStore:
         data = dict(row)
         data.pop("gold_summary", None)
         data["is_dirty"] = bool(data.get("is_dirty", 0))
+        data.setdefault("version", 0)
         return data
 
     def update_node(self, node: Node) -> Node:
         cursor = self.conn.execute(
-            "UPDATE nodes SET is_dirty = ?, updated_at = ? WHERE path = ?",
-            (1 if node.is_dirty else 0, utc_now(), node.path),
+            "UPDATE nodes SET is_dirty = ?, version = ?, updated_at = ? WHERE path = ?",
+            (1 if node.is_dirty else 0, node.version, utc_now(), node.path),
         )
         if cursor.rowcount == 0:
             raise ValueError(f"Node not found: {node.path}")
         self._commit_if_needed()
         return node
+
+    def get_embedding_schema(self) -> dict | None:
+        row = self.conn.execute("SELECT * FROM embedding_schema WHERE id = 1").fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    def set_embedding_schema(self, model_name: str, vector_dimension: int) -> None:
+        now = utc_now()
+        self.conn.execute(
+            """
+            INSERT INTO embedding_schema (id, model_name, vector_dimension, created_at, updated_at)
+            VALUES (1, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                model_name = excluded.model_name,
+                vector_dimension = excluded.vector_dimension,
+                updated_at = excluded.updated_at
+            """,
+            (model_name, vector_dimension, now, now),
+        )
+        self._commit_if_needed()
+
+    def rename_namespace(self, old_prefix: str, new_prefix: str) -> None:
+        old_exact = old_prefix
+        old_like = old_prefix + "/%"
+        new_len = len(old_prefix)
+        self.conn.execute(
+            """
+            UPDATE chunks
+            SET node_path = ? || SUBSTR(node_path, ?)
+            WHERE node_path = ? OR node_path LIKE ?
+            """,
+            (new_prefix, new_len + 1, old_exact, old_like),
+        )
+        self.conn.execute(
+            """
+            UPDATE links
+            SET source_path = ? || SUBSTR(source_path, ?)
+            WHERE source_path = ? OR source_path LIKE ?
+            """,
+            (new_prefix, new_len + 1, old_exact, old_like),
+        )
+        self.conn.execute(
+            """
+            UPDATE links
+            SET target_path = ? || SUBSTR(target_path, ?)
+            WHERE target_path = ? OR target_path LIKE ?
+            """,
+            (new_prefix, new_len + 1, old_exact, old_like),
+        )
+        self.conn.execute(
+            """
+            UPDATE nodes
+            SET path = ? || SUBSTR(path, ?)
+            WHERE path = ? OR path LIKE ?
+            """,
+            (new_prefix, new_len + 1, old_exact, old_like),
+        )
+        self.conn.execute(
+            """
+            UPDATE nodes
+            SET parent_path = ? || SUBSTR(parent_path, ?)
+            WHERE parent_path = ? OR parent_path LIKE ?
+            """,
+            (new_prefix, new_len + 1, old_exact, old_like),
+        )
+        self._commit_if_needed()
+        if self._fts_enabled:
+            self.rebuild_search_index()
 
     def list_chunks(self) -> list[Chunk]:
         rows = self.conn.execute("SELECT * FROM chunks ORDER BY rowid").fetchall()

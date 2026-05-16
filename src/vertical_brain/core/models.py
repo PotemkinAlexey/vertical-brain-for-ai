@@ -20,6 +20,7 @@ OperationType = Literal[
     "mark_stale",
     "supersede_chunk",
     "append_gold_aspect",
+    "rename_namespace",
 ]
 Action = Literal[
     "append_bronze",
@@ -34,6 +35,10 @@ Action = Literal[
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+class OptimisticLockException(Exception):
+    """Raised when a branch was mutated between plan_branch and apply_batch."""
 
 
 class JsonSerializable:
@@ -52,6 +57,7 @@ class Node:
     parent_path: str | None = None
     node_type: str = "default"
     is_dirty: bool = False
+    version: int = 0
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
 
@@ -124,6 +130,7 @@ class StorageOperation(JsonSerializable):
     stale_candidates: list[StaleCandidateInput] = field(default_factory=list)
     chunk_ids: list[str] = field(default_factory=list)
     gold_aspect: str | None = None
+    new_path: str | None = None
     confidence: float = 1.0
     reasoning_summary: str = ""
 
@@ -132,6 +139,8 @@ class StorageOperation(JsonSerializable):
 class StorageOperationBatch(JsonSerializable):
     operations: list[StorageOperation] = field(default_factory=list)
     reasoning_summary: str = ""
+    branch_path: str | None = None
+    start_version: int | None = None
 
 
 @dataclass

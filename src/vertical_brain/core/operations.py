@@ -17,6 +17,7 @@ from vertical_brain.core.models import (
     OperationBatchResult,
     OperationType,
     OperationResult,
+    OptimisticLockException,
     RouteDecision,
     StaleCandidateInput,
     StorageOperation,
@@ -59,6 +60,14 @@ class StorageOperationExecutor:
         validation = self.validate_batch(batch)
         if not validation.valid:
             raise ValueError(self._format_validation_errors(validation))
+
+        if batch.branch_path is not None and batch.start_version is not None:
+            current_node = self.store.get_node(batch.branch_path)
+            if current_node is not None and current_node.version != batch.start_version:
+                raise OptimisticLockException(
+                    f"Optimistic lock conflict on '{batch.branch_path}': "
+                    f"expected version {batch.start_version}, found {current_node.version}."
+                )
 
         transaction = getattr(self.store, "transaction", None)
         context = transaction() if callable(transaction) else nullcontext()
@@ -165,6 +174,11 @@ class StorageOperationExecutor:
                 overflow_path=overflow_path,
             )
 
+        if operation.operation == "rename_namespace":
+            assert operation.new_path is not None
+            self._do_rename_namespace(operation.target_path, operation.new_path)
+            return OperationResult(operation=operation.operation, target_path=operation.target_path)
+
         raise ValueError(f"Unsupported storage operation: {operation.operation}")
 
     def _apply_append_gold_aspect(self, path: str, aspect: str) -> str | None:
@@ -237,6 +251,29 @@ class StorageOperationExecutor:
             reason=link_input.reason,
         )
 
+    def _do_rename_namespace(self, old_prefix: str, new_prefix: str) -> None:
+        rename = getattr(self.store, "rename_namespace", None)
+        if callable(rename):
+            rename(old_prefix, new_prefix)
+            return
+        # Fallback: Python-level cascade for stores without native rename support.
+        for chunk in list(self.store.list_chunks()):
+            if chunk.node_path == old_prefix or chunk.node_path.startswith(old_prefix + "/"):
+                chunk.node_path = new_prefix + chunk.node_path[len(old_prefix):]
+                self.store.update_chunk(chunk)
+        for link in list(self.store.list_links()):
+            changed = False
+            if link.source_path == old_prefix or link.source_path.startswith(old_prefix + "/"):
+                link.source_path = new_prefix + link.source_path[len(old_prefix):]
+                changed = True
+            if link.target_path == old_prefix or link.target_path.startswith(old_prefix + "/"):
+                link.target_path = new_prefix + link.target_path[len(old_prefix):]
+                changed = True
+            if changed:
+                save_link = getattr(self.store, "save_link", None)
+                if callable(save_link):
+                    save_link(link)
+
     def _mark_ancestors_dirty(self, path: str) -> None:
         update_node = getattr(self.store, "update_node", None)
         if not callable(update_node):
@@ -245,8 +282,9 @@ class StorageOperationExecutor:
         for depth in range(1, len(parts) + 1):
             ancestor = "/".join(parts[:depth])
             node = self.store.get_node(ancestor)
-            if node is not None and not node.is_dirty:
+            if node is not None:
                 node.is_dirty = True
+                node.version += 1
                 update_node(node)
 
     def _update_chunk_status(self, operation: StorageOperation, status: str) -> None:
@@ -312,6 +350,23 @@ class StorageOperationExecutor:
                     ValidationIssue(
                         path=f"{path}.gold_aspect",
                         message="append_gold_aspect requires non-empty gold_aspect",
+                    )
+                )
+            return
+
+        if operation.operation == "rename_namespace":
+            if not isinstance(operation.new_path, str) or not operation.new_path.strip():
+                issues.append(
+                    ValidationIssue(
+                        path=f"{path}.new_path",
+                        message="rename_namespace requires non-empty new_path",
+                    )
+                )
+            elif operation.new_path == operation.target_path:
+                issues.append(
+                    ValidationIssue(
+                        path=f"{path}.new_path",
+                        message="rename_namespace: new_path must differ from target_path",
                     )
                 )
             return
@@ -418,15 +473,20 @@ def operation_batch_from_dict(payload: Mapping[str, Any]) -> StorageOperationBat
     if "operations" not in payload:
         return StorageOperationBatch(operations=[operation_from_dict(payload)])
 
-    unknown = set(payload) - {"operations", "reasoning_summary"}
+    unknown = set(payload) - {"operations", "reasoning_summary", "branch_path", "start_version"}
     if unknown:
         raise ValueError(f"Unknown StorageOperationBatch fields: {', '.join(sorted(unknown))}")
     operations_payload = payload["operations"]
     if not isinstance(operations_payload, list):
         raise ValueError("StorageOperationBatch.operations must be a list")
+    start_version = payload.get("start_version")
+    if start_version is not None and not isinstance(start_version, int):
+        raise ValueError("StorageOperationBatch.start_version must be an integer")
     return StorageOperationBatch(
         operations=[operation_from_dict(operation) for operation in operations_payload],
         reasoning_summary=_string_value(payload, "reasoning_summary", default=""),
+        branch_path=payload.get("branch_path"),
+        start_version=start_version,
     )
 
 
@@ -441,6 +501,7 @@ def operation_from_dict(payload: Mapping[str, Any]) -> StorageOperation:
         "stale_candidates",
         "chunk_ids",
         "gold_aspect",
+        "new_path",
         "confidence",
         "reasoning_summary",
     }
@@ -460,6 +521,7 @@ def operation_from_dict(payload: Mapping[str, Any]) -> StorageOperation:
         stale_candidates=[_stale_candidate_from_dict(candidate) for candidate in stale_payload],
         chunk_ids=[_string_item(chunk_id, "chunk_ids") for chunk_id in _list_value(payload, "chunk_ids", default=[])],
         gold_aspect=payload.get("gold_aspect"),
+        new_path=payload.get("new_path"),
         confidence=_number_value(payload, "confidence", default=1.0),
         reasoning_summary=_string_value(payload, "reasoning_summary", default=""),
     )
