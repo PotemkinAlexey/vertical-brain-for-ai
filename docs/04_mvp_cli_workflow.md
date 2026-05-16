@@ -2,11 +2,10 @@
 
 ## Commands
 
-The default backend is JSON. SQLite can be selected for transactional local
-storage:
+The default backend is SQLite. The JSON backend can be selected for human-readable local storage:
 
 ```bash
-vb --storage-backend sqlite ingest "New information"
+vb --storage-backend json ingest "New information"
 ```
 
 ### Map
