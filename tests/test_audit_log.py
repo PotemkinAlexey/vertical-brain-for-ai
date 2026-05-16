@@ -125,3 +125,13 @@ def test_mcp_session_end_audit_has_default_summary(tmp_path):
     _call(mcp, "session_end", {"path": "WORK/A", "summary": "session wrap-up"})
     record = store.list_audit()[0]
     assert record["reasoning_summary"] == "Persisted session summary."
+
+
+def test_mcp_mark_stale_without_reason_uses_default_summary(tmp_path):
+    from vertical_brain.core.models import Chunk
+    mcp, store = _mcp_sqlite(tmp_path)
+    chunk = store.save_chunk(Chunk(node_path="WORK/A", content="old fact"))
+    _call(mcp, "mark_stale", {"path": "WORK/A", "chunk_ids": [chunk.id]})
+    record = store.list_audit()[0]
+    assert record["reasoning_summary"] == "Marked stale via MCP."
+    assert record["reasoning_summary"] != ""

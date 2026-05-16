@@ -506,7 +506,7 @@ class VerticalBrainMCP:
                 operation="mark_stale",
                 target_path=args["path"],
                 chunk_ids=chunk_ids,
-                reasoning_summary=args.get("reason", ""),
+                reasoning_summary=args.get("reason", "Marked stale via MCP."),
             )
             self._executor.apply(op)
             return json.dumps({"status": "applied", "marked": len(chunk_ids)})

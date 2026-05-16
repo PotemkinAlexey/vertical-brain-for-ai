@@ -107,6 +107,20 @@ discovered via `hasattr`.
 - **JsonStore** (dev/debug): plain JSON files plus an append-only
   `operation_audit.jsonl`.
 
+### SQLite concurrency model
+
+SQLiteStore opens its connection with `PRAGMA journal_mode=WAL` and
+`PRAGMA busy_timeout=5000`.  WAL mode allows one writer and multiple
+concurrent readers without blocking each other.  Multiple `SQLiteStore`
+instances pointing at the same database file are safe: each holds its own
+connection, and the 5-second busy-timeout means a brief write contention
+retries automatically rather than raising immediately.
+
+**Do not share a single `SQLiteStore` instance across threads.**  The
+connection is not thread-safe by default.  The right pattern for
+multi-threaded code is one `SQLiteStore` per thread (or per request),
+each opening its own connection to the same file.
+
 ## Known limitations / MVP status
 
 - Routing uses a mock LLM unless a real provider or `--llm-response-file` is

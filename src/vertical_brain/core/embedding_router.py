@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from vertical_brain.core.models import EmbeddingRouteCandidate
@@ -10,13 +11,42 @@ if TYPE_CHECKING:
 
 _PATH_MATCH_CAP = 0.45
 
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def _expand_segment(seg: str) -> set[str]:
+    """Return all token forms for a single path segment.
+
+    "AutoLoader"      → {"autoloader", "auto", "loader"}
+    "StructuredStreaming" → {"structuredstreaming", "structured", "streaming"}
+    "my-namespace"    → {"my-namespace", "my", "namespace"}
+    """
+    whole = seg.lower()
+    tokens: set[str] = {whole}
+    # camelCase / PascalCase split
+    parts = _CAMEL_BOUNDARY.sub(" ", seg).split()
+    # also split on hyphen/underscore/space
+    for part in parts:
+        for sub in re.split(r"[-_ ]+", part):
+            if sub:
+                tokens.add(sub.lower())
+    return tokens
+
+
+def _path_tokens(path: str) -> set[str]:
+    """Expand all segments of a slash-separated namespace path."""
+    tokens: set[str] = set()
+    for seg in path.split("/"):
+        if seg:
+            tokens |= _expand_segment(seg)
+    return tokens
+
 
 def _path_score(query_tokens: set[str], path: str) -> float:
-    """Normalized overlap between query tokens and path segments (case-insensitive)."""
+    """Normalized overlap between expanded query tokens and expanded path tokens."""
     if not query_tokens:
         return 0.0
-    path_tokens = {seg.lower() for seg in path.replace("_", " ").split("/") if seg}
-    overlap = len(query_tokens & path_tokens)
+    overlap = len(query_tokens & _path_tokens(path))
     return min(_PATH_MATCH_CAP, overlap / len(query_tokens))
 
 

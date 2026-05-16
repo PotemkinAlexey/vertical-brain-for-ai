@@ -64,3 +64,53 @@ def test_directional_link_rejects_unrelated_from_path(tmp_path):
     ))
     with pytest.raises(ValueError, match="not an endpoint"):
         ContextLock(store).expand_link(link.id, from_path="WORK/UNRELATED")
+
+
+# ── gold_overflow specific cases ─────────────────────────────────────────────
+
+def test_gold_overflow_raises_without_from_path(tmp_path):
+    store = JsonStore(tmp_path)
+    link = store.save_link(Link(
+        source_path="WORK/Databricks",
+        target_path="WORK/Databricks_2",
+        link_type="gold_overflow",
+        reason="Gold capacity exceeded",
+    ))
+    with pytest.raises(ValueError, match="from_path is required"):
+        ContextLock(store).expand_link(link.id)
+
+
+def test_gold_overflow_expands_source_to_target(tmp_path):
+    store = JsonStore(tmp_path)
+    link = store.save_link(Link(
+        source_path="WORK/Databricks",
+        target_path="WORK/Databricks_2",
+        link_type="gold_overflow",
+        reason="Gold capacity exceeded",
+    ))
+    result = ContextLock(store).expand_link(link.id, from_path="WORK/Databricks")
+    assert result == "WORK/Databricks_2"
+
+
+def test_gold_overflow_expands_target_to_source(tmp_path):
+    store = JsonStore(tmp_path)
+    link = store.save_link(Link(
+        source_path="WORK/Databricks",
+        target_path="WORK/Databricks_2",
+        link_type="gold_overflow",
+        reason="Gold capacity exceeded",
+    ))
+    result = ContextLock(store).expand_link(link.id, from_path="WORK/Databricks_2")
+    assert result == "WORK/Databricks"
+
+
+def test_gold_overflow_rejects_unrelated_from_path(tmp_path):
+    store = JsonStore(tmp_path)
+    link = store.save_link(Link(
+        source_path="WORK/Databricks",
+        target_path="WORK/Databricks_2",
+        link_type="gold_overflow",
+        reason="Gold capacity exceeded",
+    ))
+    with pytest.raises(ValueError, match="not an endpoint"):
+        ContextLock(store).expand_link(link.id, from_path="WORK/Python")

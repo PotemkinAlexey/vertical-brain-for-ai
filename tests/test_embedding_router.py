@@ -125,3 +125,25 @@ def test_embedding_router_semantic_gold_outranks_path_match(tmp_path):
     gold_rank = paths.index("WORK/DataArt/Databricks")
     path_rank = paths.index("WORK/Other/Databricks")
     assert gold_rank < path_rank, "semantic Gold score must outrank pure path match"
+
+
+# ── camelCase / PascalCase path tokenization ─────────────────────────────────
+
+def test_router_path_fallback_matches_camel_case_segment_auto_loader(tmp_path):
+    store = JsonStore(tmp_path)
+    store.ensure_node("WORK/DataArt/Databricks/AutoLoader")
+
+    candidates = EmbeddingRouter(store, MockEmbeddingProvider()).find_candidates("auto loader")
+
+    assert any(c.path == "WORK/DataArt/Databricks/AutoLoader" for c in candidates)
+
+
+def test_router_path_fallback_matches_pascal_case_segment_structured_streaming(tmp_path):
+    store = JsonStore(tmp_path)
+    store.ensure_node("WORK/DataArt/Databricks/StructuredStreaming")
+
+    candidates = EmbeddingRouter(store, MockEmbeddingProvider()).find_candidates(
+        "structured streaming"
+    )
+
+    assert any(c.path == "WORK/DataArt/Databricks/StructuredStreaming" for c in candidates)
