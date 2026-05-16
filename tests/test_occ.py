@@ -147,3 +147,108 @@ def test_occ_check_inside_transaction_for_sqlite(tmp_path):
 
     # The "should not land" chunk must not be in the DB.
     assert len(store.list_chunks()) == chunk_count_before
+
+
+# ── SQLiteStore-specific OCC coverage ────────────────────────────────────────
+
+def test_apply_batch_sqlite_succeeds_when_version_matches(tmp_path):
+    """SQLiteStore: batch applies and audit record is written when version matches."""
+    from vertical_brain.core.models import ChunkInput, StorageOperation
+    from vertical_brain.storage.sqlite_store import SQLiteStore
+
+    store = SQLiteStore(tmp_path)
+    store.ensure_node("WORK/Project")
+
+    batch = StorageOperationBatch(
+        operations=[
+            StorageOperation(
+                operation="append_chunk",
+                target_path="WORK/Project",
+                chunk=ChunkInput(content="landing chunk"),
+            )
+        ],
+        branch_path="WORK/Project",
+        start_version=0,
+    )
+
+    result = StorageOperationExecutor(store).apply_batch(batch)
+
+    assert result.status == "applied"
+    chunks = store.get_chunks_by_path("WORK/Project")
+    assert any(c.content == "landing chunk" for c in chunks)
+    assert len(store.list_audit()) >= 1
+
+
+def test_occ_failure_writes_no_audit_sqlite(tmp_path):
+    """SQLiteStore: a failed OCC check writes no audit records."""
+    from vertical_brain.core.models import ChunkInput, StorageOperation
+    from vertical_brain.storage.sqlite_store import SQLiteStore
+
+    store = SQLiteStore(tmp_path)
+    store.ensure_node("WORK/Project")
+
+    # Advance version so the batch is stale.
+    StorageOperationExecutor(store).apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/Project",
+        chunk=ChunkInput(content="concurrent write"),
+    ))
+    audit_before = len(store.list_audit())
+
+    batch = StorageOperationBatch(
+        operations=[
+            StorageOperation(
+                operation="append_chunk",
+                target_path="WORK/Project",
+                chunk=ChunkInput(content="should not land"),
+            )
+        ],
+        branch_path="WORK/Project",
+        start_version=0,  # stale — version is now 1
+    )
+
+    with pytest.raises(OptimisticLockException):
+        StorageOperationExecutor(store).apply_batch(batch)
+
+    assert len(store.list_audit()) == audit_before
+
+
+def test_occ_failure_does_not_mutate_node_version_or_dirty(tmp_path):
+    """A failed OCC check must not increment node.version or set node.is_dirty."""
+    from vertical_brain.core.models import ChunkInput, StorageOperation
+
+    store = JsonStore(tmp_path)
+    store.ensure_node("WORK/Project")
+
+    # Bump version once so we have a known value before the failed attempt.
+    executor = StorageOperationExecutor(store)
+    executor.apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/Project",
+        chunk=ChunkInput(content="first write"),
+    ))
+    node_before = store.get_node("WORK/Project")
+    assert node_before is not None
+    version_before = node_before.version
+    dirty_before = node_before.is_dirty
+
+    # Stale batch: start_version=0, but current version is already 1.
+    batch = StorageOperationBatch(
+        operations=[
+            StorageOperation(
+                operation="append_chunk",
+                target_path="WORK/Project",
+                chunk=ChunkInput(content="should not land"),
+            )
+        ],
+        branch_path="WORK/Project",
+        start_version=0,
+    )
+
+    with pytest.raises(OptimisticLockException):
+        executor.apply_batch(batch)
+
+    node_after = store.get_node("WORK/Project")
+    assert node_after is not None
+    assert node_after.version == version_before, "version must not change on OCC failure"
+    assert node_after.is_dirty == dirty_before, "is_dirty must not change on OCC failure"

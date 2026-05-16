@@ -518,3 +518,97 @@ def test_batch_append_is_all_or_nothing_on_validation_failure(tmp_path):
     assert store.get_chunks_by_path("WORK/B") == []
     # No audit records created.
     assert store.list_audit() == []
+
+
+# ── operations tool ───────────────────────────────────────────────────────────
+
+def test_operations_tool_applies_batch_and_returns_status(tmp_path):
+    """operations tool executes a StorageOperationBatch and returns status=applied."""
+    store = SQLiteStore(tmp_path)
+    mcp = VerticalBrainMCP(store)
+
+    payload = {
+        "operations": [
+            {"operation": "append_chunk", "target_path": "WORK/Q", "chunk": {"content": "ops fact"}},
+        ]
+    }
+    resp = _call(mcp, "operations", {"payload": payload})
+    assert "error" not in resp
+
+    data = json.loads(_text(resp))
+    assert data["status"] == "applied"
+    # Chunk actually landed.
+    chunks = store.get_chunks_by_path("WORK/Q")
+    assert any(c.content == "ops fact" for c in chunks)
+
+
+def test_operations_tool_returns_per_operation_results(tmp_path):
+    """operations tool response includes a results array with one entry per operation."""
+    store = SQLiteStore(tmp_path)
+    mcp = VerticalBrainMCP(store)
+
+    payload = {
+        "operations": [
+            {"operation": "append_chunk", "target_path": "WORK/P", "chunk": {"content": "first"}},
+            {"operation": "append_chunk", "target_path": "WORK/P", "chunk": {"content": "second"}},
+        ]
+    }
+    resp = _call(mcp, "operations", {"payload": payload})
+    data = json.loads(_text(resp))
+    assert len(data["results"]) == 2
+    assert all(r["status"] == "applied" for r in data["results"])
+
+
+def test_operations_tool_rejects_invalid_payload_type(tmp_path):
+    """operations tool must reject payload that is not a JSON object."""
+    mcp, _ = _mcp(tmp_path)
+    resp = _call(mcp, "operations", {"payload": "not-an-object"})
+    assert "error" in resp
+
+
+# ── doctor tool ───────────────────────────────────────────────────────────────
+
+def test_doctor_returns_empty_list_for_clean_store(tmp_path):
+    """doctor on a freshly initialised store reports no issues."""
+    mcp, _ = _mcp(tmp_path)
+    resp = _call(mcp, "doctor", {})
+    assert "error" not in resp
+    issues = json.loads(_text(resp))
+    assert isinstance(issues, list)
+    assert issues == []
+
+
+def test_doctor_detects_duplicate_active_chunks(tmp_path):
+    """doctor flags duplicate active chunks sharing the same content at the same node."""
+    store = JsonStore(tmp_path)
+    mcp = VerticalBrainMCP(store)
+
+    # Save the same content twice — both chunks land as active, triggering the check.
+    store.save_chunk(Chunk(node_path="WORK/Dup", content="repeated fact"))
+    store.save_chunk(Chunk(node_path="WORK/Dup", content="repeated fact"))
+
+    resp = _call(mcp, "doctor", {})
+    assert "error" not in resp
+    issues = json.loads(_text(resp))
+    assert len(issues) >= 1
+    checks = [i["check"] for i in issues]
+    assert "duplicate_active_chunk" in checks
+    # Every issue has required fields.
+    for issue in issues:
+        assert "severity" in issue
+        assert "check" in issue
+        assert "message" in issue
+
+
+# ── batch_append default reasoning_summary ────────────────────────────────────
+
+def test_batch_append_default_reasoning_summary_appears_in_audit(tmp_path):
+    """When no reasoning_summary is provided, audit record uses the MCP default string."""
+    store = SQLiteStore(tmp_path)
+    mcp = VerticalBrainMCP(store)
+
+    _call(mcp, "batch_append", {"chunks": [{"path": "WORK/R", "content": "audited fact"}]})
+
+    audit = store.list_audit()
+    assert len(audit) == 1
+    assert audit[0]["reasoning_summary"] == "Batch appended via MCP batch_append."

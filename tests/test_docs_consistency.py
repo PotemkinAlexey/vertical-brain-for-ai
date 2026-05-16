@@ -80,3 +80,42 @@ def test_mcp_no_undeclared_tools(tmp_path):
     assert not undeclared, (
         f"Tools implemented in _call_tool but missing from _TOOLS declaration: {undeclared}"
     )
+
+
+# ── docs/05_mcp_tools.md headings ────────────────────────────────────────────
+
+import re
+from pathlib import Path
+
+
+def _mcp_tools_doc_names() -> set[str]:
+    """Extract tool names from ### `name` headings in docs/05_mcp_tools.md."""
+    doc_path = Path(__file__).parent.parent / "docs" / "05_mcp_tools.md"
+    if not doc_path.exists():
+        return set()
+    names: set[str] = set()
+    for line in doc_path.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"^###\s+`(\w+)`", line)
+        if m:
+            names.add(m.group(1))
+    return names
+
+
+def test_mcp_tools_doc_covers_all_declared_tools():
+    """Every tool in _TOOLS must have a ### `name` heading in docs/05_mcp_tools.md."""
+    declared = _declared_tool_names()
+    documented = _mcp_tools_doc_names()
+    missing = declared - documented
+    assert not missing, (
+        f"Tools in _TOOLS missing from docs/05_mcp_tools.md: {missing}"
+    )
+
+
+def test_mcp_tools_doc_has_no_phantom_tools():
+    """No tool heading in docs/05_mcp_tools.md should refer to a non-existent tool."""
+    declared = _declared_tool_names()
+    documented = _mcp_tools_doc_names()
+    phantom = documented - declared
+    assert not phantom, (
+        f"Tools documented in docs/05_mcp_tools.md but absent from _TOOLS: {phantom}"
+    )

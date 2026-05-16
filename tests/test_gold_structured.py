@@ -238,3 +238,42 @@ def test_llm_gold_builder_empty_silver_returns_empty_document():
     provider = MockLLM(responses=[])
     doc = LlmGoldBuilder(provider).build([], node_path="WORK/A")
     assert doc.facts == []
+
+
+# ── parse_gold_aspects: all three storage formats ─────────────────────────────
+
+def test_parse_gold_aspects_from_plain_text_pipe_format():
+    """Legacy plain-text pipe format is wrapped in a single GoldAspect."""
+    aspects = parse_gold_aspects("insight A | insight B")
+    # Parsed as one aspect whose text is the whole string (pipe format applies
+    # to parse_gold_content, not parse_gold_aspects; any non-JSON is treated
+    # as a single-aspect plain-text item).
+    assert len(aspects) >= 1
+
+
+def test_parse_gold_aspects_from_v1_json_string_list():
+    """v1 JSON: aspects is a list of bare strings."""
+    content = json.dumps({"aspects": ["first fact", "second fact"]})
+    aspects = parse_gold_aspects(content)
+    assert len(aspects) == 2
+    assert aspects[0].text == "first fact"
+    assert aspects[1].text == "second fact"
+    # IDs are auto-generated (non-empty strings).
+    assert aspects[0].id
+    assert aspects[1].id
+
+
+def test_parse_gold_aspects_from_v2_json_dict_list():
+    """v2 JSON: aspects is a list of {id, text, updated_at} dicts."""
+    a = GoldAspect(text="structured fact")
+    content = serialize_gold_aspects([a])
+    aspects = parse_gold_aspects(content)
+    assert len(aspects) == 1
+    assert aspects[0].text == "structured fact"
+    assert aspects[0].id == a.id
+    assert aspects[0].updated_at == a.updated_at
+
+
+def test_parse_gold_aspects_empty_string_returns_empty_list():
+    assert parse_gold_aspects("") == []
+    assert parse_gold_aspects("   ") == []

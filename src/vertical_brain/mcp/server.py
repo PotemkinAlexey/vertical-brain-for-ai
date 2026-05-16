@@ -571,7 +571,7 @@ class VerticalBrainMCP:
                     )
                     for item in chunks_data
                 ],
-                reasoning_summary=args.get("reasoning_summary", ""),
+                reasoning_summary=args.get("reasoning_summary", "Batch appended via MCP batch_append."),
             )
             batch_result = self._executor.apply_batch(batch)
             chunk_ids_written = [r.chunk_id for r in batch_result.results if r.chunk_id]
