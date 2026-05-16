@@ -350,15 +350,17 @@ class VerticalBrainMCP:
                 },
                 "serverInfo": {"name": "vertical-brain", "version": _SERVER_VERSION},
             })
-        if method == "initialized":
-            return None
+        if method in ("initialized", "notifications/initialized"):
+            return None  # lifecycle notification — no response
+        if method.startswith("notifications/"):
+            return None  # all other notifications are silently ignored
         if method == "ping":
             return self._reply(req_id, {})
         if method == "tools/list":
             return self._reply(req_id, {"tools": _TOOLS})
         if method == "tools/call":
             return self._dispatch_tool(req_id, request.get("params", {}))
-        return self._error(req_id, -32601, f"Method not found: {method}")
+        return self._error(req_id if req_id is not None else 0, -32601, f"Method not found: {method}")
 
     # ------------------------------------------------------------------
     # Tool dispatch
