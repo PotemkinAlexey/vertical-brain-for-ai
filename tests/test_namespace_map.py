@@ -72,3 +72,37 @@ def test_namespace_map_respects_relative_depth_limit_and_summary_budget(tmp_path
     assert nodes["WORK/DataArt"].gold_summary == "AAAAA..."
     assert nodes["WORK/DataArt"].omitted_summary_chars == 12
     assert namespace_map.omitted_nodes == 2
+
+
+def test_namespace_map_indexes_chunks_and_links_once_per_build(tmp_path):
+    class CountingList(list):
+        def __init__(self, rows):
+            super().__init__(rows)
+            self.iterations = 0
+
+        def __iter__(self):
+            self.iterations += 1
+            return super().__iter__()
+
+    store = JsonStore(tmp_path)
+    for index in range(25):
+        store.save_chunk(Chunk(node_path=f"WORK/Project/Node{index}", content=f"fact {index}"))
+    store.save_link(Link(
+        source_path="WORK/Project/Node0",
+        target_path="WORK/Project/Node1",
+        link_type="peer",
+        reason="related",
+    ))
+
+    chunks = CountingList(store.list_chunks())
+    links = CountingList(store.list_links())
+    store.list_chunks = lambda: chunks  # type: ignore[method-assign]
+    store.list_links = lambda: links  # type: ignore[method-assign]
+
+    namespace_map = ContextSession(store).namespace_map(root_path="WORK/Project")
+
+    nodes = {node.path: node for node in namespace_map.nodes}
+    assert len(nodes) == 26
+    assert nodes["WORK/Project"].subtree_chunk_count == 25
+    assert chunks.iterations <= 3
+    assert links.iterations == 1

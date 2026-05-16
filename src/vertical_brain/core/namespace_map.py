@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from vertical_brain.core.gold import parse_gold_content
-from vertical_brain.core.models import Link, LinkHandle, NamespaceMap, NamespaceMapNode, Node
+from vertical_brain.core.models import Chunk, Link, LinkHandle, NamespaceMap, NamespaceMapNode, Node
 
 if TYPE_CHECKING:
     from vertical_brain.storage.protocol import StorageProvider
@@ -28,6 +28,9 @@ class NamespaceMapBuilder:
         children_by_parent = _children_by_parent(visible_nodes)
         chunks = self.store.list_chunks()
         links = self.store.list_links()
+        chunks_by_path = _chunks_by_path(chunks)
+        subtree_chunk_count_by_path = _subtree_chunk_counts(chunks)
+        links_by_path = _links_by_path(links)
 
         map_nodes: list[NamespaceMapNode] = []
         gold_chunks_by_path: dict[str, list] = {}
@@ -42,6 +45,8 @@ class NamespaceMapBuilder:
                 gold_aspects.extend(parse_gold_content(chunk.content))
             gold_text = " | ".join(gold_aspects)
             gold_summary, omitted_summary_chars = _truncate(gold_text, summary_max_chars)
+            node_chunks = chunks_by_path.get(node.path, [])
+            node_links = links_by_path.get(node.path, [])
             map_nodes.append(
                 NamespaceMapNode(
                     path=node.path,
@@ -49,22 +54,12 @@ class NamespaceMapBuilder:
                     parent_path=node.parent_path if node.parent_path in visible_paths else None,
                     depth=_relative_depth(node.path, root_path),
                     children=children_by_parent.get(node.path, []),
-                    chunk_count=len([chunk for chunk in chunks if chunk.node_path == node.path]),
-                    active_chunk_count=len(
-                        [chunk for chunk in chunks if chunk.node_path == node.path and chunk.status == "active"]
-                    ),
-                    stale_chunk_count=len(
-                        [chunk for chunk in chunks if chunk.node_path == node.path and chunk.status != "active"]
-                    ),
-                    subtree_chunk_count=len(
-                        [
-                            chunk
-                            for chunk in chunks
-                            if chunk.node_path == node.path or chunk.node_path.startswith(node.path + "/")
-                        ]
-                    ),
-                    link_count=len(_links_for_path(links, node.path)),
-                    link_handles=_link_handles_for_path(links, node.path),
+                    chunk_count=len(node_chunks),
+                    active_chunk_count=sum(1 for chunk in node_chunks if chunk.status == "active"),
+                    stale_chunk_count=sum(1 for chunk in node_chunks if chunk.status != "active"),
+                    subtree_chunk_count=subtree_chunk_count_by_path.get(node.path, 0),
+                    link_count=len(node_links),
+                    link_handles=_link_handles_for_path(node_links, node.path),
                     gold_summary=gold_summary,
                     omitted_summary_chars=omitted_summary_chars,
                     updated_at=node.updated_at,
@@ -119,8 +114,34 @@ def _children_by_parent(nodes: list[Node]) -> dict[str, list[str]]:
     return {path: sorted(paths) for path, paths in children.items()}
 
 
+def _chunks_by_path(chunks: list[Chunk]) -> dict[str, list[Chunk]]:
+    by_path: dict[str, list[Chunk]] = {}
+    for chunk in chunks:
+        by_path.setdefault(chunk.node_path, []).append(chunk)
+    return by_path
+
+
+def _subtree_chunk_counts(chunks: list[Chunk]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for chunk in chunks:
+        parts = chunk.node_path.split("/")
+        for index in range(1, len(parts) + 1):
+            ancestor = "/".join(parts[:index])
+            counts[ancestor] = counts.get(ancestor, 0) + 1
+    return counts
+
+
 def _links_for_path(links: list[Link], path: str) -> list[Link]:
     return [link for link in links if link.source_path == path or link.target_path == path]
+
+
+def _links_by_path(links: list[Link]) -> dict[str, list[Link]]:
+    by_path: dict[str, list[Link]] = {}
+    for link in links:
+        by_path.setdefault(link.source_path, []).append(link)
+        if link.target_path != link.source_path:
+            by_path.setdefault(link.target_path, []).append(link)
+    return by_path
 
 
 def _link_handles_for_path(links: list[Link], path: str) -> list[LinkHandle]:

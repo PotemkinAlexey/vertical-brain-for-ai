@@ -281,7 +281,9 @@ Optional extension protocols:
 
 ### JSON
 
-- Not thread-safe. For development only.
+- Development/debug backend only.
+- Uses atomic file replacement and in-process rollback snapshots for operation batches.
+- Not safe for multi-process writers and not a crash-safe database. Use SQLite for production memory.
 
 ---
 

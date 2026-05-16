@@ -174,19 +174,23 @@ vb doctor
 
 ## Storage Backends
 
-### SQLite (default)
+### SQLite (default, production)
 
 Single-file `vertical_brain.sqlite` inside `--data-dir` with WAL mode. Supports FTS5 full-text search, transactional batches, persistent embedding vector cache, and an append-only operation audit log.
 
 **Concurrency:** one writer + N readers via WAL. Use `ThreadLocalSQLiteStoreProxy` for multi-threaded access — it creates one `SQLiteStore` instance per thread.
 
+Use SQLite for durable personal or agent-backed memory. It is the production storage backend for transactional operation batches, OCC, audit history, FTS5 search, and persistent vector cache.
+
 ```bash
 vb --data-dir ./brain ...
 ```
 
-### JSON (dev/debug)
+### JSON (dev/debug only)
 
 Human-readable files: `nodes.json`, `chunks.json`, `links.json`, `vector_cache.json`, `operation_audit.jsonl`. Good for inspecting and editing state by hand.
+
+JsonStore uses atomic file replacement and rolls back in-process operation batches on exceptions, but it is not safe for multi-process writers and is not a crash-safe database. Do not use it as the production backend.
 
 ```bash
 vb --data-dir ./brain --storage-backend json ...
