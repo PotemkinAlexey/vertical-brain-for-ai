@@ -56,14 +56,37 @@ class EmbeddingSearch:
 
     def trigger_reindexing(
         self,
-        node_path: str | None = None,
         new_provider: EmbeddingProvider | None = None,
-    ) -> None:
-        """Schedule reindexing under a new embedding model. Not yet implemented."""
-        raise NotImplementedError(
-            "Reindexing is not yet implemented. To migrate to a new embedding model, "
-            "clear the embedding schema and rebuild the index with the new provider."
-        )
+        *,
+        node_path: str | None = None,
+    ) -> int:
+        """Warm the in-memory embedding cache by re-embedding all active chunks.
+
+        If ``new_provider`` is given, it replaces the current provider and the
+        stored embedding schema is updated to match.  Pass ``node_path`` to
+        restrict reindexing to a subtree.
+
+        Returns the number of chunks re-embedded.
+        """
+        if new_provider is not None:
+            self._provider = new_provider
+            self._cache.clear()
+            set_schema = getattr(self._store, "set_embedding_schema", None)
+            if callable(set_schema):
+                model_name = getattr(new_provider, "model_name", None)
+                dim = getattr(new_provider, "embed_dimension", -1)
+                if model_name is not None:
+                    set_schema(model_name, dim)
+
+        count = 0
+        for chunk in self._store.list_chunks():  # type: ignore[attr-defined]
+            if chunk.status != "active":
+                continue
+            if not _path_in_scope(chunk.node_path, node_path):
+                continue
+            self._cache[chunk.content] = self._provider.embed(chunk.content)
+            count += 1
+        return count
 
     def search(
         self,

@@ -375,47 +375,47 @@ class SQLiteStore:
         old_exact = old_prefix
         old_like = old_prefix + "/%"
         new_len = len(old_prefix)
-        self.conn.execute(
-            """
-            UPDATE chunks
-            SET node_path = ? || SUBSTR(node_path, ?)
-            WHERE node_path = ? OR node_path LIKE ?
-            """,
-            (new_prefix, new_len + 1, old_exact, old_like),
-        )
-        self.conn.execute(
-            """
-            UPDATE links
-            SET source_path = ? || SUBSTR(source_path, ?)
-            WHERE source_path = ? OR source_path LIKE ?
-            """,
-            (new_prefix, new_len + 1, old_exact, old_like),
-        )
-        self.conn.execute(
-            """
-            UPDATE links
-            SET target_path = ? || SUBSTR(target_path, ?)
-            WHERE target_path = ? OR target_path LIKE ?
-            """,
-            (new_prefix, new_len + 1, old_exact, old_like),
-        )
-        self.conn.execute(
-            """
-            UPDATE nodes
-            SET path = ? || SUBSTR(path, ?)
-            WHERE path = ? OR path LIKE ?
-            """,
-            (new_prefix, new_len + 1, old_exact, old_like),
-        )
-        self.conn.execute(
-            """
-            UPDATE nodes
-            SET parent_path = ? || SUBSTR(parent_path, ?)
-            WHERE parent_path = ? OR parent_path LIKE ?
-            """,
-            (new_prefix, new_len + 1, old_exact, old_like),
-        )
-        self._commit_if_needed()
+        with self.transaction():
+            self.conn.execute(
+                """
+                UPDATE chunks
+                SET node_path = ? || SUBSTR(node_path, ?)
+                WHERE node_path = ? OR node_path LIKE ?
+                """,
+                (new_prefix, new_len + 1, old_exact, old_like),
+            )
+            self.conn.execute(
+                """
+                UPDATE links
+                SET source_path = ? || SUBSTR(source_path, ?)
+                WHERE source_path = ? OR source_path LIKE ?
+                """,
+                (new_prefix, new_len + 1, old_exact, old_like),
+            )
+            self.conn.execute(
+                """
+                UPDATE links
+                SET target_path = ? || SUBSTR(target_path, ?)
+                WHERE target_path = ? OR target_path LIKE ?
+                """,
+                (new_prefix, new_len + 1, old_exact, old_like),
+            )
+            self.conn.execute(
+                """
+                UPDATE nodes
+                SET path = ? || SUBSTR(path, ?)
+                WHERE path = ? OR path LIKE ?
+                """,
+                (new_prefix, new_len + 1, old_exact, old_like),
+            )
+            self.conn.execute(
+                """
+                UPDATE nodes
+                SET parent_path = ? || SUBSTR(parent_path, ?)
+                WHERE parent_path = ? OR parent_path LIKE ?
+                """,
+                (new_prefix, new_len + 1, old_exact, old_like),
+            )
         if self._fts_enabled:
             self.rebuild_search_index()
 

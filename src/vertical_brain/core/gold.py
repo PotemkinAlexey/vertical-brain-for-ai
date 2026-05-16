@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from vertical_brain.core.models import Chunk
+
+
+@runtime_checkable
+class LlmProvider(Protocol):
+    """Minimal LLM interface required by GoldBuilder — compatible with router.LLMProvider."""
+    def complete(self, prompt: str) -> str: ...
 
 
 def parse_gold_content(content: str) -> list[str]:
@@ -177,3 +183,100 @@ class GoldBuilder:
                     seen.add(word)
                     entities.append(word)
         return entities[:20]
+
+
+class LlmGoldBuilder(GoldBuilder):
+    """GoldBuilder that uses an LLM to distil Silver chunks into a GoldDocument.
+
+    The LLM is called with the structured prompt from ``distil_prompt()``.
+    If the model returns malformed JSON, or if ``silver_chunks`` is empty,
+    the call transparently falls back to the deterministic ``GoldBuilder.build()``.
+
+    Usage::
+
+        builder = LlmGoldBuilder(llm=my_llm_provider)
+        doc = builder.build(silver_chunks, node_path="WORK/Project")
+    """
+
+    def __init__(self, llm: LlmProvider) -> None:
+        self._llm = llm
+
+    def build(
+        self,
+        silver_chunks: list[Chunk],
+        *,
+        node_path: str = "",
+        previous_gold: GoldDocument | None = None,
+    ) -> GoldDocument:
+        if not silver_chunks:
+            return GoldDocument(node_path=node_path)
+
+        prompt = self.distil_prompt(silver_chunks, previous_gold)
+        try:
+            raw = self._llm.complete(prompt)
+            doc = self._parse_llm_response(raw, silver_chunks, node_path)
+            if doc is not None:
+                return doc
+        except Exception:
+            pass
+        return super().build(silver_chunks, node_path=node_path, previous_gold=previous_gold)
+
+    def _parse_llm_response(
+        self,
+        raw: str,
+        silver_chunks: list[Chunk],
+        node_path: str,
+    ) -> GoldDocument | None:
+        """Parse LLM JSON response into GoldDocument; return None on any parse failure."""
+        text = raw.strip()
+        # Strip markdown code fences if the model wrapped the JSON.
+        if text.startswith("```"):
+            lines = text.splitlines()
+            text = "\n".join(
+                line for line in lines
+                if not line.startswith("```")
+            ).strip()
+        try:
+            payload = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+
+        silver_ids = {c.id for c in silver_chunks}
+        facts_raw = payload.get("facts", [])
+        if not isinstance(facts_raw, list):
+            return None
+
+        facts: list[GoldFact] = []
+        for item in facts_raw:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content", "")
+            if not isinstance(content, str) or not content.strip():
+                continue
+            source_ids = [
+                sid for sid in item.get("source_silver_ids", [])
+                if isinstance(sid, str) and sid in silver_ids
+            ]
+            confidence = item.get("confidence", 1.0)
+            if not isinstance(confidence, (int, float)):
+                confidence = 1.0
+            facts.append(GoldFact(
+                content=content.strip(),
+                source_silver_ids=source_ids,
+                confidence=float(confidence),
+            ))
+
+        if not facts:
+            return None
+
+        entities = [str(e) for e in payload.get("entities", []) if str(e).strip()]
+        rules = [str(r) for r in payload.get("rules", []) if str(r).strip()]
+        return GoldDocument(
+            facts=facts,
+            entities=entities[:20],
+            rules=rules,
+            node_path=node_path,
+            built_from_silver_ids=[c.id for c in silver_chunks],
+        )
