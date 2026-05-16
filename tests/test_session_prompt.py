@@ -1,0 +1,105 @@
+from vertical_brain.core.context_session import ContextSession
+from vertical_brain.core.models import Chunk, Link
+from vertical_brain.storage.json_store import JsonStore
+
+
+def test_session_prompt_contains_header_with_date_and_totals(tmp_path):
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="fact one"))
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="fact two"))
+
+    prompt = ContextSession(store).session_prompt()
+
+    assert "VERTICAL BRAIN" in prompt
+    assert "2 nodes" in prompt
+    assert "2 active chunks" in prompt
+
+
+def test_session_prompt_includes_gold_summary_inline(tmp_path):
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="Databricks Delta migration", layer="gold"))
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="raw fact"))
+
+    prompt = ContextSession(store).session_prompt()
+
+    assert "Databricks Delta migration" in prompt
+    assert "raw fact" not in prompt
+
+
+def test_session_prompt_shows_active_and_stale_counts(tmp_path):
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="active chunk"))
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="old chunk", status="stale"))
+
+    prompt = ContextSession(store).session_prompt()
+
+    assert "1 active" in prompt
+    assert "1 stale" in prompt
+
+
+def test_session_prompt_shows_peer_links(tmp_path):
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="fact"))
+    store.save_chunk(Chunk(node_path="WORK/DataArt/FXDB", content="fact"))
+    store.save_link(Link(
+        source_path="WORK/DataArt/Databricks",
+        target_path="WORK/DataArt/FXDB",
+        link_type="peer",
+        reason="Related work.",
+    ))
+
+    prompt = ContextSession(store).session_prompt()
+
+    assert "→WORK/DataArt/FXDB" in prompt or "→WORK/DataArt/Databricks" in prompt
+
+
+def test_session_prompt_marks_empty_nodes(tmp_path):
+    store = JsonStore(tmp_path)
+    store.ensure_node("WORK/DataArt/EmptyBranch")
+
+    prompt = ContextSession(store).session_prompt()
+
+    assert "(empty)" in prompt
+
+
+def test_session_prompt_respects_root_path(tmp_path):
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="fact"))
+    store.save_chunk(Chunk(node_path="PERSONAL/Blog", content="post"))
+
+    prompt = ContextSession(store).session_prompt(root_path="WORK")
+
+    assert "WORK/DataArt" in prompt
+    assert "PERSONAL" not in prompt
+
+
+def test_session_prompt_respects_max_depth(tmp_path):
+    store = JsonStore(tmp_path)
+    store.ensure_node("WORK/DataArt/Databricks/Certification/SchemaEvolution")
+
+    prompt = ContextSession(store).session_prompt(root_path="WORK/DataArt", max_depth=1)
+
+    assert "WORK/DataArt/Databricks" in prompt
+    assert "SchemaEvolution" not in prompt
+    assert "omitted" in prompt
+
+
+def test_session_prompt_truncates_long_gold_summary(tmp_path):
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="X" * 300, layer="gold"))
+
+    prompt = ContextSession(store).session_prompt(summary_max_chars=50)
+
+    assert "X" * 300 not in prompt
+    assert "..." in prompt
+
+
+def test_session_prompt_counts_links_without_double_counting(tmp_path):
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/A", content="fact"))
+    store.save_chunk(Chunk(node_path="WORK/B", content="fact"))
+    store.save_link(Link(source_path="WORK/A", target_path="WORK/B", link_type="peer", reason="related"))
+
+    prompt = ContextSession(store).session_prompt()
+
+    assert "1 links" in prompt

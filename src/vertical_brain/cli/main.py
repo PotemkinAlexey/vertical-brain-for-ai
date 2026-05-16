@@ -109,6 +109,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("tree")
 
+    session_start = sub.add_parser("session-start")
+    session_start.add_argument("--path", default=None, help="Limit to a namespace branch")
+    session_start.add_argument("--max-depth", type=int, default=None, help="Maximum depth relative to --path")
+    session_start.add_argument(
+        "--summary-chars",
+        type=int,
+        default=200,
+        help="Maximum Gold summary characters per node",
+    )
+
     route = sub.add_parser("route")
     route.add_argument("--threshold", type=float, default=0.0, help="Minimum similarity score")
     route.add_argument("--limit", type=int, default=5, help="Maximum number of candidates")
@@ -217,6 +227,13 @@ def main() -> None:
         print("")
         print("Answer:")
         print(MockLLM().answer_from_context(args.question, locked_context.as_prompt_lines()))
+
+    elif args.command == "session-start":
+        print(ContextSession(store).session_prompt(
+            root_path=args.path,
+            max_depth=args.max_depth,
+            summary_max_chars=args.summary_chars,
+        ))
 
     elif args.command == "tree":
         print(store.tree_text())

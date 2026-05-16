@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 from vertical_brain.core.context_lock import ContextLock
 from vertical_brain.core.models import (
     ContextBudget,
@@ -40,6 +42,55 @@ class ContextSession:
             max_depth=max_depth,
             summary_max_chars=summary_max_chars,
         )
+
+    def session_prompt(
+        self,
+        *,
+        root_path: str | None = None,
+        max_depth: int | None = None,
+        summary_max_chars: int = 200,
+    ) -> str:
+        """Return a compact LLM-ready orientation text for the start of a session."""
+        nm = self.namespace_map(
+            root_path=root_path,
+            max_depth=max_depth,
+            summary_max_chars=summary_max_chars,
+        )
+        total_active = sum(n.active_chunk_count for n in nm.nodes)
+        unique_link_ids: set[str] = set()
+        for n in nm.nodes:
+            for h in n.link_handles:
+                unique_link_ids.add(h.link_id)
+        total_links = len(unique_link_ids)
+
+        lines: list[str] = [
+            f"VERTICAL BRAIN — {date.today().isoformat()}",
+            f"{len(nm.nodes)} nodes · {total_active} active chunks · {total_links} links",
+            "",
+        ]
+        for node in nm.nodes:
+            indent = "  " * node.depth
+            head = f"{indent}[{node.path}]"
+            parts: list[str] = []
+            if node.gold_summary:
+                parts.append(node.gold_summary)
+            stats: list[str] = []
+            if node.active_chunk_count:
+                stats.append(f"{node.active_chunk_count} active")
+            if node.stale_chunk_count:
+                stats.append(f"{node.stale_chunk_count} stale")
+            peer_links = [h for h in node.link_handles if h.link_type == "peer"]
+            if peer_links:
+                targets = ", ".join(f"→{h.target_path}" for h in peer_links)
+                stats.append(targets)
+            if stats:
+                parts.append("— " + ", ".join(stats))
+            suffix = "  ".join(parts) if parts else "(empty)"
+            lines.append(f"{head} {suffix}")
+
+        if nm.omitted_nodes:
+            lines.append(f"\n({nm.omitted_nodes} nodes omitted due to depth limit)")
+        return "\n".join(lines)
 
     def search_locked_context(
         self,
