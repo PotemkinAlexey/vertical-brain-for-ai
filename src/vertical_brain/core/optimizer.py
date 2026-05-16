@@ -48,8 +48,9 @@ class SimpleOptimizer:
     # ── public interface ──────────────────────────────────────────────────────
 
     def optimize_branch(self, path: str) -> str:
-        chunks = self.store.get_chunks_by_path(path, include_children=True)  # single read
-        linked_paths = self._linked_paths_if_decay_enabled()
+        chunks = self.store.get_chunks_by_path(path, include_children=True)
+        links = self.store.list_links() if self._decay_enabled() else []
+        linked_paths = self._linked_paths_from(links)
         batch = self._build_plan(chunks, path, linked_paths=linked_paths)
         if batch.operations:
             StorageOperationExecutor(self.store).apply_batch(batch)
@@ -58,7 +59,8 @@ class SimpleOptimizer:
     def plan_branch(self, path: str) -> StorageOperationBatch:
         """Return the operation batch optimize_branch would apply without mutating storage."""
         chunks = self.store.get_chunks_by_path(path, include_children=True)
-        linked_paths = self._linked_paths_if_decay_enabled()
+        links = self.store.list_links() if self._decay_enabled() else []
+        linked_paths = self._linked_paths_from(links)
         batch = self._build_plan(chunks, path, linked_paths=linked_paths)
         node = self.store.get_node(path)
         if node is not None:
@@ -146,7 +148,7 @@ class SimpleOptimizer:
                     continue
                 if chunk.id in stale_ids:
                     continue
-                if chunk.node_path in _linked:
+                if self._is_decay_protected(chunk.node_path, _linked):
                     continue
                 age_days = self._chunk_age_days(chunk)
                 periods = int(age_days // self.decay_days)
@@ -233,14 +235,25 @@ class SimpleOptimizer:
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
-    def _linked_paths_if_decay_enabled(self) -> set[str]:
-        if self.decay_rate >= 1.0:
-            return set()
+    def _decay_enabled(self) -> bool:
+        return self.decay_rate < 1.0 and self.decay_days > 0
+
+    def _linked_paths_from(self, links: list) -> set[str]:
+        """Extract the set of directly-linked paths from an already-fetched link list."""
         linked: set[str] = set()
-        for lnk in self.store.list_links():
+        for lnk in links:
             linked.add(lnk.source_path)
             linked.add(lnk.target_path)
         return linked
+
+    def _is_decay_protected(self, node_path: str, linked_paths: set[str]) -> bool:
+        """Return True if node_path is directly linked or is a descendant of a linked path."""
+        if node_path in linked_paths:
+            return True
+        for linked in linked_paths:
+            if node_path.startswith(linked + "/"):
+                return True
+        return False
 
     def _chunk_age_days(self, chunk: Chunk) -> float:
         try:

@@ -85,6 +85,8 @@ plus an `operation_audit.jsonl` audit log:
 vb --storage-backend json ingest "Inspect raw records on disk while debugging."
 ```
 
+> **Note:** JSON backend is for development/debugging and does not provide transactional guarantees for runtime failures. Use SQLite for agent/MCP writes.
+
 ### SQLite concurrency
 
 The SQLite backend opens every connection with `PRAGMA journal_mode=WAL` and

@@ -111,3 +111,44 @@ def test_doctor_no_fts_stale_leak_when_index_is_clean(tmp_path):
     store.save_chunk(Chunk(node_path="WORK/A", content="active fact"))
     issues = Doctor(store).run()
     assert not any(i.check == "fts_stale_leak" for i in issues)
+
+
+# ── Item 3: Doctor duplicate detection with content_hash-or-content fallback ──
+
+def test_doctor_duplicate_uses_content_hash_or_content_fallback(tmp_path):
+    """Legacy chunks with empty content_hash must still be deduplicated via content."""
+    store = JsonStore(tmp_path)
+    store.ensure_node("WORK/A")
+    c1 = Chunk(node_path="WORK/A", content="same legacy fact")
+    c2 = Chunk(node_path="WORK/A", content="same legacy fact")
+    # Simulate legacy rows with empty content_hash (as they arrive from old data).
+    c1.content_hash = ""
+    c2.content_hash = ""
+    store.save_chunk(c1)
+    store.save_chunk(c2)
+    issues = Doctor(store).run()
+    dup_issues = [i for i in issues if i.check == "duplicate_active_chunk"]
+    assert len(dup_issues) >= 1
+
+
+def test_doctor_duplicate_message_uses_dedupe_key_wording(tmp_path):
+    store = JsonStore(tmp_path)
+    store.ensure_node("WORK/A")
+    store.save_chunk(Chunk(node_path="WORK/A", content="duplicate content"))
+    store.save_chunk(Chunk(node_path="WORK/A", content="duplicate content"))
+    issues = Doctor(store).run()
+    dup = next(i for i in issues if i.check == "duplicate_active_chunk")
+    assert "dedupe key" in dup.message
+
+
+def test_doctor_no_false_positive_when_content_differs(tmp_path):
+    store = JsonStore(tmp_path)
+    store.ensure_node("WORK/A")
+    c1 = Chunk(node_path="WORK/A", content="fact one")
+    c2 = Chunk(node_path="WORK/A", content="fact two")
+    c1.content_hash = ""
+    c2.content_hash = ""
+    store.save_chunk(c1)
+    store.save_chunk(c2)
+    issues = Doctor(store).run()
+    assert not any(i.check == "duplicate_active_chunk" for i in issues)

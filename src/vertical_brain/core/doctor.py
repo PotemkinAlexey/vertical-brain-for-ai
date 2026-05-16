@@ -86,13 +86,14 @@ class Doctor:
         for chunk in self._store.list_chunks():
             if chunk.status != "active":
                 continue
-            by_key[(chunk.node_path, chunk.content_hash)].append(chunk.id)
-        for (path, _hash), chunk_ids in by_key.items():
+            dedup_key = chunk.content_hash or chunk.content
+            by_key[(chunk.node_path, dedup_key)].append(chunk.id)
+        for (path, _key), chunk_ids in by_key.items():
             if len(chunk_ids) > 1:
                 issues.append(DoctorIssue(
                     severity="warning",
                     check="duplicate_active_chunk",
-                    message=f"{len(chunk_ids)} active chunks share the same content hash",
+                    message=f"{len(chunk_ids)} active chunks share the same dedupe key",
                     path=path,
                 ))
         return issues
