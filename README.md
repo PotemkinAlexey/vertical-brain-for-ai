@@ -87,7 +87,7 @@ Paths are slash-separated. Vertical isolation means context opened at `WORK/Data
 |-------|---------|------------|
 | **Bronze** | Raw notes, questions, fragments | You / the model |
 | **Silver** | Canonical facts, cleaned, deduplicated | Optimizer compaction |
-| **Gold** | Stable summary aspects, stable IDs | Gold builder / LLM |
+| **Gold** | Stable summary aspects, stable IDs | `append_gold_aspect` / `GoldBuilder` |
 
 The optimizer deduplicates Bronze chunks and compacts them into Silver summaries. Gold aspects carry stable UUIDs so they survive rewrites without identity drift. Up to 20 Gold aspects per namespace; overflow creates a sibling namespace automatically.
 

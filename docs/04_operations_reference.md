@@ -203,26 +203,41 @@ Call the `operations` tool with the batch as the `payload` parameter.
 
 ### Response Format
 
+`OperationBatchResult` JSON — one entry in `results` per applied operation:
+
 ```json
 {
-  "status": "ok",
-  "applied": 3,
-  "validation": {
-    "valid": true,
-    "errors": []
-  }
+  "status": "applied",
+  "results": [
+    {
+      "operation": "append_chunk",
+      "target_path": "WORK/DataArt/Databricks",
+      "chunk_id": "550e8400-e29b-41d4-a716-446655440000",
+      "link_ids": [],
+      "status": "applied",
+      "validation": {"valid": true, "issues": []},
+      "overflow_path": null
+    }
+  ],
+  "validation": {"valid": true, "issues": []}
 }
 ```
 
-On validation failure with `dry-run`:
+On validation failure (e.g. from `dry-run`):
 
 ```json
 {
   "status": "invalid",
-  "applied": 0,
+  "results": [],
   "validation": {
     "valid": false,
-    "errors": ["operations[0].chunk.layer: must be one of ['bronze', 'silver', 'gold']"]
+    "issues": [
+      {
+        "path": "operations[0].chunk.layer",
+        "message": "must be one of ['bronze', 'silver', 'gold']",
+        "severity": "error"
+      }
+    ]
   }
 }
 ```
@@ -231,4 +246,4 @@ On validation failure with `dry-run`:
 
 ## Staging Buffer
 
-When the router has low confidence (or the model emits `ask_clarification`), content is staged to `STAGING/Unclassified` with `confidence=0.0`. Run `vb optimize STAGING` to batch-process staged items during a dedicated triage session, or use `vb doctor` to see how many items have been staged for more than 3 days.
+When the router has low confidence (or the model emits `ask_clarification`), content is staged to `STAGING/Unclassified` with `confidence=0.0`. Use `vb doctor` to identify staging items that are older than 3 days. Reclassification is intentional and must be done explicitly — write a `StorageOperationBatch` that moves or supersedes the staged chunk at its correct target path. `vb optimize STAGING` compacts and deduplicates within the staging namespace but does not automatically reclassify staged items.

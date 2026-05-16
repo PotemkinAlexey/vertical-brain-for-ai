@@ -275,7 +275,7 @@ Optional extension protocols:
 
 ### SQLite
 
-- WAL mode: N concurrent readers + 1 writer, no reader/writer blocking
+- WAL mode: concurrent readers with a single writer; reads do not block writes, but concurrent writers still contend on the WAL lock
 - One `SQLiteStore` per thread — creating multiple instances on the same file is safe for reads, but concurrent writes from multiple instances will contend on the WAL lock
 - Use `ThreadLocalSQLiteStoreProxy` in multi-threaded applications; it lazily creates one `SQLiteStore` per thread
 
@@ -297,7 +297,7 @@ On `EmbeddingSearch` init, the stored model name is compared against the provide
 
 ## Key Invariants
 
-These invariants are preserved by the executor and tested explicitly:
+These invariants are preserved by the executor and should remain covered by tests:
 
 1. **A chunk's `valid_to` is set** when its status transitions to `stale`, `superseded`, `legacy`, or `contradicted`.
 2. **`node.version` increments** on every mutation at that node or any descendant.
