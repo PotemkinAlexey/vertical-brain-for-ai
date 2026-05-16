@@ -6,7 +6,12 @@ from contextlib import nullcontext
 from dataclasses import replace as dc_replace
 from typing import TYPE_CHECKING, Any, get_args
 
-from vertical_brain.core.gold import parse_gold_content
+from vertical_brain.core.gold import (
+    MAX_GOLD_ASPECTS,
+    GoldAspect,
+    parse_gold_aspects,
+    serialize_gold_aspects,
+)
 from vertical_brain.core.models import (
     Chunk,
     ChunkInput,
@@ -33,7 +38,6 @@ if TYPE_CHECKING:
 VALID_CONTENT_TYPES = set(get_args(ContentType))
 VALID_LAYERS = set(get_args(Layer))
 VALID_OPERATIONS = set(get_args(OperationType))
-MAX_GOLD_CHARS = 200
 
 
 def _next_overflow_path(path: str) -> str:
@@ -61,17 +65,16 @@ class StorageOperationExecutor:
         if not validation.valid:
             raise ValueError(self._format_validation_errors(validation))
 
-        if batch.branch_path is not None and batch.start_version is not None:
-            current_node = self.store.get_node(batch.branch_path)
-            if current_node is not None and current_node.version != batch.start_version:
-                raise OptimisticLockException(
-                    f"Optimistic lock conflict on '{batch.branch_path}': "
-                    f"expected version {batch.start_version}, found {current_node.version}."
-                )
-
         transaction = getattr(self.store, "transaction", None)
         context = transaction() if callable(transaction) else nullcontext()
         with context:
+            if batch.branch_path is not None and batch.start_version is not None:
+                current_node = self.store.get_node(batch.branch_path)
+                if current_node is not None and current_node.version != batch.start_version:
+                    raise OptimisticLockException(
+                        f"Optimistic lock conflict on '{batch.branch_path}': "
+                        f"expected version {batch.start_version}, found {current_node.version}."
+                    )
             results = []
             for operation in batch.operations:
                 if not operation.reasoning_summary and batch.reasoning_summary:
@@ -149,6 +152,9 @@ class StorageOperationExecutor:
                 self.store.save_link(self._link_from_input(operation.target_path, link_input))
                 for link_input in operation.links
             ]
+            self._mark_ancestors_dirty(operation.target_path)
+            for link_input in operation.links:
+                self._mark_ancestors_dirty(link_input.target_path)
             return OperationResult(
                 operation=operation.operation,
                 target_path=operation.target_path,
@@ -168,6 +174,9 @@ class StorageOperationExecutor:
         if operation.operation == "append_gold_aspect":
             assert operation.gold_aspect is not None
             overflow_path = self._apply_append_gold_aspect(operation.target_path, operation.gold_aspect)
+            self._mark_ancestors_dirty(operation.target_path)
+            if overflow_path is not None:
+                self._mark_ancestors_dirty(overflow_path)
             return OperationResult(
                 operation=operation.operation,
                 target_path=operation.target_path,
@@ -177,6 +186,7 @@ class StorageOperationExecutor:
         if operation.operation == "rename_namespace":
             assert operation.new_path is not None
             self._do_rename_namespace(operation.target_path, operation.new_path)
+            self._mark_ancestors_dirty(operation.new_path)
             return OperationResult(operation=operation.operation, target_path=operation.target_path)
 
         raise ValueError(f"Unsupported storage operation: {operation.operation}")
@@ -190,24 +200,42 @@ class StorageOperationExecutor:
         ]
         if not gold_chunks:
             self.store.ensure_node(tail)
-            self.store.save_chunk(Chunk(node_path=tail, content=aspect, layer="gold", source="model"))
+            self.store.save_chunk(
+                Chunk(node_path=tail, content=serialize_gold_aspects([GoldAspect(text=aspect)]),
+                      layer="gold", source="model")
+            )
             return None
 
         latest = max(gold_chunks, key=lambda c: c.created_at)
-        existing_aspects = parse_gold_content(latest.content)
-        new_content = " | ".join(existing_aspects + [aspect])
-        if len(new_content) <= MAX_GOLD_CHARS:
+        aspects = parse_gold_aspects(latest.content)
+
+        # Dedup: refresh updated_at if exact text match already exists.
+        for existing in aspects:
+            if existing.text == aspect:
+                existing.updated_at = utc_now()
+                latest.content = serialize_gold_aspects(aspects)
+                latest.updated_at = utc_now()
+                self.store.update_chunk(latest)
+                return None
+
+        if len(aspects) < MAX_GOLD_ASPECTS:
+            aspects.append(GoldAspect(text=aspect))
             latest.status = "superseded"
             latest.updated_at = utc_now()
             self.store.update_chunk(latest)
             self.store.save_chunk(
-                Chunk(node_path=tail, content=new_content, layer="gold", source="model", lineage=[latest.id])
+                Chunk(node_path=tail, content=serialize_gold_aspects(aspects),
+                      layer="gold", source="model", lineage=[latest.id])
             )
             return None
         else:
             overflow = _next_overflow_path(tail)
             self.store.ensure_node(overflow)
-            self.store.save_chunk(Chunk(node_path=overflow, content=aspect, layer="gold", source="model"))
+            self.store.save_chunk(
+                Chunk(node_path=overflow,
+                      content=serialize_gold_aspects([GoldAspect(text=aspect)]),
+                      layer="gold", source="model")
+            )
             self.store.save_link(Link(
                 source_path=tail,
                 target_path=overflow,
@@ -356,19 +384,36 @@ class StorageOperationExecutor:
 
         if operation.operation == "rename_namespace":
             if not isinstance(operation.new_path, str) or not operation.new_path.strip():
-                issues.append(
-                    ValidationIssue(
+                issues.append(ValidationIssue(
+                    path=f"{path}.new_path",
+                    message="rename_namespace requires non-empty new_path",
+                ))
+                return
+            self._validate_namespace_path(operation.new_path, path=f"{path}.new_path", issues=issues)
+            if operation.new_path == operation.target_path:
+                issues.append(ValidationIssue(
+                    path=f"{path}.new_path",
+                    message="rename_namespace: new_path must differ from target_path",
+                ))
+                return
+            if operation.new_path.startswith(operation.target_path + "/"):
+                issues.append(ValidationIssue(
+                    path=f"{path}.new_path",
+                    message="rename_namespace: cannot rename a namespace into its own descendant",
+                ))
+                return
+            get_node = getattr(self.store, "get_node", None)
+            if callable(get_node):
+                if get_node(operation.target_path) is None:
+                    issues.append(ValidationIssue(
+                        path=f"{path}.target_path",
+                        message=f"rename_namespace: target_path '{operation.target_path}' does not exist",
+                    ))
+                if get_node(operation.new_path) is not None:
+                    issues.append(ValidationIssue(
                         path=f"{path}.new_path",
-                        message="rename_namespace requires non-empty new_path",
-                    )
-                )
-            elif operation.new_path == operation.target_path:
-                issues.append(
-                    ValidationIssue(
-                        path=f"{path}.new_path",
-                        message="rename_namespace: new_path must differ from target_path",
-                    )
-                )
+                        message=f"rename_namespace: new_path '{operation.new_path}' already exists",
+                    ))
             return
 
     def _validate_chunk_input(self, chunk: ChunkInput, *, path: str, issues: list[ValidationIssue]) -> None:

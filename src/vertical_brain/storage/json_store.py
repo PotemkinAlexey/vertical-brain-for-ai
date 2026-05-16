@@ -303,8 +303,12 @@ class JsonStore:
         for row in nodes:
             if row["path"] == old_prefix or row["path"].startswith(old_prefix + "/"):
                 row["path"] = new_prefix + row["path"][len(old_prefix):]
-            if row.get("parent_path") and (
-                row["parent_path"] == old_prefix or row["parent_path"].startswith(old_prefix + "/")
+                parts = row["path"].split("/")
+                row["name"] = parts[-1]
+                row["parent_path"] = "/".join(parts[:-1]) if len(parts) > 1 else None
+            elif row.get("parent_path") and (
+                row["parent_path"] == old_prefix
+                or row["parent_path"].startswith(old_prefix + "/")
             ):
                 row["parent_path"] = new_prefix + row["parent_path"][len(old_prefix):]
         self._write(self.nodes_file, nodes)

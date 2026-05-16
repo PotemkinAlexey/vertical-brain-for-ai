@@ -198,21 +198,23 @@ def test_append_gold_aspect_creates_gold_chunk_and_extends_on_fit(tmp_path):
 
     gold = [c for c in store.get_chunks_by_path("WORK/DataArt") if c.layer == "gold" and c.status == "active"]
     assert len(gold) == 1
-    assert gold[0].content == "migration | clusters"
+    from vertical_brain.core.gold import parse_gold_content
+    assert parse_gold_content(gold[0].content) == ["migration", "clusters"]
 
 
 def test_append_gold_aspect_creates_overflow_sibling_when_full(tmp_path):
-    from vertical_brain.core.operations import MAX_GOLD_CHARS
+    from vertical_brain.core.gold import MAX_GOLD_ASPECTS, GoldAspect, parse_gold_content, serialize_gold_aspects
     store = JsonStore(tmp_path)
     executor = StorageOperationExecutor(store)
 
-    long_aspect = "x" * (MAX_GOLD_CHARS - 5)
-    executor.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/DataArt", gold_aspect=long_aspect))
+    # Fill the primary node to MAX_GOLD_ASPECTS
+    full_content = serialize_gold_aspects([GoldAspect(text=f"a{i}") for i in range(MAX_GOLD_ASPECTS)])
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content=full_content, layer="gold"))
     executor.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/DataArt", gold_aspect="overflow"))
 
     primary_gold = [c for c in store.get_chunks_by_path("WORK/DataArt") if c.layer == "gold" and c.status == "active"]
     assert len(primary_gold) == 1
-    assert primary_gold[0].content == long_aspect
+    assert len(parse_gold_content(primary_gold[0].content)) == MAX_GOLD_ASPECTS
 
     overflow_links = [lnk for lnk in store.list_links() if lnk.link_type == "gold_overflow"]
     assert len(overflow_links) == 1
@@ -221,7 +223,7 @@ def test_append_gold_aspect_creates_overflow_sibling_when_full(tmp_path):
 
     overflow_gold = [c for c in store.get_chunks_by_path(overflow_path) if c.layer == "gold" and c.status == "active"]
     assert len(overflow_gold) == 1
-    assert overflow_gold[0].content == "overflow"
+    assert parse_gold_content(overflow_gold[0].content) == ["overflow"]
 
 
 # ── Gold dirty flag ───────────────────────────────────────────────────────────

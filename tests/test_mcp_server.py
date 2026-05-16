@@ -105,7 +105,8 @@ def test_append_gold_aspect_writes_gold_chunk(tmp_path):
     assert result["status"] == "applied"
     gold = [c for c in store.get_chunks_by_path("WORK/DataArt") if c.layer == "gold"]
     assert len(gold) == 1
-    assert gold[0].content == "Delta migration"
+    from vertical_brain.core.gold import parse_gold_content
+    assert parse_gold_content(gold[0].content) == ["Delta migration"]
 
 
 def test_search_returns_ranked_results(tmp_path):
@@ -261,9 +262,10 @@ def test_mark_stale_all_active_non_gold_when_no_ids(tmp_path):
 
 
 def test_append_gold_aspect_reports_overflow_path(tmp_path):
-    from vertical_brain.core.operations import MAX_GOLD_CHARS
+    from vertical_brain.core.gold import MAX_GOLD_ASPECTS, GoldAspect, serialize_gold_aspects
     mcp, store = _mcp(tmp_path)
-    store.save_chunk(Chunk(node_path="WORK/DataArt", content="x" * (MAX_GOLD_CHARS - 5), layer="gold"))
+    full_content = serialize_gold_aspects([GoldAspect(text=f"a{i}") for i in range(MAX_GOLD_ASPECTS)])
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content=full_content, layer="gold"))
 
     resp = _call(mcp, "append_gold_aspect", {"path": "WORK/DataArt", "aspect": "overflow aspect"})
     result = json.loads(_text(resp))
@@ -312,7 +314,8 @@ def test_session_end_with_gold_aspect(tmp_path):
 
     assert result["gold_status"] == "applied"
     gold = [c for c in store.get_chunks_by_path("WORK/DataArt") if c.layer == "gold"]
-    assert gold[0].content == "schema evolution"
+    from vertical_brain.core.gold import parse_gold_content
+    assert parse_gold_content(gold[0].content) == ["schema evolution"]
 
 
 def test_context_search_semantic_returns_locked_contexts(tmp_path):

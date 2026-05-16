@@ -122,9 +122,90 @@ def test_rename_validation_requires_new_path(tmp_path):
 
 def test_rename_validation_rejects_same_path(tmp_path):
     store = JsonStore(tmp_path)
+    store.ensure_node("OLD/Project")
     executor = StorageOperationExecutor(store)
     op = StorageOperation(
         operation="rename_namespace", target_path="OLD/Project", new_path="OLD/Project"
     )
     with pytest.raises(ValueError, match="new_path"):
         executor.apply(op)
+
+
+def test_rename_validation_rejects_nonexistent_target(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    op = StorageOperation(
+        operation="rename_namespace", target_path="GHOST/Project", new_path="NEW/Project"
+    )
+    with pytest.raises(ValueError, match="does not exist"):
+        executor.apply(op)
+
+
+def test_rename_validation_rejects_collision_with_existing_path(tmp_path):
+    store = JsonStore(tmp_path)
+    store.ensure_node("OLD/Project")
+    store.ensure_node("NEW/Project")
+    executor = StorageOperationExecutor(store)
+    op = StorageOperation(
+        operation="rename_namespace", target_path="OLD/Project", new_path="NEW/Project"
+    )
+    with pytest.raises(ValueError, match="already exists"):
+        executor.apply(op)
+
+
+def test_rename_validation_rejects_descendant_target(tmp_path):
+    store = JsonStore(tmp_path)
+    store.ensure_node("WORK/Project")
+    executor = StorageOperationExecutor(store)
+    op = StorageOperation(
+        operation="rename_namespace",
+        target_path="WORK/Project",
+        new_path="WORK/Project/Sub",
+    )
+    with pytest.raises(ValueError, match="descendant"):
+        executor.apply(op)
+
+
+def test_rename_updates_node_name(tmp_path):
+    store = JsonStore(tmp_path)
+    _populate(store, "OLD/Project")
+    StorageOperationExecutor(store).apply(StorageOperation(
+        operation="rename_namespace", target_path="OLD/Project", new_path="NEW/Project"
+    ))
+    for node in store.list_nodes():
+        if node.path.startswith("NEW/Project"):
+            assert node.name == node.path.split("/")[-1], (
+                f"node.name '{node.name}' does not match last segment of '{node.path}'"
+            )
+
+
+def test_rename_updates_parent_path(tmp_path):
+    store = JsonStore(tmp_path)
+    _populate(store, "OLD/Project")
+    StorageOperationExecutor(store).apply(StorageOperation(
+        operation="rename_namespace", target_path="OLD/Project", new_path="NEW/Project"
+    ))
+    for node in store.list_nodes():
+        if node.path.startswith("NEW/Project/"):
+            expected_parent = "/".join(node.path.split("/")[:-1])
+            assert node.parent_path == expected_parent, (
+                f"node '{node.path}': parent_path is '{node.parent_path}', expected '{expected_parent}'"
+            )
+
+
+def test_rename_sqlite_name_field_updated(tmp_path):
+    store = SQLiteStore(tmp_path)
+    _populate(store, "OLD/Project")
+    store.rename_namespace("OLD/Project", "NEW/Project")
+    for node in store.list_nodes():
+        if node.path.startswith("NEW/Project"):
+            assert node.name == node.path.split("/")[-1]
+
+
+def test_rename_sqlite_search_works_after_rename(tmp_path):
+    store = SQLiteStore(tmp_path)
+    _populate(store, "OLD/Project")
+    store.rename_namespace("OLD/Project", "NEW/Project")
+    results = store.search("alpha")
+    paths = {r.path for r in results}
+    assert any("NEW/Project" in p for p in paths)

@@ -61,3 +61,67 @@ def test_apply_batch_skips_occ_when_branch_path_is_none(tmp_path):
     batch = StorageOperationBatch(operations=[], branch_path=None, start_version=None)
     result = StorageOperationExecutor(store).apply_batch(batch)
     assert result.status == "applied"
+
+
+def test_occ_failure_writes_no_chunks_and_no_audit(tmp_path):
+    """A failed OCC check must leave no partial writes and no audit records."""
+    from vertical_brain.core.models import ChunkInput, StorageOperation
+    store = JsonStore(tmp_path)
+    store.ensure_node("WORK/Project")
+
+    batch = SimpleOptimizer(store, min_compaction_path_parts=2).plan_branch("WORK/Project")
+    batch.operations = [
+        StorageOperation(
+            operation="append_chunk",
+            target_path="WORK/Project",
+            chunk=ChunkInput(content="should not land"),
+        )
+    ]
+
+    # Bump version to cause conflict.
+    executor = StorageOperationExecutor(store)
+    executor.apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/Project",
+        chunk=ChunkInput(content="concurrent write"),
+    ))
+    before_chunks = len(store.list_chunks())
+    before_audit = len(store.list_audit())
+
+    with pytest.raises(OptimisticLockException):
+        executor.apply_batch(batch)
+
+    assert len(store.list_chunks()) == before_chunks
+    assert len(store.list_audit()) == before_audit
+
+
+def test_occ_check_inside_transaction_for_sqlite(tmp_path):
+    """For SQLiteStore the check and writes are inside the same transaction."""
+    from vertical_brain.core.models import ChunkInput, StorageOperation
+    from vertical_brain.storage.sqlite_store import SQLiteStore
+
+    store = SQLiteStore(tmp_path)
+    store.ensure_node("WORK/Project")
+
+    batch = SimpleOptimizer(store, min_compaction_path_parts=2).plan_branch("WORK/Project")
+    batch.operations = [
+        StorageOperation(
+            operation="append_chunk",
+            target_path="WORK/Project",
+            chunk=ChunkInput(content="should not land"),
+        )
+    ]
+
+    # Advance version concurrently.
+    StorageOperationExecutor(store).apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/Project",
+        chunk=ChunkInput(content="concurrent write"),
+    ))
+    chunk_count_before = len(store.list_chunks())
+
+    with pytest.raises(OptimisticLockException, match="version"):
+        StorageOperationExecutor(store).apply_batch(batch)
+
+    # The "should not land" chunk must not be in the DB.
+    assert len(store.list_chunks()) == chunk_count_before
