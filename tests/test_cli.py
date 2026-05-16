@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from vertical_brain.cli.main import main
+from vertical_brain.cli.main import cli, main
 from vertical_brain.core.models import Chunk
 from vertical_brain.storage.json_store import JsonStore
 from vertical_brain.storage.sqlite_store import SQLiteStore
@@ -723,3 +723,34 @@ def test_cli_operation_apply_rejects_schema_errors(monkeypatch, capsys, tmp_path
 
     store = JsonStore(tmp_path / "data")
     assert store.get_chunks_by_path("WORK/Vertical/Node") == []
+
+
+def test_console_entrypoint_reports_errors_to_stderr(monkeypatch, capsys, tmp_path):
+    operation_file = tmp_path / "invalid_operation.json"
+    operation_file.write_text(
+        json.dumps(
+            {
+                "operation": "append_chunk",
+                "target_path": "WORK/Vertical/Node",
+                "chunk": {
+                    "content": "Valid content.",
+                    "made_up": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["vb", "--storage-backend", "json", "operation", "apply", str(operation_file)],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli()
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 1
+    assert "error:" in captured.err
+    assert "made_up" in captured.err

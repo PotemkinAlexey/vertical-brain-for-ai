@@ -12,7 +12,7 @@ dev = [
 ]
 
 [project.scripts]
-vb = "vertical_brain.cli.main:main"
+vb = "vertical_brain.cli.main:cli"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

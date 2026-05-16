@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from vertical_brain.core.context_lock import ContextLock
@@ -533,5 +534,16 @@ def main() -> None:
         print(result.to_json())
 
 
+def cli() -> None:
+    try:
+        main()
+    except KeyboardInterrupt as exc:
+        print("Interrupted.", file=sys.stderr)
+        raise SystemExit(130) from exc
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
 if __name__ == "__main__":
-    main()
+    cli()
