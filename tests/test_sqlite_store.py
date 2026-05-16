@@ -117,3 +117,35 @@ def test_sqlite_operation_batch_runs_inside_transaction(tmp_path, monkeypatch):
         executor.apply_batch(batch)
 
     assert store.get_chunks_by_path("WORK/Vertical/Node") == []
+
+
+def test_sqlite_wal_and_synchronous_pragmas_are_set(tmp_path):
+    """SQLiteStore must open with WAL + synchronous=NORMAL for concurrent safety."""
+    store = SQLiteStore(tmp_path)
+    journal = store.conn.execute("PRAGMA journal_mode").fetchone()[0]
+    synchronous = store.conn.execute("PRAGMA synchronous").fetchone()[0]
+    assert journal == "wal"
+    assert synchronous == 1  # 1 = NORMAL
+
+
+def test_sqlite_fts_does_not_leak_superseded_chunks(tmp_path):
+    """After supersede, the FTS index must not return the superseded chunk."""
+    store = SQLiteStore(tmp_path)
+    if not store._fts_enabled:
+        pytest.skip("FTS not available")
+    store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="unique telltale phrase"))
+    store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="unrelated second fact"))
+
+    chunks = store.get_chunks_by_path("WORK/DataArt/Databricks")
+    telltale = next(c for c in chunks if "unique telltale phrase" in c.content)
+
+    executor = StorageOperationExecutor(store)
+    executor.apply(StorageOperation(
+        operation="supersede_chunk",
+        target_path="WORK/DataArt/Databricks",
+        chunk_ids=[telltale.id],
+        reasoning_summary="Supersede for FTS test.",
+    ))
+
+    results = store.search("unique telltale phrase", limit=10)
+    assert not any(r.chunk_id == telltale.id for r in results)

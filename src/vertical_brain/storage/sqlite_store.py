@@ -28,6 +28,7 @@ class SQLiteStore:
         self.conn = sqlite3.connect(self.db_file, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA busy_timeout=5000")
         self._init_schema()
         self._fts_enabled = self._init_search_index()

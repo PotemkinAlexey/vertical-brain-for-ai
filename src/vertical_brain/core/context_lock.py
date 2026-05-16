@@ -89,7 +89,11 @@ class ContextLock:
 
         link_handles = self._link_handles(target_path) if policy.link_expansion != "none" else []
         if policy.link_expansion == "expanded":
+            visited: set[str] = {target_path}
             for handle in link_handles:
+                if handle.target_path in visited:
+                    continue
+                visited.add(handle.target_path)
                 for chunk in self.store.get_chunks_by_path(handle.target_path):
                     if chunk.status == "active":
                         omitted_items += self._append_with_budget(

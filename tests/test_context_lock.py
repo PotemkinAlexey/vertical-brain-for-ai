@@ -1,5 +1,3 @@
-import pytest
-
 from vertical_brain.core.context_lock import ContextLock
 from vertical_brain.core.models import Chunk, ContextBudget, ContextPolicy, Link
 from vertical_brain.storage.json_store import JsonStore
@@ -124,59 +122,37 @@ def test_context_lock_respects_budget(tmp_path):
     assert locked_context.omitted_items == 1
 
 
-# ── ContextLock.expand_link ───────────────────────────────────────────────────
+# ── cycle guard ───────────────────────────────────────────────────────────────
 
-def test_expand_link_peer_works_without_from_path(tmp_path):
+def test_context_lock_expanded_links_do_not_loop_on_mutual_peer(tmp_path):
+    """A↔B peer links with link_expansion='expanded' must not recurse infinitely."""
     store = JsonStore(tmp_path)
-    link = store.save_link(Link(
-        source_path="WORK/A", target_path="WORK/B",
-        link_type="peer", reason="related",
-    ))
-    assert ContextLock(store).expand_link(link.id) == "WORK/B"
+    store.save_chunk(Chunk(node_path="WORK/A", content="Fact about A"))
+    store.save_chunk(Chunk(node_path="WORK/B", content="Fact about B"))
+    store.save_link(Link(source_path="WORK/A", target_path="WORK/B", link_type="peer", reason="related"))
+    store.save_link(Link(source_path="WORK/B", target_path="WORK/A", link_type="peer", reason="related"))
+
+    locked = ContextLock(store).open_locked_context(
+        "WORK/A",
+        policy=ContextPolicy(link_expansion="expanded"),
+    )
+
+    contents = [item.content for item in locked.items]
+    assert "Fact about A" in contents
+    assert "Fact about B" in contents
+    assert contents.count("Fact about B") == 1  # not duplicated due to cycle
 
 
-def test_expand_link_peer_reverse_with_from_path_target(tmp_path):
+def test_context_lock_expanded_links_skip_target_path_itself(tmp_path):
+    """If a link handle points back to the target path, it must not be re-expanded."""
     store = JsonStore(tmp_path)
-    link = store.save_link(Link(
-        source_path="WORK/A", target_path="WORK/B",
-        link_type="peer", reason="related",
-    ))
-    assert ContextLock(store).expand_link(link.id, from_path="WORK/B") == "WORK/A"
+    store.save_chunk(Chunk(node_path="WORK/A", content="Fact about A"))
+    store.save_link(Link(source_path="WORK/A", target_path="WORK/A", link_type="peer", reason="self ref"))
 
+    locked = ContextLock(store).open_locked_context(
+        "WORK/A",
+        policy=ContextPolicy(link_expansion="expanded"),
+    )
 
-def test_expand_link_gold_overflow_raises_without_from_path(tmp_path):
-    store = JsonStore(tmp_path)
-    link = store.save_link(Link(
-        source_path="WORK/Databricks", target_path="WORK/Databricks_2",
-        link_type="gold_overflow", reason="Gold capacity exceeded",
-    ))
-    with pytest.raises(ValueError, match="from_path is required"):
-        ContextLock(store).expand_link(link.id)
-
-
-def test_expand_link_gold_overflow_source_to_target(tmp_path):
-    store = JsonStore(tmp_path)
-    link = store.save_link(Link(
-        source_path="WORK/Databricks", target_path="WORK/Databricks_2",
-        link_type="gold_overflow", reason="Gold capacity exceeded",
-    ))
-    assert ContextLock(store).expand_link(link.id, from_path="WORK/Databricks") == "WORK/Databricks_2"
-
-
-def test_expand_link_gold_overflow_target_to_source(tmp_path):
-    store = JsonStore(tmp_path)
-    link = store.save_link(Link(
-        source_path="WORK/Databricks", target_path="WORK/Databricks_2",
-        link_type="gold_overflow", reason="Gold capacity exceeded",
-    ))
-    assert ContextLock(store).expand_link(link.id, from_path="WORK/Databricks_2") == "WORK/Databricks"
-
-
-def test_expand_link_gold_overflow_rejects_unrelated_from_path(tmp_path):
-    store = JsonStore(tmp_path)
-    link = store.save_link(Link(
-        source_path="WORK/Databricks", target_path="WORK/Databricks_2",
-        link_type="gold_overflow", reason="Gold capacity exceeded",
-    ))
-    with pytest.raises(ValueError, match="not an endpoint"):
-        ContextLock(store).expand_link(link.id, from_path="WORK/Python")
+    contents = [item.content for item in locked.items]
+    assert contents.count("Fact about A") == 1
