@@ -321,6 +321,10 @@ _TOOLS: list[dict[str, Any]] = [
 _TOOLS_BY_NAME: dict[str, dict[str, Any]] = {tool["name"]: tool for tool in _TOOLS}
 
 
+class MessageParseError(ValueError):
+    """Raised when stdio framing or JSON payload parsing fails."""
+
+
 class VerticalBrainMCP:
     """JSON-RPC 2.0 handler. Protocol-agnostic — call handle() with parsed dicts."""
 
@@ -655,14 +659,35 @@ def _read_message(stream: io.RawIOBase) -> dict[str, Any]:
         line = stream.readline()
         if not line:
             raise EOFError
-        decoded = line.decode("utf-8")
+        try:
+            decoded = line.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise MessageParseError("Header is not valid UTF-8") from exc
         if decoded in ("\r\n", "\n"):
             break
         key, _, value = decoded.partition(":")
-        headers[key.strip()] = value.strip()
-    length = int(headers["Content-Length"])
+        if not key or not value:
+            raise MessageParseError("Malformed header line")
+        headers[key.strip().lower()] = value.strip()
+
+    if "content-length" not in headers:
+        raise MessageParseError("Missing Content-Length header")
+    try:
+        length = int(headers["content-length"])
+    except ValueError as exc:
+        raise MessageParseError("Content-Length must be an integer") from exc
+    if length <= 0:
+        raise MessageParseError("Content-Length must be positive")
     body = stream.read(length)
-    return json.loads(body.decode("utf-8"))
+    if len(body) != length:
+        raise MessageParseError("Unexpected EOF while reading message body")
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise MessageParseError("Invalid JSON body") from exc
+    if not isinstance(payload, dict):
+        raise MessageParseError("Message body must be a JSON object")
+    return payload
 
 
 def _write_message(stream: io.RawIOBase, obj: dict[str, Any]) -> None:
@@ -682,6 +707,9 @@ def run_stdio(store: object, embedding_provider: EmbeddingProvider | None = None
         try:
             request = _read_message(stdin)
         except EOFError:
+            break
+        except MessageParseError as exc:
+            _write_message(stdout, VerticalBrainMCP._error(None, -32700, str(exc)))
             break
         except Exception:
             traceback.print_exc(file=sys.stderr)
