@@ -87,7 +87,9 @@ The old Gold aspect will be naturally displaced by the optimizer over time.
 
 ## At the end of every session
 
-**Call `session_end` before closing.** This is mandatory — not a suggestion. If the session produced any facts, decisions, or insights, they must be persisted. An unsaved session is a lost session.
+**Call `session_end` before closing** if the session produced any facts, decisions, or insights. An unsaved session is a lost session.
+
+If the session produced no durable knowledge (e.g. a quick lookup, a clarifying question, or a read-only task), you may skip `session_end` — but tell the user explicitly: "No durable memory was created this session."
 
 `session_end` takes:
 - `notes` — raw Bronze capture: bullet list of what was done, decided, or learned this session
@@ -125,7 +127,7 @@ If writing multiple Bronze chunks at once, use `batch_append`, then call `update
 ### Write discipline
 
 1. **Call `session_start` first.** Do not respond to the user until it returns. No exceptions.
-2. **Call `session_end` last.** Every session that produced knowledge must end with `session_end`. Do not skip it even if the session felt lightweight.
+2. **Call `session_end` last** if the session produced durable knowledge. If nothing worth persisting happened, skip it — but tell the user explicitly that no memory was created.
 3. **Search before every Bronze write.** Use `search` to check for existing chunks before calling `append_chunk`. If a matching chunk is found — stop. Do not write a duplicate.
 4. **One fact per chunk.** Do not bundle multiple unrelated facts into one chunk. Each chunk must be independently meaningful and stale-able.
 5. **After every Bronze write, update Silver.** Call `read_context` to get the current Silver and its ID, synthesize new Silver (old Silver + new fact), then call `update_silver`. Never leave Bronze orphaned without a Silver update.
