@@ -3,6 +3,7 @@ import sqlite3
 
 import pytest
 
+from vertical_brain.core.gold import GoldAspect, gold_aspect_embed_key, serialize_gold_aspects
 from vertical_brain.core.models import Chunk, ChunkInput, Link, StorageOperation, StorageOperationBatch
 from vertical_brain.core.operations import StorageOperationExecutor
 from vertical_brain.storage.sqlite_store import SQLiteStore
@@ -244,6 +245,27 @@ def test_sqlite_vacuum_deletes_inactive_chunks_vectors_and_empty_nodes(tmp_path)
     assert store.get_vector(active.content_hash, "mock") == [1.0, 0.0]
     assert store.get_vector(stale.content_hash, "mock") is None
     assert store.search("obsolete searchable phrase", include_stale=True) == []
+
+
+def test_sqlite_vacuum_keeps_active_gold_aspect_vectors(tmp_path):
+    store = SQLiteStore(tmp_path)
+    gold = store.save_chunk(Chunk(
+        node_path="WORK/Gold",
+        content=serialize_gold_aspects([GoldAspect(text="Delta Z-ordering")]),
+        layer="gold",
+    ))
+    active_key = gold_aspect_embed_key("Delta Z-ordering")
+    stale_key = gold_aspect_embed_key("Obsolete Gold tag")
+    store.set_vector(gold.content_hash, "mock", [0.5])
+    store.set_vector(active_key, "mock", [1.0, 0.0])
+    store.set_vector(stale_key, "mock", [0.0, 1.0])
+
+    result = store.vacuum(retention_hours=0, dry_run=False, force=True)
+
+    assert result["deleted_vectors"] == 1
+    assert store.get_vector(gold.content_hash, "mock") == [0.5]
+    assert store.get_vector(active_key, "mock") == [1.0, 0.0]
+    assert store.get_vector(stale_key, "mock") is None
 
 
 def test_sqlite_vacuum_respects_retention_window(tmp_path):

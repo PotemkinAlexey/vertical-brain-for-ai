@@ -58,7 +58,7 @@ Stable search index — short routing anchors that help find the right namespace
 - reusable prompt labels
 
 Requires an active Silver to exist at the same namespace. Written only via `append_gold_aspect`.
-Silver holds the content; Gold holds many short, semantically distinct aspects that are embedded individually for routing.
+Silver holds the content; Gold holds many short, semantically distinct aspects that are embedded individually for routing. Gold aspect vectors are derived index rows in `vector_cache`, keyed by normalized aspect text and model name, not stored inside Gold JSON.
 
 ## Read path
 

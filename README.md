@@ -175,7 +175,7 @@ Context opened at `WORK/DataArt/Databricks` includes ancestors (`WORK/DataArt`, 
 | **Silver** | Living summary — one per namespace, kept current | `append_chunk(layer=silver)` (first time) → `update_silver` (all subsequent) |
 | **Gold** | Search index — short stable routing aspects | `append_gold_aspect` (requires active Silver) |
 
-Silver is a living document: the agent creates the first summary, then keeps it current after each new Bronze write. Gold aspects are short search tags embedded individually by the router; they carry stable UUIDs so they survive rewrites. Up to 20 Gold aspects per namespace; overflow creates a sibling namespace automatically.
+Silver is a living document: the agent creates the first summary, then keeps it current after each new Bronze write. Gold aspects are short search tags embedded individually by the router and cached as one persistent `vector_cache` row per aspect/model; they carry stable UUIDs so they survive rewrites. Up to 20 Gold aspects per namespace; overflow creates a sibling namespace automatically.
 
 ### MCP tools
 

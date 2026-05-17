@@ -140,6 +140,7 @@ Add or refresh a short semantic routing tag in the Gold index of a namespace.
 - Each aspect gets a stable UUID that persists across rewrites
 - Max 20 aspects per node; overflow creates a sibling namespace (`{path}_2`, `{path}_3`, …)
 - Aspects are embedded individually by `EmbeddingRouter`; use precise search tags, not summaries
+- Aspect embeddings are derived `vector_cache` rows keyed by normalized aspect text and model name
 - Aspects longer than 150 characters are written but return `aspect_too_long: true`
 
 ```json

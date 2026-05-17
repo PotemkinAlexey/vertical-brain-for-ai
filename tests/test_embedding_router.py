@@ -22,6 +22,11 @@ class KeywordEmbeddingProvider:
         ]
 
 
+class NamedKeywordEmbeddingProvider(KeywordEmbeddingProvider):
+    model_name = "keyword-v1"
+    embed_dimension = 3
+
+
 def _seed_gold(store, path: str, content: str) -> None:
     store.ensure_node(path)
     store.save_chunk(Chunk(node_path=path, content=content, layer="gold", source="model"))
@@ -121,6 +126,58 @@ def test_embedding_router_scores_each_gold_aspect_independently(tmp_path):
     assert candidates[0].gold_summary == "Delta Z-ordering"
     assert "Delta Z-ordering" in provider.seen
     assert "Delta Z-ordering | AutoLoader schema drift | MLflow tracking" not in provider.seen
+
+
+def test_embedding_router_persists_vectors_per_gold_aspect(tmp_path):
+    from vertical_brain.core.gold import GoldAspect, gold_aspect_embed_key, serialize_gold_aspects
+
+    store = JsonStore(tmp_path)
+    content = serialize_gold_aspects([
+        GoldAspect(text="Delta Z-ordering"),
+        GoldAspect(text="AutoLoader schema drift"),
+    ])
+    _seed_gold(store, "WORK/DataArt/Databricks", content)
+    provider = NamedKeywordEmbeddingProvider()
+
+    EmbeddingRouter(store, provider).find_candidates("where to store Z-ordering notes")
+
+    z_key = gold_aspect_embed_key("Delta Z-ordering")
+    autoloader_key = gold_aspect_embed_key("AutoLoader schema drift")
+    assert store.get_vector(z_key, "keyword-v1") == [1.0, 0.0, 0.0]
+    assert store.get_vector(autoloader_key, "keyword-v1") == [0.0, 1.0, 0.0]
+
+
+def test_embedding_router_reuses_persisted_gold_aspect_vectors(tmp_path):
+    from vertical_brain.core.gold import GoldAspect, serialize_gold_aspects
+
+    store = JsonStore(tmp_path)
+    content = serialize_gold_aspects([
+        GoldAspect(text="Delta Z-ordering"),
+        GoldAspect(text="AutoLoader schema drift"),
+    ])
+    _seed_gold(store, "WORK/DataArt/Databricks", content)
+    provider = NamedKeywordEmbeddingProvider()
+    EmbeddingRouter(store, provider).find_candidates("where to store Z-ordering notes")
+    provider.seen = []
+
+    EmbeddingRouter(store, provider).find_candidates("where to store Z-ordering notes")
+
+    assert provider.seen == ["where to store Z-ordering notes"]
+
+
+def test_embedding_router_recomputes_bad_cached_gold_aspect_vector(tmp_path):
+    from vertical_brain.core.gold import GoldAspect, gold_aspect_embed_key, serialize_gold_aspects
+
+    store = JsonStore(tmp_path)
+    content = serialize_gold_aspects([GoldAspect(text="Delta Z-ordering")])
+    _seed_gold(store, "WORK/DataArt/Databricks", content)
+    store.set_vector(gold_aspect_embed_key("Delta Z-ordering"), "keyword-v1", [0.1])
+    provider = NamedKeywordEmbeddingProvider()
+
+    EmbeddingRouter(store, provider).find_candidates("where to store Z-ordering notes")
+
+    assert "Delta Z-ordering" in provider.seen
+    assert store.get_vector(gold_aspect_embed_key("Delta Z-ordering"), "keyword-v1") == [1.0, 0.0, 0.0]
 
 
 def test_embedding_router_finds_namespace_with_gold_chunk(tmp_path):

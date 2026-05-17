@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterator
 from uuid import uuid4
 
+from vertical_brain.core.gold import gold_aspect_embed_key, parse_gold_content
 from vertical_brain.core.models import Chunk, Link, Node, SearchResult, utc_now
 
 if TYPE_CHECKING:
@@ -362,16 +363,15 @@ class SQLiteStore:
                 result["deleted_chunks"] = cursor.rowcount
 
             if prune_vector_cache:
-                cursor = self.conn.execute(
-                    """
-                    DELETE FROM vector_cache
-                    WHERE content_hash NOT IN (
-                        SELECT DISTINCT content_hash
-                        FROM chunks
-                        WHERE content_hash <> ''
+                active_keys = self._active_vector_cache_keys()
+                if active_keys:
+                    placeholders = ",".join("?" for _ in active_keys)
+                    cursor = self.conn.execute(
+                        f"DELETE FROM vector_cache WHERE content_hash NOT IN ({placeholders})",
+                        list(active_keys),
                     )
-                    """
-                )
+                else:
+                    cursor = self.conn.execute("DELETE FROM vector_cache")
                 result["deleted_vectors"] = cursor.rowcount
 
             if prune_empty_nodes:
@@ -384,6 +384,26 @@ class SQLiteStore:
             result["reclaimed_space"] = True
         result["checkpoint"] = self.checkpoint("TRUNCATE")
         return result
+
+    def _active_vector_cache_keys(self) -> set[str]:
+        keys: set[str] = set()
+        rows = self.conn.execute(
+            """
+            SELECT content_hash, layer, content
+            FROM chunks
+            WHERE status = 'active'
+            """
+        ).fetchall()
+        for row in rows:
+            if row["content_hash"]:
+                keys.add(row["content_hash"])
+            if row["layer"] == "gold":
+                keys.update(
+                    gold_aspect_embed_key(aspect)
+                    for aspect in parse_gold_content(row["content"])
+                    if aspect.strip()
+                )
+        return keys
 
     def backup_to(self, destination: str | Path, *, overwrite: bool = False) -> Path:
         if self._transaction_depth != 0:

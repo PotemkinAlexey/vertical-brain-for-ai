@@ -120,7 +120,7 @@ Same as `context_search` but uses embedding similarity instead of lexical search
 
 ### `route`
 
-Find the best-matching namespaces for a piece of text by comparing its embedding against Gold chunks. Returns ranked candidates with path and Gold summary.
+Find the best-matching namespaces for a piece of text by comparing its embedding against individual Gold aspects. Returns ranked candidates with path and the best matching Gold aspect. Aspect vectors are persisted in `vector_cache` and reused across router instances.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -280,7 +280,7 @@ Databricks-style maintenance cleanup. Dry-run by default. Physically purges old 
 | `dry_run` | boolean | Preview candidates without deleting (default true) |
 | `force` | boolean | Required to apply retention below 168 hours |
 | `prune_empty_nodes` | boolean | Remove namespace nodes with no chunks, links, or children (default true) |
-| `prune_vector_cache` | boolean | Remove embedding vectors no remaining chunk uses (default true) |
+| `prune_vector_cache` | boolean | Remove orphan embedding vectors while preserving active chunk and Gold aspect vectors (default true) |
 | `reclaim_space` | boolean | Run SQLite `VACUUM` after purging |
 
 The tool returns counts, candidate metadata, and checkpoint status. Use CLI

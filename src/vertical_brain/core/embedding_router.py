@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from vertical_brain.core.gold import parse_gold_content
+from vertical_brain.core.gold import gold_aspect_embed_key, normalize_gold_aspect_text, parse_gold_content
 from vertical_brain.core.models import EmbeddingRouteCandidate
 from vertical_brain.llm.embedding import EmbeddingProvider, cosine_similarity
 
@@ -71,6 +71,7 @@ class EmbeddingRouter:
         limit: int = 5,
     ) -> list[EmbeddingRouteCandidate]:
         query_vec = self._provider.embed(text)
+        expected_dimension = len(query_vec)
         query_tokens = _path_tokens(text)
 
         # --- semantic scoring against active Gold aspects ---
@@ -84,9 +85,11 @@ class EmbeddingRouter:
             # Gold is an index: each aspect is a short independent routing anchor.
             # Embedding the joined chunk would average unrelated topics together.
             for aspect_text in _gold_aspect_texts(chunk.content):
-                if aspect_text not in self._cache:
-                    self._cache[aspect_text] = self._provider.embed(aspect_text)
-                sim = cosine_similarity(query_vec, self._cache[aspect_text])
+                aspect_vec = self._get_aspect_vector(
+                    aspect_text,
+                    expected_dimension=expected_dimension,
+                )
+                sim = cosine_similarity(query_vec, aspect_vec)
                 path = chunk.node_path
                 if path not in best or sim > best[path][0]:
                     best[path] = (sim, aspect_text)
@@ -108,6 +111,54 @@ class EmbeddingRouter:
         candidates.sort(key=lambda c: (-c.score, c.path))
         return candidates[:limit]
 
+    def _get_aspect_vector(self, aspect_text: str, *, expected_dimension: int) -> list[float]:
+        embed_text = normalize_gold_aspect_text(aspect_text)
+        cache_key = gold_aspect_embed_key(embed_text)
+        model_name = getattr(self._provider, "model_name", None)
+
+        if model_name:
+            get_vector = getattr(self._store, "get_vector", None)
+            if callable(get_vector):
+                cached = _coerce_vector(
+                    get_vector(cache_key, model_name),
+                    expected_dimension=expected_dimension,
+                )
+                if cached is not None:
+                    return cached
+        elif cache_key in self._cache:
+            cached = _coerce_vector(self._cache[cache_key], expected_dimension=expected_dimension)
+            if cached is not None:
+                return cached
+
+        vector = _coerce_vector(
+            self._provider.embed(embed_text),
+            expected_dimension=expected_dimension,
+        )
+        if vector is None:
+            raise ValueError("Embedding provider returned an invalid vector")
+
+        if model_name:
+            set_vector = getattr(self._store, "set_vector", None)
+            if callable(set_vector):
+                set_vector(cache_key, model_name, vector)
+        else:
+            self._cache[cache_key] = vector
+
+        return vector
+
 
 def _gold_aspect_texts(content: str) -> list[str]:
-    return [text.strip() for text in parse_gold_content(content) if text.strip()]
+    return [normalize_gold_aspect_text(text) for text in parse_gold_content(content) if text.strip()]
+
+
+def _coerce_vector(vector: object, *, expected_dimension: int | None = None) -> list[float] | None:
+    if not isinstance(vector, list):
+        return None
+    if expected_dimension is not None and len(vector) != expected_dimension:
+        return None
+    coerced: list[float] = []
+    for value in vector:
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return None
+        coerced.append(float(value))
+    return coerced

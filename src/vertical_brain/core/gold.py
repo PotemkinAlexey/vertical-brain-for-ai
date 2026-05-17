@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -15,6 +16,19 @@ class LlmProvider(Protocol):
 
 
 MAX_GOLD_ASPECTS = 20
+GOLD_ASPECT_EMBED_PREFIX = "gold-aspect:v1:"
+
+
+def normalize_gold_aspect_text(text: str) -> str:
+    """Return canonical text for Gold aspect vector cache keys."""
+    return " ".join(text.split())
+
+
+def gold_aspect_embed_key(text: str) -> str:
+    """Return persistent vector-cache key for one Gold aspect text."""
+    normalized = normalize_gold_aspect_text(text)
+    digest = hashlib.sha256(normalized.encode()).hexdigest()
+    return f"{GOLD_ASPECT_EMBED_PREFIX}{digest}"
 
 
 def parse_gold_content(content: str) -> list[str]:

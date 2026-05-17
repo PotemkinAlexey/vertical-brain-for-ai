@@ -60,7 +60,8 @@ vb --data-dir /path/to/brain vacuum \
 ```
 
 Vacuum deletes eligible `stale`, `superseded`, `legacy`, and `contradicted`
-chunks, prunes orphan embedding vectors, removes empty namespace nodes,
+chunks, prunes orphan embedding vectors while preserving active chunk and Gold
+aspect vectors, removes empty namespace nodes,
 rebuilds the FTS index, and checkpoints the WAL. Retention below 168 hours
 requires `--force`. Use `--reclaim-space` when you also want SQLite to run a
 full `VACUUM` and shrink the database file.
