@@ -128,7 +128,7 @@ If writing multiple Bronze chunks at once, use `batch_append`, then call `update
 
 Gold is a search index, not a knowledge summary. Silver holds the content; Gold holds short semantic anchors that help route future queries to the right namespace.
 
-A Gold aspect should answer: **"По какому запросу должен находиться этот namespace?"** Prefer many short, precise aspects over one long overview. Target ~30–100 characters per aspect. Avoid broad paragraphs like "what I know about X"; write tags like "Delta Lake Z-ordering lookup" or "AutoLoader schema drift handling".
+A Gold aspect should answer: **"Which query should find this namespace?"** Prefer many short, precise aspects over one long overview. Target ~30–100 characters per aspect. Avoid broad paragraphs like "what I know about X"; write tags like "Delta Lake Z-ordering lookup" or "AutoLoader schema drift handling".
 
 `append_gold_aspect` returns a soft warning when an aspect is too long:
 
