@@ -140,7 +140,23 @@ result.aspect_too_long = true
 
 ## File ingestion protocol
 
-Use this protocol whenever you call `ingest_file`. The tool returns file metadata and raw content. You must execute all steps below — the tool does not do it for you.
+### Triggers
+
+**When the user writes `ingest_file` (with a file attached):**
+1. Take the file content and filename from the attachment — do not ask the user for parameters.
+2. Try to infer `authority` from the content (issuing organisation, standard body, domain name in the header, copyright line, etc.). If you cannot infer it with confidence, leave it empty — the namespace will be `SOURCES/{slug}`.
+3. Call `ingest_file(content=<attachment text>, file_name=<attachment name>, authority=<inferred or empty>)`.
+4. Then execute all steps below.
+
+**When the user writes `ingest_url <url>`:**
+1. Call `ingest_url(url=<url>)`. Authority and slug are derived automatically from the hostname and URL path.
+2. Then execute all steps below.
+
+The user never needs to pass parameters manually. One word is enough.
+
+---
+
+Use this protocol whenever you ingest a file or URL. The tool returns a metadata header. You must execute all steps below — the tool does not do it for you.
 
 ### What immutable means
 
