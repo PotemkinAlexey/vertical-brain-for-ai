@@ -258,7 +258,7 @@ _TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "batch_append",
-        "description": "Write multiple chunks in one call. All-or-nothing if using SQLite backend.",
+        "description": "Write multiple chunks in one call. All-or-nothing if using SQLite backend. Max 10 chunks per call — split larger sets into multiple batch_append calls.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -495,12 +495,14 @@ size: {size_kb:.1f} KB
 authority: {authority or "(infer from content)"}
 source_namespace: {source_ns}
 
-Apply the File Ingestion Protocol from AGENTS.md."""
+⚡ Execute the File Ingestion Protocol from AGENTS.md now.
+Do NOT respond to the user until all steps are complete.
+Start with Step 1 (register source chunk) immediately."""
 
     if content is not None:
         header += f"\n\n---\n\n{content}"
     else:
-        header += "\nThe file content is already in the conversation context above."
+        header += "\n\nThe file content is already in the conversation context above."
 
     return header
 

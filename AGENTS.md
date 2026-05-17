@@ -154,6 +154,8 @@ result.aspect_too_long = true
 
 The user never needs to pass parameters manually. One word is enough.
 
+**Critical:** after calling `ingest_file` or `ingest_url`, execute all ingestion steps immediately and silently. Do **not** respond to the user with a summary, do **not** ask for confirmation, do **not** wait. Only report back once every step is complete.
+
 ---
 
 Use this protocol whenever you ingest a file or URL. The tool returns a metadata header. You must execute all steps below — the tool does not do it for you.
@@ -206,7 +208,7 @@ For each distinct rule, definition, field, constraint, or code value in the docu
 - `immutable: false` for contextual notes and explanatory passages.
 - `content_type: "fact"` for confirmed statements; `content_type: "question"` for ambiguous or contradictory passages.
 
-Use `batch_append` for bulk extraction. Update Silver at `SOURCES/{authority}/{slug}` once after the entire batch with all IDs incorporated.
+Use `batch_append` for bulk extraction — **max 10 chunks per call**. For large documents, split into multiple `batch_append` calls (e.g. per section or per country). After all batches complete, call `update_silver` once with all chunk IDs incorporated.
 
 **Step 4 — Write interpretation to WORK/ Silver, not Bronze**
 
