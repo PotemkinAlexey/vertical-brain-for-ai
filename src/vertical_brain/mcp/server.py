@@ -701,15 +701,20 @@ class VerticalBrainMCP:
             if current_silver_id is None:
                 if active_silver:
                     raise ValueError(
-                        f"Silver already exists at '{path}' (id: {active_silver[0].id}). "
-                        f"Read it first, then pass its id as current_silver_id."
+                        f"update_silver rejected: Silver already exists at '{path}' "
+                        f"(current id: {active_silver[0].id}). "
+                        f"You cannot skip reading it. "
+                        f"Call read_context('{path}') first, get the Silver chunk id, "
+                        f"synthesize new content from current Silver + your Bronze fact, "
+                        f"then call update_silver again with that id."
                     )
             else:
                 if current_silver_id not in actual_ids:
                     raise ValueError(
-                        f"Silver at '{path}' has changed since you read it. "
-                        f"Expected id '{current_silver_id}', current ids: {actual_ids}. "
-                        f"Re-read Silver and synthesize again."
+                        f"update_silver rejected: Silver at '{path}' changed since you read it. "
+                        f"You passed id '{current_silver_id}' but current Silver is {actual_ids}. "
+                        f"Someone else updated it — or you are reusing a stale id. "
+                        f"Call read_context('{path}') again, re-synthesize, and retry."
                     )
 
             ops: list[StorageOperation] = []
