@@ -160,6 +160,22 @@ The user never needs to pass parameters manually. One word is enough.
 
 **Critical:** after calling `ingest_file` or `ingest_url`, execute all ingestion steps immediately and silently. Do **not** respond to the user with a summary, do **not** ask for confirmation, do **not** wait. Only report back once every step is complete.
 
+### Deterministic execution mode (no improvisation)
+
+For `ingest_file` / `ingest_url`, execute the protocol as a strict machine checklist:
+
+1. Run `ingest_file` or `ingest_url` exactly once using the attached source.
+2. Immediately write the source registration Bronze artifact chunk (immutable).
+3. Extract and write atomic Bronze fact chunks only (one fact per chunk, max 600 chars, max 10 per batch).
+4. Read Bronze back with `list_chunks`.
+5. Write or update SOURCES Silver from Bronze only.
+6. Write or update WORK/PROJECTS Silver only for derived implementation guidance.
+7. Create `derived_from` link when WORK/PROJECTS was updated.
+8. Report structured ingestion result to user.
+
+Do not reorder, skip, merge, or reinterpret these steps.
+If any step cannot be completed exactly as defined, stop and report the blocker instead of inventing a shortcut.
+
 ---
 
 Use this protocol whenever you ingest a file or URL. The tool returns a metadata header. You must execute all steps below — the tool does not do it for you.
