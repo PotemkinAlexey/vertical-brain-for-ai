@@ -42,6 +42,7 @@ class Doctor:
         issues += self._check_orphan_links()
         issues += self._check_chunks_missing_nodes()
         issues += self._check_duplicate_active_chunks_by_hash()
+        issues += self._check_multiple_active_silver()
         issues += self._check_broken_gold_overflow_chains()
         issues += self._check_invalid_namespace_paths()
         issues += self._check_empty_chunk_content()
@@ -101,6 +102,25 @@ class Doctor:
                     severity="warning",
                     check="duplicate_active_chunk",
                     message=f"{len(chunk_ids)} active chunks share the same dedupe key",
+                    path=path,
+                ))
+        return issues
+
+    def _check_multiple_active_silver(self) -> list[DoctorIssue]:
+        issues: list[DoctorIssue] = []
+        by_path: dict[str, list[str]] = defaultdict(list)
+        for chunk in self._store.list_chunks():
+            if chunk.layer == "silver" and chunk.status == "active":
+                by_path[chunk.node_path].append(chunk.id)
+        for path, chunk_ids in by_path.items():
+            if len(chunk_ids) > 1:
+                issues.append(DoctorIssue(
+                    severity="warning",
+                    check="multiple_active_silver",
+                    message=(
+                        f"{len(chunk_ids)} active Silver chunks found; "
+                        "use update_silver to keep one current summary"
+                    ),
                     path=path,
                 ))
         return issues

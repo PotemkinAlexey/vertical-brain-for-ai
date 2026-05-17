@@ -79,6 +79,8 @@ class EmbeddingRouter:
             c for c in self._store.list_chunks()  # type: ignore[attr-defined]
             if c.layer == "gold" and c.status == "active"
         ]
+        gold_overflow_parents = _gold_overflow_parents(self._store)
+        gold_overflow_paths = set(gold_overflow_parents)
 
         best: dict[str, tuple[float, str]] = {}
         for chunk in gold_chunks:
@@ -90,14 +92,14 @@ class EmbeddingRouter:
                     expected_dimension=expected_dimension,
                 )
                 sim = cosine_similarity(query_vec, aspect_vec)
-                path = chunk.node_path
+                path = _canonical_gold_path(chunk.node_path, gold_overflow_parents)
                 if path not in best or sim > best[path][0]:
                     best[path] = (sim, aspect_text)
 
         # --- path fallback for nodes with no Gold chunk ---
         gold_paths = set(best.keys())
         for node in self._store.list_nodes():  # type: ignore[attr-defined]
-            if node.path in gold_paths:
+            if node.path in gold_paths or node.path in gold_overflow_paths:
                 continue
             score = _path_score(query_tokens, node.path)
             if score > 0:
@@ -149,6 +151,26 @@ class EmbeddingRouter:
 
 def _gold_aspect_texts(content: str) -> list[str]:
     return [normalize_gold_aspect_text(text) for text in parse_gold_content(content) if text.strip()]
+
+
+def _gold_overflow_parents(store: "StorageProvider") -> dict[str, str]:
+    return {
+        link.target_path: link.source_path
+        for link in store.list_links()
+        if link.link_type == "gold_overflow"
+    }
+
+
+def _canonical_gold_path(path: str, overflow_parents: dict[str, str]) -> str:
+    current = path
+    seen = {current}
+    while current in overflow_parents:
+        parent = overflow_parents[current]
+        if parent in seen:
+            return path
+        seen.add(parent)
+        current = parent
+    return current
 
 
 def _coerce_vector(vector: object, *, expected_dimension: int | None = None) -> list[float] | None:

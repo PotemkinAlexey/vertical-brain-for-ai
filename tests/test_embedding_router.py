@@ -180,6 +180,36 @@ def test_embedding_router_recomputes_bad_cached_gold_aspect_vector(tmp_path):
     assert store.get_vector(gold_aspect_embed_key("Delta Z-ordering"), "keyword-v1") == [1.0, 0.0, 0.0]
 
 
+def test_embedding_router_routes_gold_overflow_as_canonical_namespace(tmp_path):
+    from vertical_brain.core.gold import MAX_GOLD_ASPECTS, GoldAspect, serialize_gold_aspects
+
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="silver summary", layer="silver"))
+    store.save_chunk(
+        Chunk(
+            node_path="WORK/DataArt",
+            content=serialize_gold_aspects([
+                GoldAspect(text=f"filler aspect {idx}") for idx in range(MAX_GOLD_ASPECTS)
+            ]),
+            layer="gold",
+            source="model",
+        )
+    )
+    executor = StorageOperationExecutor(store)
+    result = executor.apply(StorageOperation(
+        operation="append_gold_aspect",
+        target_path="WORK/DataArt",
+        gold_aspect="MLflow tracking",
+    ))
+
+    candidates = EmbeddingRouter(store, KeywordEmbeddingProvider()).find_candidates("MLflow tracking")
+
+    assert result.overflow_path == "WORK/DataArt_2"
+    assert candidates[0].path == "WORK/DataArt"
+    assert candidates[0].gold_summary == "MLflow tracking"
+    assert "WORK/DataArt_2" not in [candidate.path for candidate in candidates]
+
+
 def test_embedding_router_finds_namespace_with_gold_chunk(tmp_path):
     store = JsonStore(tmp_path)
     _seed_gold(store, "WORK/DataArt/Databricks", "Databricks Delta Lake streaming")

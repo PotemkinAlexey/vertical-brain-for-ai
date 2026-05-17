@@ -68,6 +68,38 @@ def test_doctor_finds_duplicate_active_chunks_by_hash(tmp_path):
     assert any(i.check == "duplicate_active_chunk" for i in issues)
 
 
+def test_doctor_warns_on_multiple_active_silver_chunks(tmp_path):
+    store = JsonStore(tmp_path)
+    store.ensure_node("WORK/A")
+    store.save_chunk(Chunk(node_path="WORK/A", content="silver summary one", layer="silver"))
+    store.save_chunk(Chunk(node_path="WORK/A", content="silver summary two", layer="silver"))
+
+    issues = Doctor(store).run()
+
+    silver_issues = [issue for issue in issues if issue.check == "multiple_active_silver"]
+    assert len(silver_issues) == 1
+    assert silver_issues[0].severity == "warning"
+    assert silver_issues[0].path == "WORK/A"
+
+
+def test_doctor_ignores_superseded_silver_chunks(tmp_path):
+    store = JsonStore(tmp_path)
+    store.ensure_node("WORK/A")
+    store.save_chunk(Chunk(node_path="WORK/A", content="current summary", layer="silver"))
+    store.save_chunk(
+        Chunk(
+            node_path="WORK/A",
+            content="old summary",
+            layer="silver",
+            status="superseded",
+        )
+    )
+
+    issues = Doctor(store).run()
+
+    assert not any(issue.check == "multiple_active_silver" for issue in issues)
+
+
 def test_doctor_json_output_is_stable(tmp_path):
     store = JsonStore(tmp_path)
     store.ensure_node("WORK/A")
