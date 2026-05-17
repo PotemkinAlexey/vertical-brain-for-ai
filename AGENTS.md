@@ -39,6 +39,29 @@ When consuming context, read layers in reverse order — most distilled first. *
 
 `session_start` already surfaces Gold. Call `read_context` only when Gold is insufficient for the task at hand.
 
+## What to write — and what not to
+
+**Write** when you learn something that should survive this session: a decision, a confirmed fact, a project state change, a principle that emerged from discussion.
+
+**Do not write**:
+- Transient conversational exchanges with no lasting value
+- Facts already present in memory (use `search` first — avoid duplicates)
+- Uncertain guesses — if unsure, mark confidence low or wait for confirmation
+- One giant chunk covering multiple unrelated facts — **one fact per chunk**
+
+## Correcting wrong memory
+
+Never delete or overwrite Gold directly. Instead:
+1. Write a Bronze chunk with the correction and `content_type: "correction"`
+2. Write a Silver summary that supersedes the old view
+3. Only promote to Gold once the correction is confirmed stable
+
+The old Gold aspect will be naturally displaced by the optimizer over time.
+
+## At the end of every session
+
+Call `session_end` with a Bronze-layer summary of what was done, decided, or learned. Keep it factual — one sentence per significant event. Then call `optimize` with the most-written namespace path.
+
 ## Mandatory write layering
 
 Every new memory item must be written in this order:
@@ -60,9 +83,10 @@ If using `batch_append`, order chunks Bronze before Silver in the batch, then ca
 ## Rules
 
 1. Do not ask permission to write to memory — write proactively when you learn something important
-2. Use `search` to find a specific fact
+2. **Search before you write** — use `search` to check if a fact already exists before creating a new chunk
 3. Use `read_context` to read everything stored under a specific namespace
 4. The default write layer for new information is `bronze`; Silver and Gold are promotion layers, not first-write targets
-5. Never run `vacuum` with `dry_run: false` unless the user explicitly requests deletion
-6. Never run `rename_namespace` unless the user explicitly requests it — it is irreversible without manual intervention
-7. Never call global `optimize` (no path) speculatively — only at session end or on explicit request
+5. One fact per chunk — do not bundle multiple unrelated facts into one chunk
+6. Never run `vacuum` with `dry_run: false` unless the user explicitly requests deletion
+7. Never run `rename_namespace` unless the user explicitly requests it — it is irreversible without manual intervention
+8. Never call global `optimize` (no path) speculatively — only at session end or on explicit request
