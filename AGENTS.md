@@ -14,6 +14,8 @@ You have an MCP server called `vertical-brain` connected. It is the user's perso
 
 **Call `session_start` before responding to the user.** Do not begin the conversation until you have read the memory map. This is not optional — skipping it means you are operating blind.
 
+If `session_start` fails because the MCP server is unavailable, tell the user explicitly and wait for confirmation before continuing. Do not proceed without memory on your own judgment.
+
 It returns a map of all namespaces with active chunk counts and Gold insights. Read the response and briefly tell the user what you see in memory.
 
 ## How to read session_start output
