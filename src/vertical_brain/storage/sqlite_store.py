@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
@@ -14,6 +15,12 @@ from vertical_brain.core.models import Chunk, Link, Node, SearchResult, utc_now
 if TYPE_CHECKING:
     from vertical_brain.core.models import OperationResult, StorageOperation
 from vertical_brain.core.search import fts_query, lexical_search, make_snippet, tokenize_query
+
+
+# Serializes PRAGMA journal_mode=WAL across threads.
+# SQLite's busy_timeout does not reliably apply to journal mode switching on
+# all platforms/versions — a Python-level lock prevents the race entirely.
+_WAL_INIT_LOCK = threading.Lock()
 
 
 class SQLiteStore:
@@ -29,14 +36,16 @@ class SQLiteStore:
         self.gold_dir.mkdir(parents=True, exist_ok=True)
         self._transaction_depth = 0
 
-        # timeout=30: Python-level retry while DB is locked (default is 5 s).
-        # Must be set before busy_timeout PRAGMA takes effect.
         self.conn = sqlite3.connect(self.db_file, check_same_thread=False, timeout=30)
         self.conn.row_factory = sqlite3.Row
-        # busy_timeout FIRST — protects journal_mode=WAL from "database is locked"
-        # when multiple threads open the same file simultaneously.
-        self.conn.execute("PRAGMA busy_timeout=5000")
-        self.conn.execute("PRAGMA journal_mode=WAL")
+        # Serialize WAL mode switching: SQLite's busy_timeout does not reliably
+        # protect PRAGMA journal_mode=WAL from concurrent "database is locked"
+        # errors on all platforms/versions.  The Python lock ensures only one
+        # thread sets WAL at a time; subsequent connections find WAL already set
+        # and return immediately without needing a write lock.
+        with _WAL_INIT_LOCK:
+            self.conn.execute("PRAGMA busy_timeout=5000")
+            self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self._init_schema()
         self._fts_enabled = self._init_search_index()
