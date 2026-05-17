@@ -124,6 +124,11 @@ class SQLiteStore:
         self._migrate_chunk_columns()
         self._migrate_embedding_schema_columns()
         self._migrate_vector_cache_columns()
+        # Composite dedup index — created after _migrate_chunk_columns so content_hash is guaranteed present.
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chunks_dedup ON chunks(node_path, status, content_hash)"
+        )
+        self.conn.commit()
 
     def _migrate_node_columns(self) -> None:
         existing = {row["name"] for row in self.conn.execute("PRAGMA table_info(nodes)").fetchall()}
@@ -740,6 +745,17 @@ class SQLiteStore:
                 (path,),
             ).fetchall()
         return [self._chunk_from_row(row) for row in rows]
+
+    def has_active_chunk_with_hash(self, node_path: str, content_hash: str) -> bool:
+        """Return True if an active chunk with the given content_hash exists at node_path.
+
+        Uses the composite index (node_path, status, content_hash) — O(log n).
+        """
+        row = self.conn.execute(
+            "SELECT 1 FROM chunks WHERE node_path = ? AND status = 'active' AND content_hash = ? LIMIT 1",
+            (node_path, content_hash),
+        ).fetchone()
+        return row is not None
 
     def search(
         self,

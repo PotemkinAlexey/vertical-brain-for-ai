@@ -246,6 +246,16 @@ class JsonStore:
             return [c for c in chunks if c.node_path == path or c.node_path.startswith(path + "/")]
         return [c for c in chunks if c.node_path == path]
 
+    def has_active_chunk_with_hash(self, node_path: str, content_hash: str) -> bool:
+        """Return True if an active chunk with the given content_hash exists at node_path.
+
+        JsonStore scans in Python — acceptable for dev/debug scale.
+        """
+        return any(
+            c.node_path == node_path and c.status == "active" and c.content_hash == content_hash
+            for c in self.list_chunks()
+        )
+
     def search(
         self,
         query: str,

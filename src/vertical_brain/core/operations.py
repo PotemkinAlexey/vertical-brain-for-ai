@@ -12,6 +12,7 @@ from vertical_brain.core.gold import (
     parse_gold_aspects,
     serialize_gold_aspects,
 )
+from vertical_brain.core.search import lexical_search
 from vertical_brain.core.models import (
     Chunk,
     ChunkInput,
@@ -38,6 +39,12 @@ if TYPE_CHECKING:
 VALID_CONTENT_TYPES = set(get_args(ContentType))
 VALID_LAYERS = set(get_args(Layer))
 VALID_OPERATIONS = set(get_args(OperationType))
+
+# Minimum lexical score to surface a chunk as a Bronze near-duplicate warning.
+# The lexical scorer gives 2 pts per term hit in content and 3 pts per term hit in path.
+# Score 8 requires multiple meaningful content-word matches — single stop-word or
+# path-component overlaps (e.g. "data" matching "DataArt") are filtered out.
+_SIMILAR_BRONZE_MIN_SCORE = 8
 
 
 def _next_overflow_path(path: str) -> str:
@@ -157,18 +164,34 @@ class StorageOperationExecutor:
 
         if operation.operation == "append_chunk":
             assert operation.chunk is not None
-            chunk = self.store.save_chunk(self._chunk_from_input(operation.target_path, operation.chunk))
+            candidate = self._chunk_from_input(operation.target_path, operation.chunk)
+            if candidate.layer == "bronze" and self.store.has_active_chunk_with_hash(
+                operation.target_path, candidate.content_hash
+            ):
+                raise ValueError(
+                    f"Bronze chunk with identical content already exists at '{operation.target_path}'. "
+                    f"Do not write duplicates — Silver stays clean when Bronze is unique. "
+                    f"If the fact changed, mark the old chunk stale first with "
+                    f"mark_stale('{operation.target_path}', [<chunk_id>]), then write the updated content."
+                )
+            chunk = self.store.save_chunk(candidate)
             links = [
                 self.store.save_link(self._link_from_input(operation.target_path, link_input))
                 for link_input in operation.links
             ]
             self._mark_ancestors_dirty(operation.target_path)
+            similar = (
+                self._find_similar_bronze(operation.target_path, candidate.content, exclude_id=chunk.id)
+                if candidate.layer == "bronze"
+                else []
+            )
             return OperationResult(
                 operation=operation.operation,
                 target_path=operation.target_path,
                 chunk_id=chunk.id,
                 link_ids=[link.id for link in links],
                 stale_candidates=operation.stale_candidates,
+                similar_bronze=similar,
             )
 
         if operation.operation == "create_link":
@@ -304,6 +327,46 @@ class StorageOperationExecutor:
             confidence=chunk_input.confidence,
             lineage=chunk_input.lineage,
         )
+
+    def _find_similar_bronze(
+        self, node_path: str, content: str, *, exclude_id: str, limit: int = 3
+    ) -> list:
+        """Return up to *limit* active Bronze chunks at *node_path* that are lexically
+        similar to *content*, excluding the chunk just written (*exclude_id*).
+
+        Uses the store's native FTS when available (SQLiteStore/FTS5); falls back to
+        in-memory lexical scan for JsonStore.  Either way it touches only the indexed
+        rows for that specific path — O(log n) in the happy path.
+        """
+        from vertical_brain.core.models import SearchResult  # local to avoid circular
+
+        native_search = getattr(self.store, "search", None)
+        if callable(native_search):
+            # Native FTS — already indexed; filter to bronze + exact path afterwards.
+            raw: list[SearchResult] = native_search(content, root_path=node_path, limit=limit * 4)
+            candidates = [
+                r for r in raw
+                if r.layer == "bronze"
+                and r.path == node_path
+                and r.chunk_id != exclude_id
+                and r.score >= _SIMILAR_BRONZE_MIN_SCORE
+            ]
+        else:
+            bronze_at_path = [
+                c for c in self.store.get_chunks_by_path(node_path, include_children=False)
+                if c.layer == "bronze" and c.status == "active" and c.id != exclude_id
+            ]
+            candidates = [
+                r for r in lexical_search(
+                    chunks=bronze_at_path,
+                    query=content,
+                    root_path=node_path,
+                    limit=limit * 4,
+                )
+                if r.score >= _SIMILAR_BRONZE_MIN_SCORE
+            ]
+
+        return candidates[:limit]
 
     def _link_from_input(self, source_path: str, link_input: LinkInput) -> Link:
         return Link(

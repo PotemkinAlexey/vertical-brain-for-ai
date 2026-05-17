@@ -317,6 +317,150 @@ def test_mark_stale_marks_ancestor_nodes_dirty(tmp_path):
     assert nodes["WORK/DataArt"].is_dirty is True
 
 
+# ── Bronze dedup guard ───────────────────────────────────────────────────────
+
+def test_append_bronze_duplicate_raises_error(tmp_path):
+    """Writing the same Bronze content twice to the same path must be rejected."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    executor.apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/DataArt",
+        chunk=ChunkInput(content="Databricks uses Delta Lake.", layer="bronze"),
+    ))
+
+    with pytest.raises(ValueError, match="identical content already exists"):
+        executor.apply(StorageOperation(
+            operation="append_chunk",
+            target_path="WORK/DataArt",
+            chunk=ChunkInput(content="Databricks uses Delta Lake.", layer="bronze"),
+        ))
+
+    # Only one chunk must exist
+    assert len(store.get_chunks_by_path("WORK/DataArt")) == 1
+
+
+def test_append_bronze_duplicate_does_not_write_chunk(tmp_path):
+    """Store must be unchanged after a rejected duplicate Bronze write."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    executor.apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/DataArt",
+        chunk=ChunkInput(content="stable fact"),
+    ))
+
+    try:
+        executor.apply(StorageOperation(
+            operation="append_chunk",
+            target_path="WORK/DataArt",
+            chunk=ChunkInput(content="stable fact"),
+        ))
+    except ValueError:
+        pass
+
+    assert len(store.get_chunks_by_path("WORK/DataArt")) == 1
+
+
+def test_append_bronze_allows_different_content_same_path(tmp_path):
+    """Two distinct Bronze facts at the same path must both be accepted."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    executor.apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/DataArt",
+        chunk=ChunkInput(content="fact one"),
+    ))
+    executor.apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/DataArt",
+        chunk=ChunkInput(content="fact two"),
+    ))
+
+    assert len(store.get_chunks_by_path("WORK/DataArt")) == 2
+
+
+def test_append_silver_duplicate_is_allowed(tmp_path):
+    """Dedup guard applies only to Bronze; Silver can be overwritten freely."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    executor.apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/DataArt",
+        chunk=ChunkInput(content="summary v1", layer="silver"),
+    ))
+    # Writing the same Silver content again must NOT raise.
+    executor.apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/DataArt",
+        chunk=ChunkInput(content="summary v1", layer="silver"),
+    ))
+
+    assert len(store.get_chunks_by_path("WORK/DataArt")) == 2
+
+
+def test_append_bronze_similar_content_returns_soft_warn(tmp_path):
+    """Writing a near-duplicate Bronze chunk must succeed but populate similar_bronze."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    executor.apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/DataArt",
+        chunk=ChunkInput(content="Databricks uses Delta Lake for streaming ingestion."),
+    ))
+
+    result = executor.apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/DataArt",
+        chunk=ChunkInput(content="Databricks Delta Lake handles streaming ingestion jobs."),
+    ))
+
+    # Write succeeded
+    assert result.status == "applied"
+    assert result.chunk_id is not None
+    # But similar_bronze points at the earlier chunk
+    assert len(result.similar_bronze) >= 1
+    assert result.similar_bronze[0].layer == "bronze"
+
+
+def test_append_bronze_unrelated_content_no_similar_warn(tmp_path):
+    """Writing a truly different Bronze fact must not produce any similar_bronze warning."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    executor.apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/DataArt",
+        chunk=ChunkInput(content="Databricks uses Delta Lake."),
+    ))
+
+    result = executor.apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/DataArt",
+        chunk=ChunkInput(content="Python pandas is used for data wrangling."),
+    ))
+
+    assert result.status == "applied"
+    assert result.similar_bronze == []
+
+
+def test_append_bronze_duplicate_error_message_hints_mark_stale(tmp_path):
+    """The rejection error message must guide the agent toward mark_stale."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    executor.apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/DataArt",
+        chunk=ChunkInput(content="old fact"),
+    ))
+
+    with pytest.raises(ValueError, match="mark_stale"):
+        executor.apply(StorageOperation(
+            operation="append_chunk",
+            target_path="WORK/DataArt",
+            chunk=ChunkInput(content="old fact"),
+        ))
+
+
 def test_dirty_flag_only_set_for_mutations_not_reads(tmp_path):
     """Simply reading chunks must not change is_dirty on any node."""
     store = JsonStore(tmp_path)
