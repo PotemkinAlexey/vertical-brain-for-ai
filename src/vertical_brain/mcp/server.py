@@ -5,8 +5,10 @@ No external dependencies — pure stdlib.
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+import os
 import sys
 import traceback
 from typing import TYPE_CHECKING, Any
@@ -383,9 +385,152 @@ _TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "ingest_file",
+        "description": (
+            "Read a file from disk and return its content together with a structured ingestion prompt. "
+            "The prompt instructs the agent exactly how to register the document as an immutable "
+            "artifact, extract atomic Bronze facts with provenance, derive Silver interpretation, "
+            "handle conflicts, and report results. The agent must follow the returned prompt to "
+            "complete the ingestion using subsequent append_chunk / update_silver / create_link calls."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Absolute or relative path to the file to ingest.",
+                },
+                "authority": {
+                    "type": "string",
+                    "description": (
+                        "Issuing authority or origin of the document "
+                        "(e.g. 'SWIFT', 'ISO', 'Internal', 'Vendor'). "
+                        "Used to construct the SOURCES/{authority}/{slug} namespace. "
+                        "If omitted, the agent will try to infer it from the content."
+                    ),
+                },
+                "doc_slug": {
+                    "type": "string",
+                    "description": (
+                        "Short identifier for the document used in the namespace path "
+                        "(e.g. 'MT103', 'openapi-v2', 'terms-of-service'). "
+                        "Defaults to the file name without extension."
+                    ),
+                },
+            },
+            "required": ["file_path"],
+        },
+    },
 ]
 
 _TOOLS_BY_NAME: dict[str, dict[str, Any]] = {tool["name"]: tool for tool in _TOOLS}
+
+
+def _build_ingest_prompt(
+    *,
+    file_name: str,
+    file_path: str,
+    file_hash: str,
+    file_size: int,
+    authority: str,
+    doc_slug: str,
+    content: str,
+) -> str:
+    """Return the embedded agent prompt for ingest_file."""
+    size_kb = file_size / 1024
+    source_ns = f"SOURCES/{authority}/{doc_slug}" if authority else f"SOURCES/{doc_slug}"
+
+    return f"""# File ingestion task — {file_name}
+
+## Source metadata
+- File: {file_path}
+- SHA-256: {file_hash}
+- Size: {size_kb:.1f} KB
+- Authority: {authority or "(infer from content if possible)"}
+- Suggested source namespace: `{source_ns}`
+
+---
+
+## Your role: archivist, not editor
+
+This is authoritative source material. Your job is to register it faithfully, extract
+atomic facts with provenance, and surface derived rules in Silver. You do not rewrite,
+correct, or improve the source. You do not invent missing details.
+
+---
+
+## Instructions
+
+**Step 1 — Register the source document (do this first)**
+
+Write one immutable Bronze chunk at `{source_ns}`:
+- `immutable: true`, `content_type: "artifact"`, `layer: "bronze"`
+- Content: file name, SHA-256, authority, document version or date if present, a one-sentence description.
+- This chunk is the anchor. All extracted facts reference it via `lineage`.
+
+**Step 2 — Extract atomic Bronze facts**
+
+For each distinct rule, definition, constraint, or value in the document:
+- One chunk = one fact. Max 600 characters.
+- Include source location in the text: section, heading, table name, field tag, page, or paragraph number.
+- Set `immutable: true` for verbatim schema fields and normative rules.
+- Set `immutable: false` for contextual notes and explanatory statements.
+- Use `content_type: "fact"` for confirmed statements, `"question"` for ambiguous passages.
+
+**Step 3 — Write interpretation to Silver, not Bronze**
+
+If you derive an implementation rule or usage guideline from the source facts:
+- Write it to Silver at the relevant `WORK/` or `PROJECTS/` namespace.
+- Set `source_chunk_ids` to the Bronze fact chunk IDs it came from.
+- Never write interpretation as Bronze — Bronze is for what the document says, Silver is for what it means.
+
+**Step 4 — Handle conflicts explicitly**
+
+If any extracted fact contradicts something already in memory:
+- Do not overwrite existing memory.
+- Write a new Bronze chunk with `content_type: "correction"` describing the discrepancy.
+- Report every conflict in the final summary.
+
+**Step 5 — Link namespaces**
+
+If you write to both `SOURCES/...` and `WORK/...`:
+- Call `create_link(source_path=WORK/..., target_path=SOURCES/..., link_type="derived_from")`.
+
+**Step 6 — Gold only for stable orientation**
+
+Add a Gold aspect only if this document represents a high-level anchor that should orient
+future routing for this namespace. Maximum two aspects. Do not add Gold for every extracted rule.
+
+---
+
+## Namespace placement
+
+| Content type | Where to write |
+|---|---|
+| Document registration, verbatim schema fields, normative rules | `{source_ns}` |
+| Implementation rules, usage guidelines derived from the source | relevant `WORK/` or `PROJECTS/` namespace |
+
+---
+
+## File content
+
+{content}
+
+---
+
+## Report when done
+
+Provide a structured summary:
+- **Source namespace** written
+- **Application namespaces** created or updated
+- **Bronze facts** extracted (count, how many immutable vs mutable)
+- **Silver summaries** created or updated
+- **Gold aspects** added
+- **Conflicts** found (list each one)
+- **Open questions** (content_type=question chunks written)
+- **Skipped content** and why
+"""
 
 
 class MessageParseError(ValueError):
@@ -778,7 +923,46 @@ class VerticalBrainMCP:
             )
             return json.dumps(result, ensure_ascii=False, indent=2)
 
+        if name == "ingest_file":
+            return self._handle_ingest_file(args)
+
         raise KeyError(name)
+
+    def _handle_ingest_file(self, args: dict[str, Any]) -> str:
+        file_path: str = args["file_path"]
+        if not os.path.isabs(file_path):
+            file_path = os.path.abspath(file_path)
+        if not os.path.isfile(file_path):
+            raise ValueError(f"File not found: {file_path}")
+
+        file_name = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path)
+
+        # Read as text; reject binary files gracefully.
+        try:
+            with open(file_path, encoding="utf-8", errors="replace") as fh:
+                content = fh.read()
+        except OSError as exc:
+            raise ValueError(f"Cannot read file: {exc}") from exc
+
+        file_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+        authority: str = args.get("authority") or ""
+        doc_slug: str = args.get("doc_slug") or os.path.splitext(file_name)[0]
+
+        # Normalise to safe path segments (replace spaces and dots).
+        authority = authority.strip().replace(" ", "_")
+        doc_slug = doc_slug.strip().replace(" ", "_").replace(".", "_")
+
+        return _build_ingest_prompt(
+            file_name=file_name,
+            file_path=file_path,
+            file_hash=file_hash,
+            file_size=file_size,
+            authority=authority,
+            doc_slug=doc_slug,
+            content=content,
+        )
 
     # ------------------------------------------------------------------
     # Helpers

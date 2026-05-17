@@ -289,6 +289,20 @@ deletion.
 
 ---
 
+### `ingest_file`
+
+Reads a file from disk and returns its content wrapped in a structured agent prompt that guides full ingestion into Vertical Brain. The prompt instructs the agent to register the source under `SOURCES/{authority}/{doc_slug}`, extract atomic Bronze facts, synthesise Silver, handle conflicts, link namespaces, and append Gold aspects.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `file_path` | string (required) | Absolute or relative path to the file to ingest |
+| `authority` | string | Source authority prefix (e.g. `SWIFT`, `ISO`). Defaults to empty string |
+| `doc_slug` | string | Short document identifier. Defaults to the filename without extension |
+
+The returned text contains file metadata (name, size, SHA-256 hash), embedded ingestion instructions, and the full file content.
+
+---
+
 ## Protocol Notes
 
 - The server speaks JSON-RPC 2.0 over stdio with newline-delimited JSON (one object per line)
