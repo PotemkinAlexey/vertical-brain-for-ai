@@ -17,32 +17,84 @@ Chat assistants forget between sessions and mix unrelated contexts together. Vec
 
 ---
 
-## Quick Start
+## Installation
+
+**Requirements:** Python 3.8+. No external dependencies.
 
 ```bash
-pip install -e .          # no external dependencies
-vb ingest "Spark 3.5 dropped support for Python 3.8"
-vb map
-vb search "Spark Python"
-vb context search "Spark compatibility"
+git clone https://github.com/PotemkinAlexey/vertical-brain-for-ai.git
+cd vertical-brain-for-ai
+pip install -e .
 ```
 
-### MCP (Claude Desktop)
+Verify:
 
-Add to `claude_desktop_config.json`:
+```bash
+vb --help
+vb doctor
+```
+
+Your data directory defaults to `./data`. Set a persistent location:
+
+```bash
+vb --data-dir ~/.brain doctor
+```
+
+Or set it once via environment variable:
+
+```bash
+export VB_DATA_DIR=~/.brain
+```
+
+---
+
+## Connect to Claude
+
+### Claude Desktop
+
+Find your config file:
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+Add the MCP server:
 
 ```json
 {
   "mcpServers": {
     "vertical-brain": {
       "command": "vb",
-      "args": ["--data-dir", "/path/to/your/brain", "mcp"]
+      "args": ["--data-dir", "/Users/you/.brain", "mcp"]
     }
   }
 }
 ```
 
-With semantic search via Ollama:
+Restart Claude Desktop. You should see `vertical-brain` in the tools list.
+
+### Claude Code
+
+Add to your project's `.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "vertical-brain": {
+      "command": "vb",
+      "args": ["--data-dir", "/Users/you/.brain", "mcp"]
+    }
+  }
+}
+```
+
+Or run directly:
+
+```bash
+vb --data-dir ~/.brain mcp
+```
+
+### With semantic search (Ollama)
+
+Install [Ollama](https://ollama.ai), pull an embedding model, then point Vertical Brain at it:
 
 ```json
 {
@@ -50,7 +102,7 @@ With semantic search via Ollama:
     "vertical-brain": {
       "command": "vb",
       "args": [
-        "--data-dir", "/path/to/your/brain",
+        "--data-dir", "/Users/you/.brain",
         "mcp",
         "--embedding-url", "http://localhost:11434/v1/embeddings",
         "--embedding-model", "nomic-embed-text"
@@ -60,11 +112,13 @@ With semantic search via Ollama:
 }
 ```
 
+Vectors are cached persistently — embeddings are computed once and reused across sessions. Switching models triggers automatic cache invalidation.
+
 ---
 
-## Core Concepts
+## How it works
 
-### Namespace Hierarchy
+### Namespace hierarchy
 
 Every piece of knowledge lives at a path:
 
@@ -79,139 +133,58 @@ ROOT
     └── Finance
 ```
 
-Paths are slash-separated. Vertical isolation means context opened at `WORK/DataArt/Databricks` includes ancestors (`WORK/DataArt`, `WORK`) but never peers like `PERSONAL/Finance` unless you follow an explicit link.
+Context opened at `WORK/DataArt/Databricks` includes ancestors (`WORK/DataArt`, `WORK`) but never peers like `PERSONAL/Finance` unless you follow an explicit link.
 
-### Knowledge Layers
+### Knowledge layers
 
-| Layer | Purpose | Managed by |
-|-------|---------|------------|
+| Layer | Purpose | How it's written |
+|-------|---------|-----------------|
 | **Bronze** | Raw notes, questions, fragments | `append_chunk` (default) |
-| **Silver** | Living summary — one per namespace, kept current | `append_chunk(layer=silver)` (first) → `update_silver` (all subsequent) |
-| **Gold** | Stable summary aspects, stable IDs | `append_gold_aspect` (requires active Silver) |
+| **Silver** | Living summary — one per namespace, kept current | `append_chunk(layer=silver)` (first time) → `update_silver` (all subsequent) |
+| **Gold** | Stable orientation aspects, stable IDs | `append_gold_aspect` (requires active Silver) |
 
-Silver is a living document: the agent creates the first summary with `append_chunk(layer=silver)`, then keeps it current with `update_silver` after each new Bronze write. The optimizer can also compact Bronze into Silver via `optimizer:namespace_compaction` writes. Gold aspects carry stable UUIDs so they survive rewrites without identity drift. Up to 20 Gold aspects per namespace; overflow creates a sibling namespace automatically.
+Silver is a living document: the agent creates the first summary, then keeps it current after each new Bronze write. Gold aspects carry stable UUIDs so they survive rewrites. Up to 20 Gold aspects per namespace; overflow creates a sibling namespace automatically.
 
-### Operations
+### MCP tools
 
-All writes are explicit `StorageOperation` objects validated against JSON Schema before execution:
+The MCP server exposes these tools to Claude:
 
-| Operation | What it does |
-|-----------|-------------|
-| `append_chunk` | Add a new chunk to a namespace (Bronze by default; first Silver via `layer=silver`) |
+| Tool | Purpose |
+|------|---------|
+| `session_start` | Orientation prompt at session start — **call first** |
+| `read_context` | Open a locked context capsule for a namespace |
+| `search` | Lexical FTS search |
+| `search_semantic` | Semantic embedding search |
+| `context_search` | Search + locked context |
+| `route` | Find best namespaces by embedding similarity |
+| `append_chunk` | Write a Bronze chunk (or first Silver with `layer=silver`) |
 | `update_silver` | Atomically replace the active Silver summary (OCC-protected) |
-| `append_gold_aspect` | Add or refresh a semantic label in the Gold layer (requires active Silver) |
+| `append_gold_aspect` | Add/refresh a Gold aspect (requires active Silver) |
 | `create_link` | Create a horizontal link between namespaces |
 | `mark_stale` | Retire a chunk |
-| `supersede_chunk` | Replace chunks with a newer version |
-| `rename_namespace` | Atomically rename a namespace prefix |
+| `batch_append` | Write multiple chunks atomically |
+| `session_end` | Persist session notes + Silver summary + optional Gold aspect |
+| `optimize` | Run dedup + compaction on a namespace subtree |
+| `vacuum` | Preview/apply cleanup of inactive chunks |
+| `doctor` | Storage integrity checks |
 
-### Locked Context
-
-The model never sees raw storage dumps. It receives a **locked context capsule** — a bounded view containing:
-- Full chunk content (Gold → Silver → Bronze priority)
-- Ancestor Gold summaries for orientation
-- Link handles (not expanded content) for horizontal navigation
+See [docs/05_mcp_tools.md](docs/05_mcp_tools.md) for full parameter reference.
 
 ---
 
-## CLI Reference
-
-All commands share global flags:
-
-```
-vb [--data-dir DIR] [--storage-backend sqlite|json] [--model-file FILE] COMMAND
-```
-
-| Command | Description |
-|---------|-------------|
-| `ingest TEXT` | Route and store a piece of text |
-| `ask QUESTION` | Route a question and show the locked context |
-| `map` | Show the namespace map with Gold summaries |
-| `search QUERY` | Lexical full-text search |
-| `search --semantic QUERY` | Semantic embedding search |
-| `route TEXT` | Show best-matching namespaces by embedding similarity |
-| `context search QUERY` | Search + open locked context capsules |
-| `context expand LINK_ID` | Expand a link handle into a locked context |
-| `session-start` | Print the orientation prompt for a new model session |
-| `tree` | Print the raw namespace tree |
-| `optimize PATH` | Run duplicate detection and Silver compaction |
-| `optimize --plan PATH` | Show compaction plan without applying |
-| `doctor` | Run storage integrity checks |
-| `backup FILE` | Create a SQLite backup |
-| `checkpoint` | Run a SQLite WAL checkpoint |
-| `vacuum` | Purge old stale/superseded chunks after a retention window |
-| `operation dry-run FILE` | Validate an operation batch JSON file |
-| `operation apply FILE` | Apply an operation batch JSON file |
-| `mcp` | Start the MCP stdio server |
-
-### Examples
-
-```bash
-# Map the whole brain
-vb map
-
-# Map a subtree with depth limit
-vb map --path WORK --max-depth 2
-
-# Search within a subtree
-vb search --path WORK/DataArt "Databricks"
-
-# Semantic search with Ollama
-vb search --semantic \
-  --embedding-url http://localhost:11434/v1/embeddings \
-  "Python 3.8 compatibility"
-
-# Open locked context capsules for a query
-vb context search "MLflow experiment tracking" --path WORK
-
-# Show compaction plan for a namespace
-vb optimize --plan WORK/DataArt/Databricks
-
-# Apply a model-emitted operation batch
-vb operation apply ops.json
-
-# Run integrity checks
-vb doctor
-
-# Create a production SQLite backup
-vb backup ./backups/vertical_brain.sqlite
-
-# Force a WAL checkpoint after maintenance
-vb checkpoint --mode truncate
-
-# Preview Databricks-style cleanup of inactive chunks
-vb vacuum --retention-hours 168
-
-# Apply vacuum with a backup first
-vb vacuum --apply --backup ./backups/before-vacuum.sqlite
-```
-
----
-
-## Storage Backends
+## Storage backends
 
 ### SQLite (default, production)
 
-Single-file `vertical_brain.sqlite` inside `--data-dir` with WAL mode. Supports FTS5 full-text search, transactional batches, persistent embedding vector cache, and an append-only operation audit log.
-
-**Concurrency:** one writer + N readers via WAL. Use `ThreadLocalSQLiteStoreProxy` for multi-threaded access — it creates one `SQLiteStore` instance per thread.
-
-Use SQLite for durable personal or agent-backed memory. It is the production storage backend for transactional operation batches, OCC, audit history, FTS5 search, and persistent vector cache.
-
-Operational commands:
-- `vb backup FILE` creates a consistent SQLite copy using the SQLite backup API.
-- `vb checkpoint --mode truncate` checkpoints the WAL file after maintenance or before external file-level backup.
-- `vb vacuum` previews old inactive chunks (`stale`, `superseded`, `legacy`, `contradicted`) eligible for physical deletion; `vb vacuum --apply` purges them, prunes orphan vectors/empty namespaces, rebuilds FTS, and checkpoints the WAL. Applying retention below 168 hours requires `--force`.
+Single-file `vertical_brain.sqlite` with WAL mode. Supports FTS5 full-text search, transactional batches, persistent embedding vector cache, and an append-only audit log.
 
 ```bash
-vb --data-dir ./brain ...
+vb --data-dir ~/.brain ...
 ```
 
 ### JSON (dev/debug only)
 
-Human-readable files: `nodes.json`, `chunks.json`, `links.json`, `vector_cache.json`, `operation_audit.jsonl`. Good for inspecting and editing state by hand.
-
-JsonStore uses atomic file replacement and rolls back in-process operation batches on exceptions, but it is not safe for multi-process writers and is not a crash-safe database. Do not use it as the production backend.
+Human-readable files — useful for inspecting state by hand. Not safe for production.
 
 ```bash
 vb --data-dir ./brain --storage-backend json ...
@@ -219,97 +192,59 @@ vb --data-dir ./brain --storage-backend json ...
 
 ---
 
-## Semantic Search & Routing
-
-Vertical Brain supports semantic search via any OpenAI-compatible embeddings endpoint. Embedding vectors are cached persistently to avoid recomputation across sessions. Switching models triggers automatic cache invalidation.
-
-```bash
-# Semantic search
-vb search --semantic \
-  --embedding-url http://localhost:11434/v1/embeddings \
-  --embedding-model nomic-embed-text \
-  "query text"
-
-# Route text to the best matching namespace
-vb route \
-  --embedding-url http://localhost:11434/v1/embeddings \
-  "Databricks cluster autoscaling"
-```
-
----
-
-## Operation Contracts
-
-Models emit operations as JSON. Vertical Brain validates them against JSON Schema before applying:
-
-```json
-{
-  "operations": [
-    {
-      "operation": "append_chunk",
-      "target_path": "WORK/DataArt/Databricks",
-      "chunk": {
-        "content": "Delta Lake Z-ordering reduces scan time by clustering related rows.",
-        "layer": "silver",
-        "content_type": "fact",
-        "source": "model",
-        "confidence": 0.92
-      },
-      "reasoning_summary": "Canonicalized user note on Z-ordering performance."
-    }
-  ],
-  "reasoning_summary": "Ingest performance fact."
-}
-```
-
-```bash
-vb operation apply ops.json      # apply
-vb operation dry-run ops.json    # validate only
-```
-
-See [docs/04_operations_reference.md](docs/04_operations_reference.md) for the full operation schema.
-
----
-
-## MCP Tools
-
-The MCP server exposes these tools to Claude:
-
-| Tool | Purpose |
-|------|---------|
-| `session_start` | Orientation prompt at session start (call first) |
-| `namespace_map` | Full namespace map as JSON |
-| `list_chunks` | List chunks at a path |
-| `read_context` | Open a locked context capsule |
-| `search` | Lexical FTS search |
-| `search_semantic` | Semantic embedding search |
-| `context_search` | Search + locked context capsules |
-| `context_search_semantic` | Semantic search + locked context capsules |
-| `route` | Find best namespaces by embedding similarity |
-| `append_chunk` | Write a chunk (Bronze default; first Silver via `layer=silver`) |
-| `update_silver` | Atomically replace the active Silver summary (OCC-protected) |
-| `append_gold_aspect` | Add/refresh a Gold aspect (requires active Silver) |
-| `create_link` | Create a namespace link |
-| `mark_stale` | Retire chunks at a namespace |
-| `batch_append` | Write multiple chunks atomically |
-| `session_end` | Persist session summary + optional Gold aspect |
-| `operations` | Apply a `StorageOperationBatch` JSON object |
-| `optimize` | Run optimizer on a subtree |
-| `doctor` | Run storage integrity checks |
-| `vacuum` | Databricks-style dry-run/apply cleanup of inactive chunks |
-
-See [docs/05_mcp_tools.md](docs/05_mcp_tools.md) for full parameter reference.
-
----
-
 ## Development
 
 ```bash
 pip install -e .
-pytest
-pytest tests/test_operations.py -v   # run a subset
+pytest                              # full suite (~469 tests)
+pytest tests/test_operations.py -v  # single file
 ```
 
-**Zero Python runtime dependencies.** Core, storage, and MCP server use only the Python standard library. The optional HTTP embedding provider (`HttpEmbeddingProvider`) uses `urllib` from stdlib. Optional semantic search requires an external OpenAI-compatible embedding endpoint (e.g. Ollama, OpenAI).
+**Zero Python runtime dependencies.** Core, storage, and MCP server use only the Python standard library. Optional semantic search requires an external OpenAI-compatible embedding endpoint (e.g. Ollama, OpenAI API).
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for a deep dive into the design.
+---
+
+## Docs
+
+- [Architecture manifesto](docs/01_architecture_manifesto.md)
+- [Operations reference](docs/04_operations_reference.md)
+- [MCP tools reference](docs/05_mcp_tools.md)
+- [Agent usage guide](AGENTS.md)
+- [Production runbook](docs/06_production_runbook.md)
+
+---
+
+## Advanced: manual CLI operations
+
+For scripting, debugging, or batch imports. Most users will never need this.
+
+```bash
+# Map the brain
+vb map
+vb map --path WORK --max-depth 2
+
+# Search
+vb search --path WORK/DataArt "Databricks"
+vb search --semantic --embedding-url http://localhost:11434/v1/embeddings "Python 3.8"
+
+# Inspect
+vb context search "MLflow experiment tracking" --path WORK
+vb tree
+
+# Maintenance
+vb optimize WORK/DataArt/Databricks
+vb optimize --plan WORK/DataArt/Databricks   # dry-run
+vb doctor
+vb vacuum --retention-hours 168
+vb vacuum --apply --backup ./backups/before-vacuum.sqlite
+
+# SQLite ops
+vb backup ./backups/brain.sqlite
+vb checkpoint --mode truncate
+
+# Apply a JSON operation batch
+vb operation apply ops.json
+vb operation dry-run ops.json
+```
+
+Full CLI reference: `vb --help`, `vb COMMAND --help`.
