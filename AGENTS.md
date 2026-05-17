@@ -147,6 +147,9 @@ result.aspect_too_long = true
 ### Triggers
 
 **When the user writes `ingest_file` (with a file attached):**
+
+For specs, standards, and field definitions use **`ingest_file schema`** (or `verbatim`) — follow **Schema ingest protocol** below, not routing-style paraphrase.
+
 1. Prefer the original local file path when available and call `ingest_file(source_path=<absolute path>, authority=<inferred or empty>)` so the MCP server reads/extracts the complete source itself.
 2. If no source path is available, take the file content and filename from the attachment — do not ask the user for parameters.
 3. For PDFs, never pass caller-supplied `content`; `ingest_file` must use `source_path` so the server extracts the full text and rejects summarized payloads.
@@ -199,7 +202,7 @@ Immutable chunks are protected by default — `mark_stale` and `vacuum` skip the
 
 ### Referencing immutable chunks from Silver
 
-Silver must never copy verbatim content from immutable Bronze. Instead, **reference the immutable chunk by ID**:
+This is the core of **schema ingest** (see full checklist below). Silver must never copy verbatim content from immutable Bronze. Instead, **reference the immutable chunk by ID**:
 
 ```
 The MT103 field 32A carries value date, currency, and amount
@@ -286,6 +289,152 @@ Give the user a structured summary:
 
 ---
 
+## Schema ingest protocol (normative sources)
+
+Use this protocol when the source is a **schema, spec, standard, or normative document** where the user must get **exact definitions without hallucination** — wire formats (MT103 field tags), API schemas, regulatory clauses, code tables, mandatory constraints.
+
+This is **not** the same as **routing ingest** (operational guides, payment rails, runbooks). Routing ingest optimizes for discoverability; schema ingest optimizes for **verbatim anchors + Silver citation graph**.
+
+### When to use which protocol
+
+| User intent | Trigger (examples) | Protocol |
+|-------------|-------------------|----------|
+| Normative definitions, field lookup, “what does X mean” | `ingest_file schema`, `ingest_file verbatim`, “this is a spec/schema” | **Schema ingest** (below) |
+| Operational memory, how-to, regional procedures | `ingest_file`, `ingest_file exhaustive` | **File ingestion protocol** (above) |
+
+If unsure, ask once: *“Routing memory or schema/spec with verbatim definitions?”* Default to **schema ingest** when the document defines fields, codes, enums, or binding rules.
+
+### Design intent (why immutable exists)
+
+```
+Source document
+  → Bronze immutable (verbatim normative anchor, stable chunk_id)
+  → Silver (living map: names concepts, cites chunk_ids — does NOT hold definitions)
+  → Gold (short search tags only)
+```
+
+**Immutable Bronze** exists so **Silver can reference definitions by ID** without copying verbatim text into Silver. Silver is the index; immutable Bronze is the authority.
+
+⛔ Do **not** mark paraphrased summaries as immutable.  
+⛔ Do **not** put definitions only in Silver with no immutable Bronze anchor.  
+⛔ Do **not** answer field-definition questions from model training data when memory has no matching immutable chunk.
+
+### Triggers and mode
+
+Follow the same MCP entry as file ingestion (`ingest_file` / `ingest_url`), then execute **schema ingest** instead of routing-style summarization.
+
+**Critical:** same silence rule as file ingestion — complete all steps before reporting.
+
+### Schema ingest checklist
+
+1. Run `ingest_file` or `ingest_url` exactly once (`source_path` for PDFs).
+2. Write source registration Bronze artifact (`immutable: true`, `content_type: artifact`).
+3. Build a **definition inventory** (mutable Bronze `content_type: note`): list every field tag, code, table row, section, or rule id you must cover.
+4. Write **immutable Bronze** chunks — **verbatim** from the source (see Bronze rules below). Record every `chunk_id`.
+5. `list_chunks(layer="bronze")` — verify inventory ⊆ written chunks.
+6. Write or update **SOURCES Silver** — citation graph only (see Silver rules below). Pass `source_chunk_ids` for all incorporated Bronze.
+7. Optional **WORK/PROJECTS Silver** for implementation mapping only — every rule must cite source `chunk_id`s.
+8. `create_link` `derived_from` if WORK was written.
+9. Gold: at most two short routing aspects.
+10. Report with **coverage table** (inventory item → chunk_id | skipped + reason).
+
+Do not reorder or skip steps. If verbatim extraction cannot be completed, stop and report the blocker — do not substitute paraphrase and mark it immutable.
+
+### Bronze rules (schema mode)
+
+**One normative unit = one chunk** (max 600 characters; split if longer):
+
+- Schema field / tag (e.g. `32A`, `field_name`, JSON key)
+- Enum value or code with its meaning
+- Mandatory constraint (“MUST”, “required”, cardinality)
+- Table row when each row is independently meaningful (e.g. one country’s bank details)
+- Verbatim regulatory or contractual sentence that must not drift
+
+Each immutable chunk **must** include:
+
+- **Source location** — section, table, paragraph, page, xpath, heading path
+- **Verbatim wording** from the document for the normative part (minor whitespace normalization only)
+
+Use `immutable: true` **only** when the text is verbatim from the authority.  
+Use `immutable: false` + `content_type: note` for:
+
+- Definition inventory / coverage checklist
+- Agent observations (“ambiguous in §3.2”)
+- Cross-references between fields
+
+Use `content_type: question` when the source is ambiguous; do not guess.
+
+**Corrections:** never edit immutable chunks. Write new Bronze with `content_type: correction` naming old and new `chunk_id`s.
+
+### Silver rules (schema mode) — citation graph, not a summary
+
+Silver at `SOURCES/{authority}/{slug}` is a **living map of concepts → immutable chunk IDs**.
+
+**Required pattern** for every defined term:
+
+```
+<Field or rule label>: <short orienting phrase, not a full definition>
+(sources: chunk_id=<id>[, chunk_id=<id>...])
+```
+
+**Allowed in Silver:**
+
+- Grouping fields into sections (“Settlement amount block → 32A, 33B”)
+- Pointers (“see mandatory constraint for currency”)
+- Lists of `chunk_id`s for a topic
+
+**Forbidden in Silver:**
+
+- Copying verbatim text from immutable Bronze
+- Defining a field’s meaning **only** in Silver with no `chunk_id`
+- Numbers, codes, or enums that appear in immutable Bronze but are **not** backed by a cited chunk in that Silver sentence
+
+After `list_chunks`, synthesize Silver **only** from Bronze returned — never from memory of the file.
+
+Pass `source_chunk_ids` on `update_silver` / first Silver `append_chunk` covering all Bronze ids in scope.
+
+### Definition lookup (answering user questions)
+
+When the user asks **“what is field X”**, **“define schema Y”**, or similar:
+
+1. `search` / `context_search` for X at the relevant `SOURCES/...` namespace.
+2. `read_context` on that namespace (Gold → Silver → Bronze as needed).
+3. Locate the Silver line that cites `chunk_id`s for X.
+4. `list_chunks` or `read_context` to load the **immutable Bronze** chunk(s).
+5. Answer using **only** that Bronze content. Include `chunk_id` and source location in the reply.
+6. If no immutable Bronze matches: say **“No definition in memory for X”** and offer to ingest or point to the original file — **do not invent** from general knowledge.
+
+For binding/normative answers, prefer quoting the immutable Bronze text (or a tight paraphrase explicitly tied to `chunk_id=...`).
+
+### Completeness gate (schema mode)
+
+Before writing Silver, confirm:
+
+- Every item in the definition inventory has ≥1 immutable Bronze chunk **or** is listed in **Skipped content** with reason.
+- No immutable chunk is a paraphrase you cannot defend as verbatim.
+- Silver contains **no** uncited field definitions.
+
+In the final report, include:
+
+| Inventory item | chunk_id(s) | Status |
+|----------------|---------------|--------|
+| `32A` | `abc-...` | covered |
+| `Annex B row 12` | — | skipped: table image-only |
+
+### Routing ingest vs schema ingest (do not mix)
+
+| | Routing ingest | Schema ingest |
+|---|----------------|---------------|
+| Goal | Find the right namespace fast | Correct definitions by `chunk_id` |
+| Bronze | Facts may be concise paraphrase | Normative text **verbatim** |
+| `immutable` | Artifact + true normative only | Same, but **stricter** — no paraphrase immutable |
+| Silver | Section overview | **Citation graph** with `chunk_id`s |
+| User question | “How do I pay in SG?” | “What is field 32A?” |
+
+A single document may need **both** if it contains operational sections and normative appendices — use separate Bronze tags (e.g. `[schema:32A]` vs `[ops:SG-wire]`) and say so in Silver.
+
+---
+
 ## User's namespace conventions
 
 - `PROJECTS/*` — projects and technical details
@@ -322,3 +471,8 @@ Give the user a structured summary:
 15. **Never mutate the memory database outside the storage protocol.** Do not use raw SQL, direct file edits, ad hoc scripts, or manual table deletes/inserts/updates against the Vertical Brain storage for normal memory operations. Use MCP/CLI tools (`append_chunk`, `batch_append`, `update_silver`, `append_gold_aspect`, `mark_stale`, `vacuum`, `optimize`, etc.) so validation, immutability, FTS/vector cleanup, and audit semantics are preserved. Direct storage mutation is allowed only for emergency repair after the user explicitly authorizes bypassing the protocol.
 16. **Ask before choosing a destructive mechanism.** If the user says "clean", "wipe", "reset", "delete", or similar, confirm whether to use the standard protocol (`mark_stale`/`vacuum`) or an explicitly authorized emergency bypass. Do not infer permission for raw storage mutation from a general cleanup request.
 17. **Never call global `optimize` (no path) speculatively** — only at session end or on explicit request.
+
+### Definition lookup (schema / normative)
+
+18. **Field and schema questions require immutable Bronze.** If the user asks for a definition, code meaning, or constraint, answer only from an immutable chunk (via Silver `chunk_id` citation) or state that memory has no definition. Do not answer from general model knowledge.
+19. **Silver is not a definition store.** Never treat SOURCES Silver alone as authoritative for normative wording — follow the chain Silver → cited `chunk_id` → immutable Bronze.
