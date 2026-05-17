@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from datetime import date
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from vertical_brain.core.context_lock import ContextLock
@@ -55,7 +57,7 @@ class ContextSession:
         max_depth: int | None = None,
         summary_max_chars: int = 200,
     ) -> str:
-        """Return a compact LLM-ready orientation text for the start of a session."""
+        """Return an LLM-ready orientation text for the start of a session."""
         nm = self.namespace_map(
             root_path=root_path,
             max_depth=max_depth,
@@ -68,11 +70,23 @@ class ContextSession:
                 unique_link_ids.add(h.link_id)
         total_links = len(unique_link_ids)
 
-        lines: list[str] = [
+        lines: list[str] = []
+        agent_instructions = _load_agents_md()
+        if agent_instructions:
+            lines.extend([
+                "AGENTS.md",
+                "",
+                agent_instructions,
+                "",
+                "---",
+                "",
+            ])
+
+        lines.extend([
             f"VERTICAL BRAIN — {date.today().isoformat()}",
             f"{len(nm.nodes)} nodes · {total_active} active chunks · {total_links} links",
             "",
-        ]
+        ])
         for node in nm.nodes:
             indent = "  " * node.depth
             head = f"{indent}[{node.path}]"
@@ -223,6 +237,30 @@ def _handle_from_result(result: SearchResult) -> SearchCandidateHandle:
     )
 
 
+def _load_agents_md() -> str:
+    path = _find_agents_md()
+    if path is None:
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _find_agents_md() -> Path | None:
+    configured = os.environ.get("VERTICAL_BRAIN_AGENTS_PATH")
+    if configured:
+        path = Path(configured).expanduser()
+        return path if path.is_file() else None
+
+    current = Path.cwd().resolve()
+    for directory in (current, *current.parents):
+        candidate = directory / "AGENTS.md"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 
 
 def _get_link(store: object, link_id: str) -> "Link | None":
@@ -230,5 +268,4 @@ def _get_link(store: object, link_id: str) -> "Link | None":
     if callable(get_link):
         return get_link(link_id)
     return next((link for link in store.list_links() if link.id == link_id), None)  # type: ignore[union-attr]
-
 

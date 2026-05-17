@@ -31,8 +31,9 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "session_start",
         "description": (
-            "Return a compact orientation prompt: all namespaces, Gold summaries, "
-            "chunk counts, and peer links. Call this at the start of every session."
+            "Return the AGENTS.md operating contract plus an orientation prompt: "
+            "all namespaces, Gold summaries, chunk counts, and peer links. "
+            "Call this at the start of every session."
         ),
         "inputSchema": {
             "type": "object",

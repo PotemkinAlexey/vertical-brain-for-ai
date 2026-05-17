@@ -3,6 +3,21 @@ from vertical_brain.core.models import Chunk, Link
 from vertical_brain.storage.json_store import JsonStore
 
 
+def test_session_prompt_includes_agents_md_before_memory_map(tmp_path, monkeypatch):
+    agents_file = tmp_path / "AGENTS.md"
+    agents_file.write_text("# Local Rules\n\nRead these before memory writes.", encoding="utf-8")
+    monkeypatch.setenv("VERTICAL_BRAIN_AGENTS_PATH", str(agents_file))
+    store = JsonStore(tmp_path / "store")
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="Delta migration", layer="gold"))
+
+    prompt = ContextSession(store).session_prompt()
+
+    assert prompt.startswith("AGENTS.md\n\n# Local Rules")
+    assert "Read these before memory writes." in prompt
+    assert "---\n\nVERTICAL BRAIN" in prompt
+    assert "WORK/DataArt" in prompt
+
+
 def test_session_prompt_contains_header_with_date_and_totals(tmp_path):
     store = JsonStore(tmp_path)
     store.save_chunk(Chunk(node_path="WORK/DataArt", content="fact one"))
@@ -21,9 +36,10 @@ def test_session_prompt_includes_gold_summary_inline(tmp_path):
     store.save_chunk(Chunk(node_path="WORK/DataArt", content="raw fact"))
 
     prompt = ContextSession(store).session_prompt()
+    memory_map = prompt.split("---\n\n", maxsplit=1)[-1]
 
-    assert "Databricks Delta migration" in prompt
-    assert "raw fact" not in prompt
+    assert "Databricks Delta migration" in memory_map
+    assert "raw fact" not in memory_map
 
 
 def test_session_prompt_shows_active_and_stale_counts(tmp_path):

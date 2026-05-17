@@ -73,6 +73,20 @@ def test_session_start_returns_orientation_text(tmp_path):
     assert "Delta migration" in text
 
 
+def test_session_start_returns_agents_md_contract(tmp_path, monkeypatch):
+    agents_file = tmp_path / "AGENTS.md"
+    agents_file.write_text("# Agent Contract\n\nSearch before Bronze writes.", encoding="utf-8")
+    monkeypatch.setenv("VERTICAL_BRAIN_AGENTS_PATH", str(agents_file))
+    mcp, _ = _mcp(tmp_path / "store")
+
+    resp = _call(mcp, "session_start")
+    text = _text(resp)
+
+    assert text.startswith("AGENTS.md\n\n# Agent Contract")
+    assert "Search before Bronze writes." in text
+    assert "---\n\nVERTICAL BRAIN" in text
+
+
 def test_namespace_map_returns_json(tmp_path):
     mcp, store = _mcp(tmp_path)
     store.ensure_node("WORK/DataArt")
