@@ -74,7 +74,9 @@ def test_embedding_router_ranks_by_descending_score(tmp_path):
 
 
 def test_embedding_router_uses_append_gold_aspect_chunks(tmp_path):
+    from vertical_brain.core.models import Chunk
     store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="silver summary", layer="silver"))
     executor = StorageOperationExecutor(store)
     executor.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/DataArt", gold_aspect="Databricks Delta ingestion"))
     executor.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/DataArt", gold_aspect="AutoLoader streaming"))

@@ -84,6 +84,7 @@ def test_parse_gold_aspects_handles_json_without_aspects_key():
 
 def test_append_gold_aspect_stores_structured_json(tmp_path):
     store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/A", content="silver summary", layer="silver"))
     StorageOperationExecutor(store).apply(
         StorageOperation(operation="append_gold_aspect", target_path="WORK/A", gold_aspect="fact one")
     )
@@ -99,6 +100,7 @@ def test_append_gold_aspect_stores_structured_json(tmp_path):
 def test_append_gold_aspect_deduplicates_same_text(tmp_path):
     store = JsonStore(tmp_path)
     executor = StorageOperationExecutor(store)
+    store.save_chunk(Chunk(node_path="WORK/A", content="silver summary", layer="silver"))
     executor.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/A", gold_aspect="same fact"))
     executor.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/A", gold_aspect="same fact"))
 
@@ -113,6 +115,7 @@ def test_append_gold_aspect_dedup_refreshes_updated_at(tmp_path):
     import time
     store = JsonStore(tmp_path)
     executor = StorageOperationExecutor(store)
+    store.save_chunk(Chunk(node_path="WORK/A", content="silver summary", layer="silver"))
     executor.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/A", gold_aspect="evolving fact"))
     first_ts = parse_gold_aspects(
         next(c for c in store.get_chunks_by_path("WORK/A") if c.layer == "gold" and c.status == "active").content
@@ -129,6 +132,7 @@ def test_append_gold_aspect_dedup_refreshes_updated_at(tmp_path):
 
 def test_append_gold_aspect_overflow_at_max_aspects(tmp_path):
     store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/A", content="silver summary", layer="silver"))
     full = serialize_gold_aspects([GoldAspect(text=f"a{i}") for i in range(MAX_GOLD_ASPECTS)])
     store.save_chunk(Chunk(node_path="WORK/A", content=full, layer="gold"))
 

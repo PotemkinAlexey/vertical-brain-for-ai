@@ -91,6 +91,7 @@ def test_serialize_produces_valid_v2_json():
 def test_append_gold_aspect_deduplicates_same_text(tmp_path):
     store = JsonStore(tmp_path)
     ex = StorageOperationExecutor(store)
+    store.save_chunk(Chunk(node_path="WORK/A", content="silver summary", layer="silver"))
     ex.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/A", gold_aspect="same fact"))
     ex.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/A", gold_aspect="same fact"))
 
@@ -104,6 +105,7 @@ def test_append_gold_aspect_deduplicates_same_text(tmp_path):
 def test_append_gold_aspect_dedup_refreshes_updated_at(tmp_path):
     store = JsonStore(tmp_path)
     ex = StorageOperationExecutor(store)
+    store.save_chunk(Chunk(node_path="WORK/A", content="silver summary", layer="silver"))
     ex.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/A", gold_aspect="evolving fact"))
     first_ts = parse_gold_aspects(
         next(c for c in store.get_chunks_by_path("WORK/A") if c.layer == "gold" and c.status == "active").content
@@ -122,8 +124,9 @@ def test_append_gold_aspect_dedup_refreshes_updated_at(tmp_path):
 
 def test_append_gold_aspect_overflow_creates_gold_overflow_link(tmp_path):
     store = JsonStore(tmp_path)
-    full = serialize_gold_aspects([GoldAspect(text=f"a{i}") for i in range(MAX_GOLD_ASPECTS)])
     from vertical_brain.core.models import Chunk as _Chunk
+    store.save_chunk(_Chunk(node_path="WORK/A", content="silver summary", layer="silver"))
+    full = serialize_gold_aspects([GoldAspect(text=f"a{i}") for i in range(MAX_GOLD_ASPECTS)])
     store.save_chunk(_Chunk(node_path="WORK/A", content=full, layer="gold"))
 
     StorageOperationExecutor(store).apply(

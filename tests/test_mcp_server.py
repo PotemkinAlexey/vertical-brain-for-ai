@@ -100,6 +100,7 @@ def test_append_chunk_writes_and_returns_chunk_id(tmp_path):
 
 def test_append_gold_aspect_writes_gold_chunk(tmp_path):
     mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="silver summary", layer="silver"))
 
     resp = _call(mcp, "append_gold_aspect", {"path": "WORK/DataArt", "aspect": "Delta migration"})
     result = json.loads(_text(resp))
@@ -369,6 +370,7 @@ def test_mark_stale_all_active_non_gold_when_no_ids(tmp_path):
 def test_append_gold_aspect_reports_overflow_path(tmp_path):
     from vertical_brain.core.gold import MAX_GOLD_ASPECTS, GoldAspect, serialize_gold_aspects
     mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="silver summary", layer="silver"))
     full_content = serialize_gold_aspects([GoldAspect(text=f"a{i}") for i in range(MAX_GOLD_ASPECTS)])
     store.save_chunk(Chunk(node_path="WORK/DataArt", content=full_content, layer="gold"))
 

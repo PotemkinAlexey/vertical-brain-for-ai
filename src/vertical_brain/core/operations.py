@@ -217,6 +217,16 @@ class StorageOperationExecutor:
 
     def _apply_append_gold_aspect(self, path: str, aspect: str) -> str | None:
         """Returns overflow path if a new sibling was created, otherwise None."""
+        # Gold requires Silver to exist — enforce the layering contract.
+        all_chunks = self.store.get_chunks_by_path(path, include_children=False)
+        active_silver = [c for c in all_chunks if c.layer == "silver" and c.status == "active"]
+        if not active_silver:
+            raise ValueError(
+                f"append_gold_aspect rejected for '{path}': no active Silver chunk found. "
+                f"Gold must be grounded in Silver. "
+                f"Call update_silver('{path}', ...) first to write a Silver summary, "
+                f"then promote a stable conclusion to Gold."
+            )
         tail = self._gold_tail_path(path)
         gold_chunks = [
             c for c in self.store.get_chunks_by_path(tail)

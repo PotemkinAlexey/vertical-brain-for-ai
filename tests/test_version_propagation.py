@@ -6,7 +6,7 @@ increments the version of the affected node(s) and marks them dirty.
 from __future__ import annotations
 
 
-from vertical_brain.core.models import ChunkInput, LinkInput, StorageOperation
+from vertical_brain.core.models import Chunk, ChunkInput, LinkInput, StorageOperation
 from vertical_brain.core.operations import StorageOperationExecutor
 from vertical_brain.storage.json_store import JsonStore
 
@@ -102,6 +102,7 @@ def test_create_link_increments_target_branch_version(tmp_path):
 def test_append_gold_aspect_increments_target_version(tmp_path):
     store, ex = _executor(tmp_path)
     store.ensure_node("WORK/A")
+    store.save_chunk(Chunk(node_path="WORK/A", content="silver summary", layer="silver"))
     v0 = store.get_node("WORK/A").version
     ex.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/A",
                                gold_aspect="key fact"))
@@ -111,6 +112,7 @@ def test_append_gold_aspect_increments_target_version(tmp_path):
 def test_append_gold_aspect_increments_ancestor_version(tmp_path):
     store, ex = _executor(tmp_path)
     store.ensure_node("WORK/A")
+    store.save_chunk(Chunk(node_path="WORK/A", content="silver summary", layer="silver"))
     v_work = store.get_node("WORK").version
     ex.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/A",
                                gold_aspect="key fact"))
@@ -122,6 +124,7 @@ def test_append_gold_aspect_overflow_increments_overflow_path_version(tmp_path):
     store, ex = _executor(tmp_path)
     full_content = serialize_gold_aspects([GoldAspect(text=f"a{i}") for i in range(MAX_GOLD_ASPECTS)])
     from vertical_brain.core.models import Chunk
+    store.save_chunk(Chunk(node_path="WORK/A", content="silver summary", layer="silver"))
     store.save_chunk(Chunk(node_path="WORK/A", content=full_content, layer="gold"))
 
     ex.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/A",

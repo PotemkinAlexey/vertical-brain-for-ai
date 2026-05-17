@@ -102,7 +102,9 @@ def test_mcp_append_chunk_audit_uses_provided_summary(tmp_path):
 
 
 def test_mcp_append_gold_aspect_audit_has_default_summary(tmp_path):
+    from vertical_brain.core.models import Chunk
     mcp, store = _mcp_sqlite(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/A", content="silver summary", layer="silver"))
     _call(mcp, "append_gold_aspect", {"path": "WORK/A", "aspect": "gold label"})
     record = store.list_audit()[0]
     assert record["reasoning_summary"] == "Updated Gold aspect via MCP."

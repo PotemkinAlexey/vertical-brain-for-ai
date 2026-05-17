@@ -652,8 +652,8 @@ class VerticalBrainMCP:
                 ),
                 reasoning_summary="Persisted session Bronze notes.",
             ))
-            # Silver: only when notes and summary are distinct
-            if notes:
+            # Silver: when notes and summary are distinct, OR when gold_aspect requires it
+            if notes or args.get("gold_aspect"):
                 ops.append(StorageOperation(
                     operation="append_chunk",
                     target_path=args["path"],
