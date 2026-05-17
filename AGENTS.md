@@ -60,12 +60,10 @@ The old Gold aspect will be naturally displaced by the optimizer over time.
 
 ## At the end of every session
 
-Call `session_end` with:
+Call `session_end` with both fields — the optimizer cannot write Silver for you, it only does mechanical text compaction:
 - `notes` — raw Bronze capture: bullet list of what was done, decided, or learned this session
-- `summary` — refined Silver summary: one concise paragraph distilling the key outcome
+- `summary` — refined Silver summary: one concise paragraph distilling the key outcome (you must write this, not the optimizer)
 - `gold_aspect` — optional: only if a durable insight emerged that should orient future sessions
-
-If the session was short and only one field feels natural, pass just `summary` — it will be stored as Bronze and promoted to Silver by the optimizer later.
 
 Then call `optimize` with the most-written namespace path.
 
@@ -74,11 +72,12 @@ Then call `optimize` with the most-written namespace path.
 Every new memory item must be written in this order:
 
 1. **Bronze first** — write the raw fact, decision, observation, transcript, or session note exactly enough to preserve source context.
-2. **Silver second** — only after Bronze exists, write a refined working summary derived from that Bronze record.
+2. **Silver second** — you must write Silver yourself: a refined working summary derived from Bronze. The optimizer cannot do this — it only does mechanical text concatenation, not semantic refinement.
 3. **Gold last** — only after Bronze and Silver exist, write a short durable insight with `append_gold_aspect` when the conclusion is stable enough to orient future sessions.
 
 Never write directly to Silver when there is no Bronze source for the same fact or decision.
 Never write directly to Gold as the first record of a new idea.
+Never rely on the optimizer to produce Silver — always write it explicitly.
 If using `batch_append`, order chunks Bronze before Silver in the batch, then call `append_gold_aspect` separately after the batch succeeds.
 
 ## User's namespace conventions
