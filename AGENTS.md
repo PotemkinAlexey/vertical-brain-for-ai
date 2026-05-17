@@ -29,6 +29,16 @@ Read the response and briefly tell the user what you see in memory.
 
 Call `optimize` with a path after writing many chunks to a namespace. Global `optimize` only at end of session or on explicit request.
 
+## How to read memory
+
+When consuming context, read layers in reverse order — most distilled first:
+
+1. **Gold first** — authoritative conclusions, stable decisions, orientation. Trust this to answer "what do we know for sure".
+2. **Silver second** — working summaries and refined facts. Use when Gold is not specific enough.
+3. **Bronze last** — raw source material. Read only when you need the original wording, a timestamp, or a detail that Silver didn't preserve.
+
+`session_start` already surfaces Gold. Use `read_context` for Silver/Bronze only when you need more depth on a specific namespace.
+
 ## Mandatory write layering
 
 Every new memory item must be written in this order:
