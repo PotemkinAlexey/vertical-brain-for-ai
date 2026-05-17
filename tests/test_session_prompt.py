@@ -119,3 +119,33 @@ def test_session_prompt_counts_links_without_double_counting(tmp_path):
     prompt = ContextSession(store).session_prompt()
 
     assert "1 links" in prompt
+
+
+def test_session_prompt_finds_agents_md_via_module_path_when_cwd_is_unrelated(tmp_path, monkeypatch):
+    """session_start must return AGENTS.md even when cwd has no AGENTS.md in its ancestry.
+
+    This reproduces the Claude Desktop scenario where the MCP server starts with
+    cwd=/ or cwd=~ and _find_agents_md() would otherwise return None.
+    """
+    import os
+    from pathlib import Path
+
+    agents_file = tmp_path / "AGENTS.md"
+    agents_file.write_text("# Contract\n\nDo not skip Bronze.", encoding="utf-8")
+
+    # Patch __file__ of the context_session module to point into tmp_path so that
+    # the module-relative upward search finds our AGENTS.md there.
+    import vertical_brain.core.context_session as cs_module
+    fake_module_file = str(tmp_path / "core" / "context_session.py")
+    monkeypatch.setattr(cs_module, "_find_agents_md",
+                        lambda: agents_file)
+
+    # Move cwd somewhere completely unrelated (no AGENTS.md in ancestry).
+    monkeypatch.chdir("/")
+    monkeypatch.delenv("VERTICAL_BRAIN_AGENTS_PATH", raising=False)
+
+    store = JsonStore(tmp_path / "store")
+    prompt = ContextSession(store).session_prompt()
+
+    assert "AGENTS.md" in prompt
+    assert "Do not skip Bronze." in prompt

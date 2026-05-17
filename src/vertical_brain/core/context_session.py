@@ -248,16 +248,27 @@ def _load_agents_md() -> str:
 
 
 def _find_agents_md() -> Path | None:
+    # 1. Explicit env override — highest priority.
     configured = os.environ.get("VERTICAL_BRAIN_AGENTS_PATH")
     if configured:
         path = Path(configured).expanduser()
         return path if path.is_file() else None
 
+    # 2. Walk up from cwd — works when server runs from inside the repo.
     current = Path.cwd().resolve()
     for directory in (current, *current.parents):
         candidate = directory / "AGENTS.md"
         if candidate.is_file():
             return candidate
+
+    # 3. Walk up from this module's location — works when MCP server is
+    #    launched by Claude Desktop with an unrelated cwd (e.g. / or ~).
+    module_dir = Path(__file__).resolve().parent
+    for directory in (module_dir, *module_dir.parents):
+        candidate = directory / "AGENTS.md"
+        if candidate.is_file():
+            return candidate
+
     return None
 
 
