@@ -77,7 +77,56 @@ Add a new chunk to a namespace. Creates the node chain if nodes do not exist.
 }
 ```
 
-Silver and Gold chunks are exempt from both checks.
+**`layer=silver` guard:** if an active Silver chunk already exists at `target_path`, `append_chunk(layer=silver)` is rejected with a `ValueError`. Use `append_chunk(layer=silver)` only to create the **first** Silver summary at a new namespace. All subsequent Silver updates must use `update_silver`.
+
+Gold chunks are exempt from Bronze dedup checks. Silver is exempt from dedup but subject to the first-Silver guard above.
+
+---
+
+### `update_silver`
+
+Replace the active Silver summary for a namespace atomically. Supersedes the old Silver chunk and writes a new one with full lineage tracking. Enforces OCC.
+
+> **First Silver:** if no active Silver exists yet, create it with `append_chunk(layer="silver")`. After that, always use `update_silver`.
+
+```json
+{
+  "operation": "update_silver",
+  "target_path": "WORK/Topic",
+  "current_silver_id": "old-silver-id",
+  "source_chunk_ids": ["new-bronze-id-1", "new-bronze-id-2"],
+  "chunk": {
+    "content": "Updated complete Silver summary incorporating new facts.",
+    "layer": "silver",
+    "content_type": "note",
+    "source": "model",
+    "confidence": 0.9
+  },
+  "reasoning_summary": "Incorporated two new Bronze facts into Silver."
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `target_path` | string | **required** Namespace to update |
+| `current_silver_id` | string | **required** ID of the active Silver chunk you read before synthesizing |
+| `chunk` | object | **required** New Silver content; `layer` must be `"silver"` |
+| `source_chunk_ids` | string[] | Optional Bronze chunk IDs incorporated into this Silver (stored in lineage) |
+
+**Validation rejects:**
+- `current_silver_id` missing or empty
+- `chunk` missing or `chunk.content` empty
+- `chunk.layer` ≠ `"silver"`
+- Duplicate or empty strings in `source_chunk_ids`
+
+**Runtime rejects (apply-time, not just validation):**
+- `current_silver_id` chunk not found
+- `current_silver_id` chunk is not active (already superseded/stale)
+- `current_silver_id` chunk is not `layer=silver`
+- `current_silver_id` chunk belongs to a different namespace
+- Any `source_chunk_ids` entry is `layer=gold` (Gold cannot be source evidence for Silver)
+
+**Result:** old Silver gets `status=superseded` + `valid_to=now()`. New Silver gets `lineage=[current_silver_id] + source_chunk_ids` and `supersedes=[current_silver_id]`. Exactly one active Silver remains after the operation.
 
 ---
 

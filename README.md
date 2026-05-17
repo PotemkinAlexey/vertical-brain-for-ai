@@ -85,11 +85,11 @@ Paths are slash-separated. Vertical isolation means context opened at `WORK/Data
 
 | Layer | Purpose | Managed by |
 |-------|---------|------------|
-| **Bronze** | Raw notes, questions, fragments | You / the model |
-| **Silver** | Canonical facts, cleaned, deduplicated | Optimizer compaction |
-| **Gold** | Stable summary aspects, stable IDs | `append_gold_aspect` / `GoldBuilder` |
+| **Bronze** | Raw notes, questions, fragments | `append_chunk` (default) |
+| **Silver** | Living summary — one per namespace, kept current | `append_chunk(layer=silver)` (first) → `update_silver` (all subsequent) |
+| **Gold** | Stable summary aspects, stable IDs | `append_gold_aspect` (requires active Silver) |
 
-The optimizer deduplicates Bronze chunks and compacts them into Silver summaries. Gold aspects carry stable UUIDs so they survive rewrites without identity drift. Up to 20 Gold aspects per namespace; overflow creates a sibling namespace automatically.
+Silver is a living document: the agent creates the first summary with `append_chunk(layer=silver)`, then keeps it current with `update_silver` after each new Bronze write. The optimizer can also compact Bronze into Silver via `optimizer:namespace_compaction` writes. Gold aspects carry stable UUIDs so they survive rewrites without identity drift. Up to 20 Gold aspects per namespace; overflow creates a sibling namespace automatically.
 
 ### Operations
 
@@ -97,8 +97,9 @@ All writes are explicit `StorageOperation` objects validated against JSON Schema
 
 | Operation | What it does |
 |-----------|-------------|
-| `append_chunk` | Add a new chunk to a namespace |
-| `append_gold_aspect` | Add or refresh a semantic label in the Gold layer |
+| `append_chunk` | Add a new chunk to a namespace (Bronze by default; first Silver via `layer=silver`) |
+| `update_silver` | Atomically replace the active Silver summary (OCC-protected) |
+| `append_gold_aspect` | Add or refresh a semantic label in the Gold layer (requires active Silver) |
 | `create_link` | Create a horizontal link between namespaces |
 | `mark_stale` | Retire a chunk |
 | `supersede_chunk` | Replace chunks with a newer version |
@@ -285,8 +286,9 @@ The MCP server exposes these tools to Claude:
 | `context_search` | Search + locked context capsules |
 | `context_search_semantic` | Semantic search + locked context capsules |
 | `route` | Find best namespaces by embedding similarity |
-| `append_chunk` | Write a chunk |
-| `append_gold_aspect` | Add/refresh a Gold aspect |
+| `append_chunk` | Write a chunk (Bronze default; first Silver via `layer=silver`) |
+| `update_silver` | Atomically replace the active Silver summary (OCC-protected) |
+| `append_gold_aspect` | Add/refresh a Gold aspect (requires active Silver) |
 | `create_link` | Create a namespace link |
 | `mark_stale` | Retire chunks at a namespace |
 | `batch_append` | Write multiple chunks atomically |

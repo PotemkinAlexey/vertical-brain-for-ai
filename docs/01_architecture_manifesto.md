@@ -28,7 +28,7 @@ TRADING/Strategies/HedgingModel
 
 ### Bronze
 
-Raw data:
+Raw data — append-only evidence log:
 
 - chat fragments
 - rough notes
@@ -38,16 +38,18 @@ Raw data:
 
 ### Silver
 
-Cleaned structured knowledge:
+Living current summary — one per namespace, kept up-to-date:
 
 - normalized facts
 - clarified rules
 - corrected explanations
 - grouped notes
 
+Created once with `append_chunk(layer=silver)`. All subsequent updates use `update_silver` (OCC-protected). The optimizer may also write Silver via compaction.
+
 ### Gold
 
-Stable high-level knowledge:
+Stable orientation — rarely changes:
 
 - summaries
 - decisions
@@ -55,6 +57,8 @@ Stable high-level knowledge:
 - durable facts
 - exam cheat sheets
 - reusable prompts
+
+Requires an active Silver to exist at the same namespace. Written only via `append_gold_aspect`.
 
 ## Read path
 
@@ -72,18 +76,25 @@ Question
 
 ## Write path
 
-The write path must route and compact new information.
+The write path must route and compact new information. Bronze → Silver → Gold order is enforced by the infrastructure.
 
 ```text
 Input
 → classify content
 → choose deepest target path
-→ sibling scan
+→ sibling scan (search before write)
 → conflict check
-→ write Bronze or Silver
-→ update Gold summary if needed
+→ append_chunk (Bronze)
+→ append_chunk(layer=silver) if first Silver, else update_silver (OCC)
+→ append_gold_aspect only after active Silver exists
 → index
 ```
+
+Invariants enforced at the executor level:
+- Exact-duplicate Bronze is hard-blocked (content_hash check).
+- Similar Bronze triggers a soft warning (similar_bronze in OperationResult).
+- append_chunk(layer=silver) is blocked if an active Silver already exists.
+- append_gold_aspect is blocked if no active Silver exists.
 
 ## Optimize process
 

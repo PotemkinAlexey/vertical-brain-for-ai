@@ -83,7 +83,7 @@ Never delete or overwrite Gold directly. Instead:
 2. Write a Silver summary that supersedes the old view
 3. Only promote to Gold once the correction is confirmed stable
 
-The old Gold aspect will be naturally displaced by the optimizer over time.
+The old Gold aspect will remain until explicitly replaced by a new `append_gold_aspect` call with updated content — the optimizer does not modify Gold.
 
 ## At the end of every session
 

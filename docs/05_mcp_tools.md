@@ -208,7 +208,7 @@ Each chunk object accepts: `path` (required), `content` (required), `layer`, `co
 
 ### `session_end`
 
-Persist a session summary following Bronze → Silver → Gold layering. With `notes` + `summary`: writes Bronze then Silver. With `summary` only: writes Bronze (Silver promotion is the agent's responsibility).
+Persist a session summary following Bronze → Silver → Gold layering. Always writes a Bronze note chunk. Also writes Silver when `notes` is provided or when `gold_aspect` is requested. If only `summary` is passed without `notes` or `gold_aspect`, Silver promotion remains the agent's responsibility.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -221,17 +221,20 @@ Persist a session summary following Bronze → Silver → Gold layering. With `n
 
 ### `update_silver`
 
-Atomically rewrite the Silver summary for a namespace. Supersedes all existing Silver chunks and writes a new one. Enforces OCC — the agent must pass the ID of the Silver chunk it read before synthesizing.
+Atomically replace the active Silver summary for a namespace. Supersedes the old Silver chunk and writes a new one. Enforces OCC — the agent must pass the ID of the Silver chunk it read before synthesizing. Backed by the `update_silver` `StorageOperation`.
+
+> **First Silver:** if no active Silver exists yet, create it with `append_chunk(layer="silver")`. After that, all Silver updates must use `update_silver`.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `path` | string | **required** Namespace to update |
-| `content` | string | **required** Complete rewritten Silver summary |
-| `current_silver_id` | string\|null | **required** ID of the Silver chunk you read, or null if none existed |
-| `bronze_ids` | array | Optional IDs of Bronze chunks incorporated into this Silver |
-| `content_type` | string | Content type (default: `note`) |
+| `new_content` | string | **required** Complete rewritten Silver summary |
+| `current_silver_id` | string | **required** ID of the active Silver chunk you read before synthesizing |
+| `source_chunk_ids` | array | Optional IDs of Bronze chunks incorporated into this Silver (used for lineage) |
+| `confidence` | number | Quality signal [0, 1] (default 1.0) |
+| `reasoning_summary` | string | Why this Silver was rewritten (goes to audit log) |
 
-Returns `chunk_id` of the new Silver and list of `superseded` IDs.
+Returns `{"status": "applied", "chunk_id": "<new silver id>"}`.
 
 ---
 
