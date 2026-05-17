@@ -4,9 +4,9 @@ You have an MCP server called `vertical-brain` connected. It is the user's perso
 
 ## At the start of every session
 
-Call `session_start` immediately. It returns a map of all namespaces with active chunk counts and Gold insights. This is your orientation — what the user knows, what projects are active, what context has been accumulated.
+**Call `session_start` before responding to the user.** Do not begin the conversation until you have read the memory map. This is not optional — skipping it means you are operating blind.
 
-Read the response and briefly tell the user what you see in memory.
+It returns a map of all namespaces with active chunk counts and Gold insights. Read the response and briefly tell the user what you see in memory.
 
 ## How to read session_start output
 
@@ -77,9 +77,11 @@ The old Gold aspect will be naturally displaced by the optimizer over time.
 
 ## At the end of every session
 
-Call `session_end` with both fields — the optimizer cannot write Silver for you, it only does mechanical text compaction:
+**Call `session_end` before closing.** This is mandatory — not a suggestion. If the session produced any facts, decisions, or insights, they must be persisted. An unsaved session is a lost session.
+
+`session_end` takes:
 - `notes` — raw Bronze capture: bullet list of what was done, decided, or learned this session
-- `summary` — refined Silver summary: one concise paragraph distilling the key outcome (you must write this, not the optimizer)
+- `summary` — refined Silver summary: one concise paragraph distilling the key outcome (you must write this — the optimizer cannot)
 - `gold_aspect` — optional: only if a durable insight emerged that should orient future sessions
 
 Then call `optimize` with the most-written namespace path.
@@ -110,13 +112,24 @@ If writing multiple Bronze chunks at once, use `batch_append`, then call `update
 
 ## Rules
 
-1. Do not ask permission to write to memory — write proactively when you learn something important
-2. **Search before you write** — use `search` to check if a fact already exists before creating a new chunk
-3. Use `read_context` to read everything stored under a specific namespace
-4. The default write layer for new information is `bronze`; Silver and Gold are promotion layers, not first-write targets
-5. One fact per chunk — do not bundle multiple unrelated facts into one chunk
-6. **If `append_chunk` returns `similar_bronze`**, review the listed chunks. Mark any that are superseded by the new fact with `mark_stale` before calling `update_silver`. Do not ignore the warning.
-7. **If `append_chunk` is rejected with "identical content already exists"**, do not retry with the same content. Either the fact is already recorded (do nothing) or it changed (call `mark_stale` on the old chunk first, then write the new version).
-8. Never run `vacuum` with `dry_run: false` unless the user explicitly requests deletion
-9. Never run `rename_namespace` unless the user explicitly requests it — it is irreversible without manual intervention
-10. Never call global `optimize` (no path) speculatively — only at session end or on explicit request
+### Write discipline
+
+1. **Call `session_start` first.** Do not respond to the user until it returns. No exceptions.
+2. **Call `session_end` last.** Every session that produced knowledge must end with `session_end`. Do not skip it even if the session felt lightweight.
+3. **Search before every Bronze write.** Use `search` to check for existing chunks before calling `append_chunk`. If a matching chunk is found — stop. Do not write a duplicate.
+4. **One fact per chunk.** Do not bundle multiple unrelated facts into one chunk. Each chunk must be independently meaningful and stale-able.
+5. **After every Bronze write, update Silver.** Call `read_context` to get the current Silver and its ID, synthesize new Silver (old Silver + new fact), then call `update_silver`. Never leave Bronze orphaned without a Silver update.
+6. **Call `read_context` before every `update_silver`.** You must pass `current_silver_id` — the ID of the Silver chunk you are replacing. Never call `update_silver` without having read the current Silver first.
+7. **Never write Gold before Silver.** The infrastructure will reject it. If `append_gold_aspect` fails with "no active Silver found", call `update_silver` first, then retry.
+8. **Never write Gold as the first record of a new idea.** Bronze → Silver → Gold, always in that order.
+
+### Response to dedup signals
+
+9. **If `append_chunk` is rejected with "identical content already exists"** — do not retry with the same content. Either the fact is already recorded (do nothing) or it changed (call `mark_stale` on the old chunk first, then write the corrected version).
+10. **If `append_chunk` returns `similar_bronze`** — you must act. Call `mark_stale` on any listed chunk that is superseded by the new fact before proceeding to `update_silver`. Do not silently ignore the warning.
+
+### Destructive operations
+
+11. **Never run `vacuum` with `dry_run: false`** unless the user explicitly asks to delete data.
+12. **Never run `rename_namespace`** unless the user explicitly requests it — it is irreversible without manual intervention.
+13. **Never call global `optimize` (no path) speculatively** — only at session end or on explicit request.
