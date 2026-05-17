@@ -69,15 +69,19 @@ Then call `optimize` with the most-written namespace path.
 
 ## Mandatory write layering
 
-Every new memory item must be written in this order:
+Bronze is an append-only log. Silver is a living document you keep current. Gold is stable and rarely changes.
 
-1. **Bronze first** — write the raw fact, decision, observation, transcript, or session note exactly enough to preserve source context.
-2. **Silver second** — you must write Silver yourself: a refined working summary derived from Bronze. The optimizer cannot do this — it only does mechanical text concatenation, not semantic refinement.
-3. **Gold last** — only after Bronze and Silver exist, write a short durable insight with `append_gold_aspect` when the conclusion is stable enough to orient future sessions.
+**The pattern for every new fact:**
 
-Never write directly to Silver when there is no Bronze source for the same fact or decision.
+1. **Bronze** — append the raw fact as-is. Never edit Bronze.
+2. **Silver** — read the current Silver for this namespace, then write a new Silver that incorporates the new Bronze fact into the existing summary. Silver is always a complete up-to-date distillation, not a list of additions.
+3. **Gold** — only when a conclusion is stable enough to orient future sessions, add it via `append_gold_aspect`.
+
+This keeps cost low: each Silver update only needs the current Silver + one new Bronze chunk, not the full Bronze history.
+
+Never write directly to Silver without a Bronze source for the same fact.
 Never write directly to Gold as the first record of a new idea.
-Never rely on the optimizer to produce Silver — always write it explicitly.
+Never rely on the optimizer to produce Silver — it only does mechanical text compaction.
 If using `batch_append`, order chunks Bronze before Silver in the batch, then call `append_gold_aspect` separately after the batch succeeds.
 
 ## User's namespace conventions
