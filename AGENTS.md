@@ -16,10 +16,11 @@ Read the response and briefly tell the user what you see in memory.
 
 ## When to write to memory
 
-- **append_chunk** — record a fact, decision, or observation under a specific namespace
-- **append_gold_aspect** — record a key insight (conclusion, principle, important decision)
-- **batch_append** — record multiple facts at once
-- **session_end** — at the end of the session, write a short summary of what was done
+- **append_chunk** — record a raw Bronze fact, decision, or observation
+- **update_silver** — atomically rewrite the Silver summary for a namespace (requires `current_silver_id` from your last read — OCC protected)
+- **append_gold_aspect** — add a durable insight to Gold
+- **batch_append** — write multiple Bronze chunks at once
+- **session_end** — end-of-session: Bronze notes + Silver summary + optional Gold aspect
 
 ## Storage maintenance
 
@@ -73,16 +74,17 @@ Bronze is an append-only log. Silver is a living document you keep current. Gold
 
 **The pattern for every new fact:**
 
-1. **Bronze** — append the raw fact as-is. Never edit Bronze.
-2. **Silver** — read the current Silver for this namespace, then write a new Silver that incorporates the new Bronze fact into the existing summary. Silver is always a complete up-to-date distillation, not a list of additions.
-3. **Gold** — only when a conclusion is stable enough to orient future sessions, add it via `append_gold_aspect`.
+1. **Bronze** — `append_chunk` the raw fact as-is. Never edit Bronze.
+2. **Silver** — call `read_context` to get the current Silver chunk and its ID, then synthesize new Silver (current Silver + new Bronze fact), then call `update_silver(path, new_content, current_silver_id)`. Silver is always one complete up-to-date distillation per namespace.
+3. **Gold** — only when a conclusion is stable enough to orient future sessions, call `append_gold_aspect`.
+
+`update_silver` enforces OCC: it rejects the write if Silver changed since you read it, forcing a re-read and re-synthesis. This makes it impossible to overwrite someone else's update accidentally.
 
 This keeps cost low: each Silver update only needs the current Silver + one new Bronze chunk, not the full Bronze history.
 
-Never write directly to Silver without a Bronze source for the same fact.
 Never write directly to Gold as the first record of a new idea.
 Never rely on the optimizer to produce Silver — it only does mechanical text compaction.
-If using `batch_append`, order chunks Bronze before Silver in the batch, then call `append_gold_aspect` separately after the batch succeeds.
+If writing multiple Bronze chunks at once, use `batch_append`, then call `update_silver` once with all new facts incorporated.
 
 ## User's namespace conventions
 

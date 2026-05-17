@@ -199,13 +199,30 @@ Each chunk object accepts: `path` (required), `content` (required), `layer`, `co
 
 ### `session_end`
 
-Write a session summary as a Silver/note chunk. Call at the end of each session to persist what was learned.
+Persist a session summary following Bronze → Silver → Gold layering. With `notes` + `summary`: writes Bronze then Silver. With `summary` only: writes Bronze (Silver promotion is the agent's responsibility).
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `path` | string | **required** Namespace to write the summary to |
-| `summary` | string | **required** What was learned or done this session |
-| `gold_aspect` | string | Optional semantic label to append to Gold |
+| `summary` | string | **required** Refined Silver summary of what was learned or done |
+| `notes` | string | Optional raw Bronze notes — detailed facts and observations |
+| `gold_aspect` | string | Optional durable insight to append to Gold |
+
+---
+
+### `update_silver`
+
+Atomically rewrite the Silver summary for a namespace. Supersedes all existing Silver chunks and writes a new one. Enforces OCC — the agent must pass the ID of the Silver chunk it read before synthesizing.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `path` | string | **required** Namespace to update |
+| `content` | string | **required** Complete rewritten Silver summary |
+| `current_silver_id` | string\|null | **required** ID of the Silver chunk you read, or null if none existed |
+| `bronze_ids` | array | Optional IDs of Bronze chunks incorporated into this Silver |
+| `content_type` | string | Content type (default: `note`) |
+
+Returns `chunk_id` of the new Silver and list of `superseded` IDs.
 
 ---
 
@@ -262,7 +279,7 @@ deletion.
 
 ## Protocol Notes
 
-- The server speaks JSON-RPC 2.0 with Content-Length headers (same framing as LSP)
+- The server speaks JSON-RPC 2.0 over stdio with newline-delimited JSON (one object per line)
 - All tool calls return `content: [{type: "text", text: "..."}]` on success
 - Errors return `isError: true` with the error message in `content[0].text`
 - The server is single-threaded; concurrent tool calls from one session are serialized
