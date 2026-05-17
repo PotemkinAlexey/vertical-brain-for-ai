@@ -138,6 +138,107 @@ result.aspect_too_long = true
 
 **What to do:** split the long aspect into smaller, semantically distinct search tags and append them separately.
 
+## File ingestion protocol
+
+Use this protocol whenever you call `ingest_file`. The tool returns file metadata and raw content. You must execute all steps below — the tool does not do it for you.
+
+### What immutable means
+
+`immutable: true` marks a Bronze chunk as a permanent, verbatim record that must never change. Use it for:
+
+- **Normative rules** — schema field definitions, mandatory constraints, code values defined by the issuing authority.
+- **The source registration chunk** — the anchor chunk that records what document was ingested (name, hash, authority, version).
+- **Verbatim extracts** — exact quoted text that must not be paraphrased (regulatory wording, contractual clauses, wire format specs).
+
+Do **not** use `immutable: true` for:
+- Your own interpretation or derived rules.
+- Contextual notes and explanatory text you added.
+- Anything you are not certain is verbatim from the source.
+
+Immutable chunks cannot be marked stale, superseded, or deleted by vacuum. If a newer version of the document changes a field, write a new Bronze chunk with `content_type: "correction"` and reference both the old and new immutable chunk IDs in the text.
+
+### Referencing immutable chunks from Silver
+
+Silver must never copy verbatim content from immutable Bronze. Instead, **reference the immutable chunk by ID**:
+
+```
+The MT103 field 32A carries value date, currency, and amount
+(source: chunk_id=<id of the immutable Bronze chunk>).
+```
+
+When `append_chunk` or `batch_append` returns a chunk ID, record it immediately. Use that ID in the Silver narrative and in any derived Silver written to `WORK/` namespaces. This creates a traceable chain: WORK Silver → SOURCES Bronze → original document.
+
+### Step-by-step
+
+**Step 1 — Register the source document (always first)**
+
+Write one `immutable: true` Bronze chunk at `SOURCES/{authority}/{slug}`:
+- `layer: "bronze"`, `content_type: "artifact"`, `immutable: true`
+- Content: file name, SHA-256 from the tool output, authority, document version or date if present, a one-sentence description. Max 600 characters.
+- Record the returned chunk ID — every subsequent Silver update references this chunk as provenance.
+
+**Step 2 — Write a Silver summary at the source namespace**
+
+After step 1, call `update_silver` (or `append_chunk(layer="silver")` if none exists) at `SOURCES/{authority}/{slug}`. Silver is: what the document is, who issues it, what it governs, key sections. Reference the registration chunk ID from step 1.
+
+**Step 3 — Extract atomic Bronze facts**
+
+For each distinct rule, definition, field, constraint, or code value in the document:
+- One chunk = one fact. Max 600 characters. If a fact is longer, split it.
+- Include source location: section heading, field tag, table name, paragraph number.
+- `immutable: true` for schema fields, mandatory constraints, and normative rules copied verbatim.
+- `immutable: false` for contextual notes and explanatory passages.
+- `content_type: "fact"` for confirmed statements; `content_type: "question"` for ambiguous or contradictory passages.
+
+Use `batch_append` for bulk extraction. Update Silver at `SOURCES/{authority}/{slug}` once after the entire batch with all IDs incorporated.
+
+**Step 4 — Write interpretation to WORK/ Silver, not Bronze**
+
+If a source fact implies an implementation rule, usage guideline, or constraint for your project:
+- Write it as Silver at the relevant `WORK/` or `PROJECTS/` namespace.
+- Reference the source Bronze chunk ID(s) in the Silver text.
+- Never write your interpretation as Bronze at SOURCES/ — Bronze there is only for what the document literally says.
+
+**Step 5 — Handle conflicts explicitly**
+
+If any extracted fact contradicts existing memory at a `WORK/` namespace:
+- Do not overwrite or mark stale the existing chunk automatically.
+- Write a new Bronze chunk with `content_type: "correction"` that names both the old fact (include its chunk ID if known) and the new authoritative version with source location.
+- Report every conflict in your final summary to the user.
+
+**Step 6 — Link namespaces**
+
+After writing to both `SOURCES/...` and `WORK/...`:
+```
+create_link(source_path="WORK/...", target_path="SOURCES/{authority}/{slug}", link_type="derived_from")
+```
+
+**Step 7 — Gold only for stable orientation**
+
+Add Gold aspects at `SOURCES/{authority}/{slug}` only if this document is a major anchor that should orient future routing for this namespace. Maximum two aspects. Write them as short search tags, not summaries.
+
+### Namespace placement
+
+| Content | Where |
+|---|---|
+| Source registration, verbatim schema fields, normative rules | `SOURCES/{authority}/{slug}` (immutable Bronze) |
+| Contextual notes and explanatory text | `SOURCES/{authority}/{slug}` (mutable Bronze) |
+| Silver overview of the document | `SOURCES/{authority}/{slug}` (Silver) |
+| Derived implementation rules and guidelines | relevant `WORK/` or `PROJECTS/` namespace (Silver) |
+
+### Report when done
+
+Give the user a structured summary:
+- **Source namespace** and registration chunk ID
+- **Bronze facts** extracted: how many immutable vs mutable
+- **Silver** at SOURCES/ and at WORK/ namespaces updated
+- **Links** created
+- **Conflicts** found (list each with old and new chunk IDs)
+- **Open questions** (content_type=question chunks written)
+- **Skipped content** and reason
+
+---
+
 ## User's namespace conventions
 
 - `PROJECTS/*` — projects and technical details

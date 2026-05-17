@@ -813,7 +813,7 @@ def test_update_silver_returns_valid_chunk_id(tmp_path):
 
 
 def test_ingest_file_returns_prompt_with_content(tmp_path):
-    """ingest_file reads the file and embeds its content in a structured prompt."""
+    """ingest_file returns compact metadata header with embedded file content."""
     mcp, _ = _mcp(tmp_path)
     sample = tmp_path / "MT103.txt"
     sample.write_text("Field 32A: Value Date, Currency, Amount. Format: 6!n3!a15d")
@@ -827,11 +827,9 @@ def test_ingest_file_returns_prompt_with_content(tmp_path):
 
     assert "MT103.txt" in text
     assert "SOURCES/SWIFT/MT103" in text
-    assert "Field 32A" in text                      # file content embedded
-    assert "SHA-256" in text                        # hash present
-    assert "immutable" in text.lower()              # prompt mentions immutable
-    assert "archivist" in text.lower()              # role framing
-    assert "Report when done" in text               # reporting section
+    assert "Field 32A" in text        # file content embedded
+    assert "sha256" in text.lower()   # hash present
+    assert "AGENTS.md" in text        # references the universal protocol
 
 
 def test_ingest_file_defaults_slug_to_filename(tmp_path):

@@ -427,7 +427,7 @@ _TOOLS: list[dict[str, Any]] = [
 _TOOLS_BY_NAME: dict[str, dict[str, Any]] = {tool["name"]: tool for tool in _TOOLS}
 
 
-def _build_ingest_prompt(
+def _build_ingest_header(
     *,
     file_name: str,
     file_path: str,
@@ -437,100 +437,27 @@ def _build_ingest_prompt(
     doc_slug: str,
     content: str,
 ) -> str:
-    """Return the embedded agent prompt for ingest_file."""
+    """Return a compact metadata header for ingest_file.
+
+    The full ingestion protocol lives in AGENTS.md and is loaded by session_start.
+    This header provides only the file-specific facts the agent needs to execute it.
+    """
     size_kb = file_size / 1024
     source_ns = f"SOURCES/{authority}/{doc_slug}" if authority else f"SOURCES/{doc_slug}"
 
-    return f"""# File ingestion task — {file_name}
+    return f"""# ingest_file — {file_name}
 
-## Source metadata
-- File: {file_path}
-- SHA-256: {file_hash}
-- Size: {size_kb:.1f} KB
-- Authority: {authority or "(infer from content if possible)"}
-- Suggested source namespace: `{source_ns}`
+file: {file_path}
+sha256: {file_hash}
+size: {size_kb:.1f} KB
+authority: {authority or "(infer from content)"}
+source_namespace: {source_ns}
 
----
-
-## Your role: archivist, not editor
-
-This is authoritative source material. Your job is to register it faithfully, extract
-atomic facts with provenance, and surface derived rules in Silver. You do not rewrite,
-correct, or improve the source. You do not invent missing details.
+Apply the File Ingestion Protocol from AGENTS.md.
 
 ---
 
-## Instructions
-
-**Step 1 — Register the source document (do this first)**
-
-Write one immutable Bronze chunk at `{source_ns}`:
-- `immutable: true`, `content_type: "artifact"`, `layer: "bronze"`
-- Content: file name, SHA-256, authority, document version or date if present, a one-sentence description.
-- This chunk is the anchor. All extracted facts reference it via `lineage`.
-
-**Step 2 — Extract atomic Bronze facts**
-
-For each distinct rule, definition, constraint, or value in the document:
-- One chunk = one fact. Max 600 characters.
-- Include source location in the text: section, heading, table name, field tag, page, or paragraph number.
-- Set `immutable: true` for verbatim schema fields and normative rules.
-- Set `immutable: false` for contextual notes and explanatory statements.
-- Use `content_type: "fact"` for confirmed statements, `"question"` for ambiguous passages.
-
-**Step 3 — Write interpretation to Silver, not Bronze**
-
-If you derive an implementation rule or usage guideline from the source facts:
-- Write it to Silver at the relevant `WORK/` or `PROJECTS/` namespace.
-- Set `source_chunk_ids` to the Bronze fact chunk IDs it came from.
-- Never write interpretation as Bronze — Bronze is for what the document says, Silver is for what it means.
-
-**Step 4 — Handle conflicts explicitly**
-
-If any extracted fact contradicts something already in memory:
-- Do not overwrite existing memory.
-- Write a new Bronze chunk with `content_type: "correction"` describing the discrepancy.
-- Report every conflict in the final summary.
-
-**Step 5 — Link namespaces**
-
-If you write to both `SOURCES/...` and `WORK/...`:
-- Call `create_link(source_path=WORK/..., target_path=SOURCES/..., link_type="derived_from")`.
-
-**Step 6 — Gold only for stable orientation**
-
-Add a Gold aspect only if this document represents a high-level anchor that should orient
-future routing for this namespace. Maximum two aspects. Do not add Gold for every extracted rule.
-
----
-
-## Namespace placement
-
-| Content type | Where to write |
-|---|---|
-| Document registration, verbatim schema fields, normative rules | `{source_ns}` |
-| Implementation rules, usage guidelines derived from the source | relevant `WORK/` or `PROJECTS/` namespace |
-
----
-
-## File content
-
-{content}
-
----
-
-## Report when done
-
-Provide a structured summary:
-- **Source namespace** written
-- **Application namespaces** created or updated
-- **Bronze facts** extracted (count, how many immutable vs mutable)
-- **Silver summaries** created or updated
-- **Gold aspects** added
-- **Conflicts** found (list each one)
-- **Open questions** (content_type=question chunks written)
-- **Skipped content** and why
-"""
+{content}"""
 
 
 class MessageParseError(ValueError):
@@ -954,7 +881,7 @@ class VerticalBrainMCP:
         authority = authority.strip().replace(" ", "_")
         doc_slug = doc_slug.strip().replace(" ", "_").replace(".", "_")
 
-        return _build_ingest_prompt(
+        return _build_ingest_header(
             file_name=file_name,
             file_path=file_path,
             file_hash=file_hash,
