@@ -145,11 +145,20 @@ Write a new chunk to a namespace. Creates the node chain if it does not exist.
 | `source` | string | Who produced this (e.g. `model`, `user`) |
 | `confidence` | number | Quality signal [0, 1] (default 1.0) |
 
+**Bronze dedup (layer `bronze` only):**
+
+- **Hard block:** if an active Bronze chunk with byte-for-byte identical content already exists at `path`, the call returns an error. Call `mark_stale` on the old chunk first if the fact has changed, then retry.
+- **Soft warning:** if the write succeeds but similar active Bronze chunks exist at `path`, the response includes `similar_bronze` — a list of up to 3 matching chunks with snippets. Review them and `mark_stale` any that the new chunk supersedes.
+
+Silver and Gold are exempt from both checks.
+
 ---
 
 ### `append_gold_aspect`
 
 Add or refresh a semantic label in the Gold summary of a namespace. Exact-text duplicates refresh `updated_at` without creating a new aspect. Returns `overflow_path` if a new sibling namespace was created (when the 20-aspect limit is reached).
+
+> **Prerequisite:** An active Silver chunk must exist at `path`. Call `update_silver` first if it doesn't.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|

@@ -61,9 +61,29 @@ Add a new chunk to a namespace. Creates the node chain if nodes do not exist.
 | `confidence` | float [0,1] | `1.0` | Routing/quality signal |
 | `lineage` | string[] | `[]` | IDs of source chunks this was distilled from |
 
+**Bronze dedup enforcement (layer `bronze` only):**
+
+- **Hard block — exact duplicate.** If an active Bronze chunk with byte-for-byte identical content already exists at `target_path`, the operation is rejected with a `ValueError` before any I/O. The error names the existing chunk ID and directs you to call `mark_stale` first.
+- **Soft warning — similar content.** If the write succeeds but the FTS search finds lexically similar active Bronze chunks at `target_path` (score ≥ 8), `OperationResult.similar_bronze` is populated with up to 3 matches. Review and `mark_stale` any that are superseded by the new chunk.
+
+```json
+{
+  "operation": "append_chunk",
+  "status": "applied",
+  "chunk_id": "new-id...",
+  "similar_bronze": [
+    { "chunk_id": "old-id...", "snippet": "Databricks uses Delta Lake...", "score": 10 }
+  ]
+}
+```
+
+Silver and Gold chunks are exempt from both checks.
+
 ---
 
 ### `append_gold_aspect`
+
+> **Prerequisite:** An active Silver chunk must exist at `target_path`. If none is found, the operation is rejected with a `ValueError` instructing you to call `update_silver` first.
 
 Add or refresh a semantic label in the Gold summary of a namespace.
 

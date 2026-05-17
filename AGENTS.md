@@ -50,6 +50,22 @@ When consuming context, read layers in reverse order — most distilled first. *
 - Uncertain guesses — if unsure, mark confidence low or wait for confirmation
 - One giant chunk covering multiple unrelated facts — **one fact per chunk**
 
+## Bronze dedup enforcement
+
+The infrastructure enforces two levels of dedup on every `append_chunk` with `layer: bronze`:
+
+1. **Hard block — exact duplicate.** If an active Bronze chunk with byte-for-byte identical content already exists at the same namespace, the write is rejected with a `ValueError`. The error message names the existing chunk ID and tells you to call `mark_stale` first if the fact has changed.
+
+2. **Soft warning — similar content.** If the write succeeds but similar (not identical) active Bronze chunks exist at the same namespace, the response includes a `similar_bronze` field listing up to 3 matching chunks with snippets. Review them — if one is effectively the same fact, mark it stale to keep Silver clean.
+
+```
+result.similar_bronze = [
+  { "chunk_id": "abc...", "snippet": "Databricks uses Delta Lake...", "score": 10 }
+]
+```
+
+**Why this matters:** duplicate Bronze chunks make Silver dirty unnecessarily. If you keep Bronze unique, each `update_silver` synthesizes only genuinely new information.
+
 ## Correcting wrong memory
 
 Never delete or overwrite Gold directly. Instead:
@@ -99,6 +115,8 @@ If writing multiple Bronze chunks at once, use `batch_append`, then call `update
 3. Use `read_context` to read everything stored under a specific namespace
 4. The default write layer for new information is `bronze`; Silver and Gold are promotion layers, not first-write targets
 5. One fact per chunk — do not bundle multiple unrelated facts into one chunk
-6. Never run `vacuum` with `dry_run: false` unless the user explicitly requests deletion
-7. Never run `rename_namespace` unless the user explicitly requests it — it is irreversible without manual intervention
-8. Never call global `optimize` (no path) speculatively — only at session end or on explicit request
+6. **If `append_chunk` returns `similar_bronze`**, review the listed chunks. Mark any that are superseded by the new fact with `mark_stale` before calling `update_silver`. Do not ignore the warning.
+7. **If `append_chunk` is rejected with "identical content already exists"**, do not retry with the same content. Either the fact is already recorded (do nothing) or it changed (call `mark_stale` on the old chunk first, then write the new version).
+8. Never run `vacuum` with `dry_run: false` unless the user explicitly requests deletion
+9. Never run `rename_namespace` unless the user explicitly requests it — it is irreversible without manual intervention
+10. Never call global `optimize` (no path) speculatively — only at session end or on explicit request

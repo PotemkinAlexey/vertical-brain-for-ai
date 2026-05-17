@@ -14,7 +14,7 @@ A personal context lakehouse for AI assistants. Knowledge is stored in hierarchi
 src/vertical_brain/
 ├── core/
 │   ├── models.py             — All data classes (Chunk, Node, Link, StorageOperation, …)
-│   ├── operations.py         — StorageOperationExecutor: validate + apply + audit
+│   ├── operations.py         — StorageOperationExecutor: validate + apply + audit + Bronze dedup guard
 │   ├── optimizer.py          — SimpleOptimizer: dedup + Silver compaction + decay + cross-namespace link discovery
 │   ├── gold.py               — GoldAspect v2, parse/serialize, LlmGoldBuilder
 │   ├── search.py             — BrainSearch: lexical FTS + path ranking
@@ -28,8 +28,8 @@ src/vertical_brain/
 │   └── json_schema.py        — Stdlib JSON Schema validator (no external deps)
 │
 ├── storage/
-│   ├── protocol.py           — StorageProvider Protocol (runtime-checkable)
-│   ├── sqlite_store.py       — SQLiteStore: WAL, FTS5, transactions, vector cache
+│   ├── protocol.py           — StorageProvider Protocol (runtime-checkable); includes has_active_chunk_with_hash
+│   ├── sqlite_store.py       — SQLiteStore: WAL, FTS5, transactions, vector cache, composite dedup index
 │   ├── json_store.py         — JsonStore: human-readable files, dev/debug
 │   └── thread_local_store.py — ThreadLocalSQLiteStoreProxy
 │
@@ -48,7 +48,7 @@ Test files mirror `src/` — there is one test file per module, plus cross-cutti
 ## Running Tests
 
 ```bash
-pytest                                    # full suite (~440 tests)
+pytest                                    # full suite (~454 tests)
 pytest tests/test_operations.py -v       # single file
 pytest -k "occ or version" -v            # keyword filter
 pytest --tb=short 2>&1 | tail -20        # summary view
@@ -75,6 +75,10 @@ These are tested explicitly in `test_occ.py`, `test_version_propagation.py`, `te
 6. **`rename_namespace` is atomic in SQLite.** It must be wrapped in `with self.transaction():`.
 
 7. **The optimizer performs a bounded snapshot read** via `_snapshot_branch`: branch chunks once, node version once, and links once only when decay is enabled. Planning (`_build_plan`) is pure over that snapshot — no further I/O. Changes are applied as a single transactional batch.
+
+8. **Bronze dedup is enforced at the executor level, not the store level.** `_apply_validated` checks exact-hash duplicates via `store.has_active_chunk_with_hash()` (hard block) and near-duplicates via `_find_similar_bronze()` (soft warning in `OperationResult.similar_bronze`). The check applies only to `layer="bronze"` — Silver and Gold are exempt. The composite index `idx_chunks_dedup (node_path, status, content_hash)` makes the hard block O(log n).
+
+9. **`append_gold_aspect` requires an active Silver chunk at the same namespace.** The executor rejects the write with a descriptive `ValueError` if no active Silver exists. Gold must be grounded in Silver — write Silver first via `update_silver`, then promote to Gold.
 
 ---
 
