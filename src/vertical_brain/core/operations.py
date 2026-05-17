@@ -517,7 +517,7 @@ class StorageOperationExecutor:
                 raise ValueError(f"Chunk not found: {chunk_id}")
             if chunk.node_path != operation.target_path:
                 raise ValueError(f"Chunk {chunk_id} does not belong to {operation.target_path}")
-            if getattr(chunk, "immutable", False):
+            if getattr(chunk, "immutable", False) and not getattr(operation, "force_immutable", False):
                 raise ValueError(
                     f"Cannot mark immutable chunk '{chunk_id}' as {status} — immutable artifacts are "
                     f"protected from modification. To replace this artifact, create a new chunk and link to it."

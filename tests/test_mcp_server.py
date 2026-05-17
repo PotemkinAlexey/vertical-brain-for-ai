@@ -550,6 +550,29 @@ def test_mark_stale_recursive_skips_immutable(tmp_path):
     assert immutable_chunk.status == "active"  # untouched
 
 
+def test_mark_stale_include_immutable_wipes_everything(tmp_path):
+    """include_immutable=true allows full wipe of a namespace subtree for re-ingestion."""
+    store = SQLiteStore(tmp_path)
+    mcp = VerticalBrainMCP(store)
+    store.save_chunk(Chunk(node_path="SOURCES/BofA", content="mutable fact", immutable=False))
+    store.save_chunk(Chunk(node_path="SOURCES/BofA/sub", content="immutable artifact", immutable=True))
+
+    resp = _call(mcp, "mark_stale", {
+        "path": "SOURCES/BofA",
+        "recursive": True,
+        "include_immutable": True,
+        "reason": "wiping for re-ingestion",
+    })
+    result = json.loads(_text(resp))
+
+    assert result["marked"] == 2
+    all_chunks = (
+        store.get_chunks_by_path("SOURCES/BofA") +
+        store.get_chunks_by_path("SOURCES/BofA/sub")
+    )
+    assert all(c.status == "stale" for c in all_chunks)
+
+
 def test_batch_append_uses_atomic_transaction_sqlite(tmp_path):
     store = SQLiteStore(tmp_path)
     mcp = VerticalBrainMCP(store)

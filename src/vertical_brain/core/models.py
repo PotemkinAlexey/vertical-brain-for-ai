@@ -141,6 +141,7 @@ class StorageOperation(JsonSerializable):
     reasoning_summary: str = ""
     current_silver_id: str | None = None
     source_chunk_ids: list[str] = field(default_factory=list)
+    force_immutable: bool = False  # override immutable protection for mark_stale (wipe/re-ingestion)
 
 
 @dataclass
