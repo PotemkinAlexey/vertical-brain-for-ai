@@ -85,6 +85,7 @@ class Chunk:
     valid_from: str = field(default_factory=utc_now)
     valid_to: str | None = None
     decay_factor: float = 1.0
+    immutable: bool = False
 
     def __post_init__(self) -> None:
         if not self.content_hash:
@@ -110,6 +111,7 @@ class ChunkInput:
     source: str = "model"
     confidence: float = 1.0
     lineage: list[str] = field(default_factory=list)
+    immutable: bool = False
 
 
 @dataclass

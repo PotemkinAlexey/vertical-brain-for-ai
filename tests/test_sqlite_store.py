@@ -314,3 +314,17 @@ def test_sqlite_fts_does_not_leak_superseded_chunks(tmp_path):
 
     results = store.search("unique telltale phrase", limit=10)
     assert not any(r.chunk_id == telltale.id for r in results)
+
+
+def test_vacuum_skips_immutable_chunks(tmp_path):
+    store = SQLiteStore(tmp_path)
+    # Write an immutable stale chunk directly (force status via update_chunk)
+    chunk = Chunk(node_path="WORK/A", content="immutable spec", layer="bronze",
+                  status="stale", immutable=True)
+    store.ensure_node("WORK/A")
+    store.save_chunk(chunk)
+    result = store.vacuum(retention_hours=0, dry_run=False, force=True)
+    # Immutable chunk must not appear in deleted count
+    assert result["deleted_chunks"] == 0
+    remaining = store.get_chunks_by_path("WORK/A", include_children=False)
+    assert any(c.id == chunk.id for c in remaining)

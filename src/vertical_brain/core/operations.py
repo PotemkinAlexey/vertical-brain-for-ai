@@ -175,7 +175,11 @@ class StorageOperationExecutor:
         if operation.operation == "append_chunk":
             assert operation.chunk is not None
             candidate = self._chunk_from_input(operation.target_path, operation.chunk)
-            if candidate.layer == "bronze" and self.store.has_active_chunk_with_hash(
+            is_bronze = candidate.layer == "bronze"
+            is_immutable = getattr(candidate, "immutable", False)
+
+            # Exact-hash dedup: skip for immutable (silently allow duplicate)
+            if is_bronze and not is_immutable and self.store.has_active_chunk_with_hash(
                 operation.target_path, candidate.content_hash
             ):
                 raise ValueError(
@@ -202,13 +206,13 @@ class StorageOperationExecutor:
                 for link_input in operation.links
             ]
             self._mark_ancestors_dirty(operation.target_path)
-            is_bronze = candidate.layer == "bronze"
+            # Similar-bronze and chunk_too_large: skip for immutable chunks
             similar = (
                 self._find_similar_bronze(operation.target_path, candidate.content, exclude_id=chunk.id)
-                if is_bronze
+                if is_bronze and not is_immutable
                 else []
             )
-            too_large = is_bronze and len(candidate.content) > _BRONZE_MAX_CHARS
+            too_large = is_bronze and not is_immutable and len(candidate.content) > _BRONZE_MAX_CHARS
             return OperationResult(
                 operation=operation.operation,
                 target_path=operation.target_path,
@@ -415,6 +419,7 @@ class StorageOperationExecutor:
             source=chunk_input.source,
             confidence=chunk_input.confidence,
             lineage=chunk_input.lineage,
+            immutable=getattr(chunk_input, "immutable", False),
         )
 
     def _find_similar_bronze(
@@ -512,6 +517,11 @@ class StorageOperationExecutor:
                 raise ValueError(f"Chunk not found: {chunk_id}")
             if chunk.node_path != operation.target_path:
                 raise ValueError(f"Chunk {chunk_id} does not belong to {operation.target_path}")
+            if getattr(chunk, "immutable", False):
+                raise ValueError(
+                    f"Cannot mark immutable chunk '{chunk_id}' as {status} — immutable artifacts are "
+                    f"protected from modification. To replace this artifact, create a new chunk and link to it."
+                )
             chunk.status = status
             chunk.updated_at = utc_now()
             if status in ("stale", "superseded", "legacy", "contradicted"):
@@ -801,9 +811,12 @@ def operation_from_dict(payload: Mapping[str, Any]) -> StorageOperation:
 def _chunk_input_from_dict(payload: object) -> ChunkInput:
     if not isinstance(payload, Mapping):
         raise ValueError("StorageOperation.chunk must be an object")
-    unknown = set(payload) - {"content", "layer", "content_type", "source", "confidence", "lineage"}
+    unknown = set(payload) - {"content", "layer", "content_type", "source", "confidence", "lineage", "immutable"}
     if unknown:
         raise ValueError(f"Unknown ChunkInput fields: {', '.join(sorted(unknown))}")
+    immutable_val = payload.get("immutable", False)
+    if not isinstance(immutable_val, bool):
+        raise ValueError("immutable must be a boolean")
     return ChunkInput(
         content=_string_value(payload, "content"),
         layer=_string_value(payload, "layer", default="bronze"),
@@ -811,6 +824,7 @@ def _chunk_input_from_dict(payload: object) -> ChunkInput:
         source=_string_value(payload, "source", default="model"),
         confidence=_number_value(payload, "confidence", default=1.0),
         lineage=[_string_item(item, "lineage") for item in _list_value(payload, "lineage", default=[])],
+        immutable=immutable_val,
     )
 
 

@@ -172,6 +172,7 @@ class SQLiteStore:
             "valid_from": "ALTER TABLE chunks ADD COLUMN valid_from TEXT NOT NULL DEFAULT ''",
             "valid_to": "ALTER TABLE chunks ADD COLUMN valid_to TEXT",
             "decay_factor": "ALTER TABLE chunks ADD COLUMN decay_factor REAL NOT NULL DEFAULT 1.0",
+            "immutable": "ALTER TABLE chunks ADD COLUMN immutable INTEGER NOT NULL DEFAULT 0",
         }
         changed = False
         for column, ddl in migrations.items():
@@ -438,6 +439,7 @@ class SQLiteStore:
             FROM chunks
             WHERE status IN ({placeholders})
               AND COALESCE(NULLIF(valid_to, ''), updated_at, created_at) <= ?
+              AND immutable = 0
             ORDER BY node_path ASC, created_at ASC
             """,
             (*self.VACUUM_INACTIVE_STATUSES, cutoff),
@@ -515,12 +517,14 @@ class SQLiteStore:
             INSERT INTO chunks (
                 id, node_path, content, layer, content_type, status, source,
                 confidence, lineage_json, created_at, updated_at,
-                chunk_key, content_hash, supersedes, valid_from, valid_to, decay_factor
+                chunk_key, content_hash, supersedes, valid_from, valid_to, decay_factor,
+                immutable
             )
             VALUES (
                 :id, :node_path, :content, :layer, :content_type, :status, :source,
                 :confidence, :lineage_json, :created_at, :updated_at,
-                :chunk_key, :content_hash, :supersedes, :valid_from, :valid_to, :decay_factor
+                :chunk_key, :content_hash, :supersedes, :valid_from, :valid_to, :decay_factor,
+                :immutable
             )
             """,
             row,
@@ -572,7 +576,8 @@ class SQLiteStore:
                 supersedes = :supersedes,
                 valid_from = :valid_from,
                 valid_to = :valid_to,
-                decay_factor = :decay_factor
+                decay_factor = :decay_factor,
+                immutable = :immutable
             WHERE id = :id
             """,
             row,
@@ -940,6 +945,7 @@ class SQLiteStore:
         row["lineage_json"] = json.dumps(chunk.lineage, ensure_ascii=False)
         del row["lineage"]
         row["supersedes"] = json.dumps(chunk.supersedes, ensure_ascii=False)
+        row["immutable"] = int(chunk.immutable)
         return row
 
     def _chunk_from_row(self, row: sqlite3.Row) -> Chunk:
@@ -955,6 +961,7 @@ class SQLiteStore:
         if payload.get("content_hash") is None:
             payload["content_hash"] = ""
         payload.setdefault("decay_factor", 1.0)
+        payload["immutable"] = bool(payload.get("immutable", 0))
         return Chunk(**payload)
 
     def _index_chunk(self, chunk: Chunk) -> None:

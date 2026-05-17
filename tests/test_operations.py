@@ -768,3 +768,76 @@ def test_append_gold_aspect_succeeds_after_update_silver(tmp_path):
     ))
     gold = [c for c in store.get_chunks_by_path("WORK/A") if c.layer == "gold" and c.status == "active"]
     assert len(gold) == 1
+
+
+def test_immutable_chunk_skips_chunk_too_large(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    big = "word " * 200  # >600 chars
+    result = executor.apply(StorageOperation(
+        operation="append_chunk", target_path="WORK/A",
+        chunk=ChunkInput(content=big, layer="bronze", immutable=True),
+    ))
+    assert result.chunk_too_large is False
+    assert result.chunk_id is not None
+
+
+def test_immutable_chunk_skips_similar_bronze_warning(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    executor.apply(StorageOperation(
+        operation="append_chunk", target_path="WORK/A",
+        chunk=ChunkInput(content="SWIFT MT103 field 32A amount currency date format", layer="bronze"),
+    ))
+    result = executor.apply(StorageOperation(
+        operation="append_chunk", target_path="WORK/A",
+        chunk=ChunkInput(content="SWIFT MT103 field 32A amount currency date format spec", layer="bronze", immutable=True),
+    ))
+    assert result.similar_bronze == []
+
+
+def test_immutable_chunk_cannot_be_marked_stale(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    result = executor.apply(StorageOperation(
+        operation="append_chunk", target_path="WORK/A",
+        chunk=ChunkInput(content="SWIFT schema exact spec", layer="bronze", immutable=True),
+    ))
+    chunk_id = result.chunk_id
+    with pytest.raises(ValueError, match="immutable"):
+        executor.apply(StorageOperation(
+            operation="mark_stale", target_path="WORK/A",
+            chunk_ids=[chunk_id],
+        ))
+
+
+def test_normal_chunk_mark_stale_unaffected(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    result = executor.apply(StorageOperation(
+        operation="append_chunk", target_path="WORK/A",
+        chunk=ChunkInput(content="regular fact", layer="bronze"),
+    ))
+    executor.apply(StorageOperation(
+        operation="mark_stale", target_path="WORK/A",
+        chunk_ids=[result.chunk_id],
+    ))
+    chunks = store.get_chunks_by_path("WORK/A")
+    assert any(c.id == result.chunk_id and c.status == "stale" for c in chunks)
+
+
+def test_immutable_chunk_skips_exact_hash_dedup_block(tmp_path):
+    """Writing same content twice with immutable=True must not raise — return existing chunk."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    content = "SWIFT MT103 canonical schema"
+    executor.apply(StorageOperation(
+        operation="append_chunk", target_path="WORK/A",
+        chunk=ChunkInput(content=content, layer="bronze", immutable=True),
+    ))
+    # Second write with same content — should not raise
+    result2 = executor.apply(StorageOperation(
+        operation="append_chunk", target_path="WORK/A",
+        chunk=ChunkInput(content=content, layer="bronze", immutable=True),
+    ))
+    assert result2.status == "applied"

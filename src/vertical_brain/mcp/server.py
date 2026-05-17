@@ -187,6 +187,14 @@ _TOOLS: list[dict[str, Any]] = [
                 },
                 "source": {"type": "string", "description": "Who wrote this, e.g. 'model', 'user'"},
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "immutable": {
+                    "type": "boolean",
+                    "description": (
+                        "Mark this Bronze chunk as immutable (default false). "
+                        "Immutable chunks are reference artifacts (SWIFT schemas, specs, legal text) "
+                        "that bypass Bronze dedup guards and are protected from mark_stale/supersede."
+                    ),
+                },
             },
             "required": ["path", "content"],
         },
@@ -260,6 +268,10 @@ _TOOLS: list[dict[str, Any]] = [
                             "content_type": {"type": "string"},
                             "source": {"type": "string"},
                             "confidence": {"type": "number"},
+                            "immutable": {
+                                "type": "boolean",
+                                "description": "Mark this chunk as immutable (default false).",
+                            },
                         },
                         "required": ["path", "content"],
                     },
@@ -563,6 +575,7 @@ class VerticalBrainMCP:
                     content_type=args.get("content_type", "fact"),
                     source=args.get("source", self._client_source),
                     confidence=args.get("confidence", 1.0),
+                    immutable=bool(args.get("immutable", False)),
                 ),
                 reasoning_summary=args.get("reasoning_summary", "Appended via MCP append_chunk."),
             )
@@ -633,6 +646,7 @@ class VerticalBrainMCP:
                             content_type=item.get("content_type", "fact"),
                             source=item.get("source", self._client_source),
                             confidence=item.get("confidence", 1.0),
+                            immutable=bool(item.get("immutable", False)),
                         ),
                     )
                     for item in chunks_data

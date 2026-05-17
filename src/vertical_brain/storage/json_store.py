@@ -209,7 +209,7 @@ class JsonStore:
             "node_path", "content", "layer", "content_type", "status", "source",
             "confidence", "lineage", "id", "created_at", "updated_at",
             "chunk_key", "content_hash", "supersedes", "valid_from", "valid_to",
-            "decay_factor",
+            "decay_factor", "immutable",
         }
         data = {k: v for k, v in row.items() if k in known}
         data.setdefault("chunk_key", None)
@@ -218,6 +218,7 @@ class JsonStore:
         data.setdefault("valid_from", row.get("created_at") or "")
         data.setdefault("valid_to", None)
         data.setdefault("decay_factor", 1.0)
+        data.setdefault("immutable", False)
         return Chunk(**data)
 
     def list_links(self) -> list[Link]:
