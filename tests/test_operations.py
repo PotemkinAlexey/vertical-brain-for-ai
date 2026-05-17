@@ -669,6 +669,56 @@ def test_append_chunk_silver_rejected_when_active_silver_exists(tmp_path):
         ))
 
 
+def test_append_bronze_within_size_limit_no_too_large_warning(tmp_path):
+    """A Bronze chunk under 600 chars must not produce chunk_too_large."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    content = "x" * 599
+    result = executor.apply(StorageOperation(
+        operation="append_chunk", target_path="WORK/A",
+        chunk=ChunkInput(content=content, layer="bronze"),
+    ))
+    assert result.chunk_too_large is False
+
+
+def test_append_bronze_exactly_at_limit_no_too_large_warning(tmp_path):
+    """A Bronze chunk of exactly 600 chars is still within the limit."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    result = executor.apply(StorageOperation(
+        operation="append_chunk", target_path="WORK/A",
+        chunk=ChunkInput(content="x" * 600, layer="bronze"),
+    ))
+    assert result.chunk_too_large is False
+
+
+def test_append_bronze_over_limit_sets_chunk_too_large(tmp_path):
+    """A Bronze chunk exceeding 600 chars must set chunk_too_large=True."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    content = "word " * 130  # ~650 chars
+    result = executor.apply(StorageOperation(
+        operation="append_chunk", target_path="WORK/A",
+        chunk=ChunkInput(content=content, layer="bronze"),
+    ))
+    assert result.chunk_too_large is True
+    # Chunk is still written — this is a warning, not a block
+    assert result.chunk_id is not None
+    assert result.status == "applied"
+
+
+def test_append_silver_never_sets_chunk_too_large(tmp_path):
+    """Silver summaries can legitimately be long — chunk_too_large must not fire."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    long_silver = "This is a comprehensive Silver summary. " * 60  # ~2400 chars
+    result = executor.apply(StorageOperation(
+        operation="append_chunk", target_path="WORK/A",
+        chunk=ChunkInput(content=long_silver, layer="silver"),
+    ))
+    assert result.chunk_too_large is False
+
+
 def test_append_gold_aspect_succeeds_after_update_silver(tmp_path):
     store = JsonStore(tmp_path)
     executor = StorageOperationExecutor(store)

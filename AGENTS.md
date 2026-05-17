@@ -76,6 +76,14 @@ result.similar_bronze = [
 
 **Why this matters:** duplicate Bronze chunks make Silver dirty unnecessarily. If you keep Bronze unique, each `update_silver` synthesizes only genuinely new information.
 
+3. **Soft warning — chunk too large.** If the write succeeds but the Bronze content exceeds 600 characters, the response includes `chunk_too_large: true`. This means the chunk likely bundles multiple facts and its embedding will be diluted across unrelated topics, degrading search and routing quality.
+
+```
+result.chunk_too_large = true
+```
+
+**What to do:** split the content into smaller single-fact chunks. Each chunk should express one idea, decision, or observation — independently meaningful and stale-able on its own.
+
 ## Correcting wrong memory
 
 Never delete or overwrite Gold directly. Instead:
@@ -142,9 +150,10 @@ If writing multiple Bronze chunks at once, use `batch_append`, then call `update
 
 9. **If `append_chunk` is rejected with "identical content already exists"** — do not retry with the same content. Either the fact is already recorded (do nothing) or it changed (call `mark_stale` on the old chunk first, then write the corrected version).
 10. **If `append_chunk` returns `similar_bronze`** — you must review and decide. Do not ignore the warning. Mark stale only if the older chunk is actually superseded or contradicted by the new fact. If both chunks are still valid (different aspects of the same topic), keep both and mention this in the Silver update.
+11. **If `append_chunk` returns `chunk_too_large: true`** — split the content into smaller single-fact chunks. Write each fact as a separate `append_chunk` call, then call `update_silver` once with all of them incorporated. A chunk that embeds poorly is invisible to routing and search.
 
 ### Destructive operations
 
-11. **Never run `vacuum` with `dry_run: false`** unless the user explicitly asks to delete data.
-12. **Never run `rename_namespace`** unless the user explicitly requests it — it is irreversible without manual intervention.
-13. **Never call global `optimize` (no path) speculatively** — only at session end or on explicit request.
+12. **Never run `vacuum` with `dry_run: false`** unless the user explicitly asks to delete data.
+13. **Never run `rename_namespace`** unless the user explicitly requests it — it is irreversible without manual intervention.
+14. **Never call global `optimize` (no path) speculatively** — only at session end or on explicit request.

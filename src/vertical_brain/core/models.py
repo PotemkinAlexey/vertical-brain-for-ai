@@ -175,6 +175,10 @@ class OperationResult(JsonSerializable):
     # Populated when a Bronze chunk was written but similar active Bronze chunks already exist.
     # Not an error — agent should review and consider mark_stale on the similar chunks.
     similar_bronze: list["SearchResult"] = field(default_factory=list)
+    # True when a Bronze chunk was written but its content exceeds the recommended size for
+    # quality embeddings. Not an error — but the agent should split the content into
+    # smaller single-fact chunks so each one embeds meaningfully.
+    chunk_too_large: bool = False
 
 
 @dataclass

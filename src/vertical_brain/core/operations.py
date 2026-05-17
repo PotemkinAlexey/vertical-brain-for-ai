@@ -46,6 +46,12 @@ VALID_OPERATIONS = set(get_args(OperationType))
 # path-component overlaps (e.g. "data" matching "DataArt") are filtered out.
 _SIMILAR_BRONZE_MIN_SCORE = 8
 
+# Bronze chunks larger than this many characters produce a chunk_too_large warning.
+# A well-formed "one fact per chunk" Bronze entry is typically 100–400 chars.
+# Beyond 600 chars the chunk likely bundles multiple facts and its embedding will
+# be diluted across unrelated topics, degrading routing and search quality.
+_BRONZE_MAX_CHARS = 600
+
 
 def _next_overflow_path(path: str) -> str:
     parent, _, name = path.rpartition("/")
@@ -192,11 +198,13 @@ class StorageOperationExecutor:
                 for link_input in operation.links
             ]
             self._mark_ancestors_dirty(operation.target_path)
+            is_bronze = candidate.layer == "bronze"
             similar = (
                 self._find_similar_bronze(operation.target_path, candidate.content, exclude_id=chunk.id)
-                if candidate.layer == "bronze"
+                if is_bronze
                 else []
             )
+            too_large = is_bronze and len(candidate.content) > _BRONZE_MAX_CHARS
             return OperationResult(
                 operation=operation.operation,
                 target_path=operation.target_path,
@@ -204,6 +212,7 @@ class StorageOperationExecutor:
                 link_ids=[link.id for link in links],
                 stale_candidates=operation.stale_candidates,
                 similar_bronze=similar,
+                chunk_too_large=too_large,
             )
 
         if operation.operation == "create_link":
