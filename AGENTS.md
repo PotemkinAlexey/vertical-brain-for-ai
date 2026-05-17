@@ -133,6 +133,7 @@ If writing multiple Bronze chunks at once, use `batch_append`, then call `update
 5. **After every Bronze write, update Silver.**
    - If no active Silver exists yet at this namespace, create the first one with `append_chunk(layer="silver")`.
    - If an active Silver already exists, call `read_context` to get its ID, synthesize new Silver (old Silver + new fact), then call `update_silver`. Never leave Bronze orphaned without a Silver update.
+   - For `batch_append`: update Silver **once** after the entire batch succeeds, incorporating all new Bronze facts together. Do not call `update_silver` separately for each chunk.
 6. **Call `read_context` before every `update_silver`.** You must pass `current_silver_id` — the ID of the Silver chunk you are replacing. Never call `update_silver` without having read the current Silver first.
 7. **Never write Gold before Silver.** The infrastructure will reject it. If `append_gold_aspect` fails with "no active Silver found", call `update_silver` first, then retry.
 8. **Never write Gold as the first record of a new idea.** Bronze → Silver → Gold, always in that order.
