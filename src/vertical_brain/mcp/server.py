@@ -193,14 +193,17 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "append_gold_aspect",
         "description": (
-            "Add a semantic label to the Gold chunk of a namespace. "
+            "Add a short semantic routing tag to the Gold chunk of a namespace. "
             "Returns overflow_path if a new sibling namespace was created."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
-                "aspect": {"type": "string"},
+                "aspect": {
+                    "type": "string",
+                    "description": "Short search tag, ideally 30-100 characters.",
+                },
             },
             "required": ["path", "aspect"],
         },
@@ -576,6 +579,8 @@ class VerticalBrainMCP:
             out: dict[str, Any] = {"status": result.status, "path": result.target_path}
             if result.overflow_path:
                 out["overflow_path"] = result.overflow_path
+            if result.aspect_too_long:
+                out["aspect_too_long"] = True
             return json.dumps(out)
 
         if name == "create_link":
@@ -684,6 +689,8 @@ class VerticalBrainMCP:
                 out["gold_status"] = gold_result.status
                 if gold_result.overflow_path:
                     out["overflow_path"] = gold_result.overflow_path
+                if gold_result.aspect_too_long:
+                    out["aspect_too_long"] = True
             return json.dumps(out)
 
         if name == "update_silver":

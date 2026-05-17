@@ -8,6 +8,20 @@ from vertical_brain.llm.embedding import MockEmbeddingProvider
 from vertical_brain.storage.json_store import JsonStore
 
 
+class KeywordEmbeddingProvider:
+    def __init__(self) -> None:
+        self.seen = []
+
+    def embed(self, text: str):
+        self.seen.append(text)
+        lower = text.lower()
+        return [
+            1.0 if "z-ordering" in lower else 0.0,
+            1.0 if "autoloader" in lower else 0.0,
+            1.0 if "mlflow" in lower else 0.0,
+        ]
+
+
 def _seed_gold(store, path: str, content: str) -> None:
     store.ensure_node(path)
     store.save_chunk(Chunk(node_path=path, content=content, layer="gold", source="model"))
@@ -88,6 +102,27 @@ def test_embedding_router_uses_append_gold_aspect_chunks(tmp_path):
     assert "AutoLoader" in candidates[0].gold_summary
 
 
+def test_embedding_router_scores_each_gold_aspect_independently(tmp_path):
+    from vertical_brain.core.gold import GoldAspect, serialize_gold_aspects
+
+    store = JsonStore(tmp_path)
+    content = serialize_gold_aspects([
+        GoldAspect(text="Delta Z-ordering"),
+        GoldAspect(text="AutoLoader schema drift"),
+        GoldAspect(text="MLflow tracking"),
+    ])
+    _seed_gold(store, "WORK/DataArt/Databricks", content)
+    provider = KeywordEmbeddingProvider()
+
+    candidates = EmbeddingRouter(store, provider).find_candidates("where to store Z-ordering notes")
+
+    assert candidates[0].path == "WORK/DataArt/Databricks"
+    assert candidates[0].score == pytest.approx(1.0)
+    assert candidates[0].gold_summary == "Delta Z-ordering"
+    assert "Delta Z-ordering" in provider.seen
+    assert "Delta Z-ordering | AutoLoader schema drift | MLflow tracking" not in provider.seen
+
+
 def test_embedding_router_finds_namespace_with_gold_chunk(tmp_path):
     store = JsonStore(tmp_path)
     _seed_gold(store, "WORK/DataArt/Databricks", "Databricks Delta Lake streaming")
@@ -165,7 +200,6 @@ def test_router_path_fallback_matches_structuredstreaming_namespace(tmp_path, qu
 
 def test_router_embeds_clean_gold_text_not_raw_json(tmp_path):
     """Router gold_summary must contain clean aspect text, not JSON structure or UUIDs."""
-    import json
     store = JsonStore(tmp_path)
     store.save_chunk(Chunk(node_path="WORK/DataArt", content="silver summary", layer="silver"))
     executor = StorageOperationExecutor(store)
@@ -184,8 +218,7 @@ def test_router_embeds_clean_gold_text_not_raw_json(tmp_path):
 
 
 def test_router_gold_embed_text_excludes_uuid_and_timestamps(tmp_path):
-    """Gold chunk stored as v2 JSON must be embedded as clean joined text."""
-    import json
+    """Gold chunk stored as v2 JSON must expose clean aspect text."""
     from vertical_brain.core.gold import serialize_gold_aspects, GoldAspect
     from vertical_brain.core.models import Chunk
 
@@ -203,7 +236,6 @@ def test_router_gold_embed_text_excludes_uuid_and_timestamps(tmp_path):
 
     assert len(candidates) == 1
     summary = candidates[0].gold_summary
-    assert "Fact one about streaming" in summary
-    assert "Fact two about Delta Lake" in summary
+    assert summary in {"Fact one about streaming", "Fact two about Delta Lake"}
     assert "aaaaaaaa" not in summary
     assert "bbbbbbbb" not in summary

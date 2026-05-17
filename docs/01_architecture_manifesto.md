@@ -49,16 +49,16 @@ Created once with `append_chunk(layer=silver)`. All subsequent updates use `upda
 
 ### Gold
 
-Stable orientation — rarely changes:
+Stable search index — short routing anchors that help find the right namespace:
 
-- summaries
-- decisions
-- architecture rules
-- durable facts
-- exam cheat sheets
-- reusable prompts
+- semantic tags
+- durable query labels
+- architecture-rule anchors
+- decision lookup labels
+- reusable prompt labels
 
 Requires an active Silver to exist at the same namespace. Written only via `append_gold_aspect`.
+Silver holds the content; Gold holds many short, semantically distinct aspects that are embedded individually for routing.
 
 ## Read path
 
@@ -95,6 +95,7 @@ Invariants enforced at the executor level:
 - Similar Bronze triggers a soft warning (similar_bronze in OperationResult).
 - append_chunk(layer=silver) is blocked if an active Silver already exists.
 - append_gold_aspect is blocked if no active Silver exists.
+- Long Gold aspects are written but return a soft warning (aspect_too_long in OperationResult).
 
 ## Optimize process
 

@@ -124,6 +124,20 @@ Never write directly to Gold as the first record of a new idea.
 Never rely on the optimizer to produce Silver — it only does mechanical text compaction.
 If writing multiple Bronze chunks at once, use `batch_append`, then call `update_silver` once with all new facts incorporated.
 
+## Gold aspect guidance
+
+Gold is a search index, not a knowledge summary. Silver holds the content; Gold holds short semantic anchors that help route future queries to the right namespace.
+
+A Gold aspect should answer: **"По какому запросу должен находиться этот namespace?"** Prefer many short, precise aspects over one long overview. Target ~30–100 characters per aspect. Avoid broad paragraphs like "what I know about X"; write tags like "Delta Lake Z-ordering lookup" or "AutoLoader schema drift handling".
+
+`append_gold_aspect` returns a soft warning when an aspect is too long:
+
+```
+result.aspect_too_long = true
+```
+
+**What to do:** split the long aspect into smaller, semantically distinct search tags and append them separately.
+
 ## User's namespace conventions
 
 - `PROJECTS/*` — projects and technical details
@@ -151,9 +165,10 @@ If writing multiple Bronze chunks at once, use `batch_append`, then call `update
 9. **If `append_chunk` is rejected with "identical content already exists"** — do not retry with the same content. Either the fact is already recorded (do nothing) or it changed (call `mark_stale` on the old chunk first, then write the corrected version).
 10. **If `append_chunk` returns `similar_bronze`** — you must review and decide. Do not ignore the warning. Mark stale only if the older chunk is actually superseded or contradicted by the new fact. If both chunks are still valid (different aspects of the same topic), keep both and mention this in the Silver update.
 11. **If `append_chunk` returns `chunk_too_large: true`** — split the content into smaller single-fact chunks. Write each fact as a separate `append_chunk` call, then call `update_silver` once with all of them incorporated. A chunk that embeds poorly is invisible to routing and search.
+12. **If `append_gold_aspect` returns `aspect_too_long: true`** — split it into shorter search tags. Gold aspects should be routing anchors, not summaries.
 
 ### Destructive operations
 
-12. **Never run `vacuum` with `dry_run: false`** unless the user explicitly asks to delete data.
-13. **Never run `rename_namespace`** unless the user explicitly requests it — it is irreversible without manual intervention.
-14. **Never call global `optimize` (no path) speculatively** — only at session end or on explicit request.
+13. **Never run `vacuum` with `dry_run: false`** unless the user explicitly asks to delete data.
+14. **Never run `rename_namespace`** unless the user explicitly requests it — it is irreversible without manual intervention.
+15. **Never call global `optimize` (no path) speculatively** — only at session end or on explicit request.

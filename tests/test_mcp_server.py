@@ -112,6 +112,17 @@ def test_append_gold_aspect_writes_gold_chunk(tmp_path):
     assert parse_gold_content(gold[0].content) == ["Delta migration"]
 
 
+def test_append_gold_aspect_reports_aspect_too_long(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="silver summary", layer="silver"))
+
+    resp = _call(mcp, "append_gold_aspect", {"path": "WORK/DataArt", "aspect": "x" * 151})
+    result = json.loads(_text(resp))
+
+    assert result["status"] == "applied"
+    assert result["aspect_too_long"] is True
+
+
 def test_search_returns_ranked_results(tmp_path):
     mcp, store = _mcp(tmp_path)
     store.save_chunk(Chunk(node_path="WORK/DataArt", content="Delta Lake streaming ingestion"))
@@ -795,4 +806,3 @@ def test_server_module_docstring_does_not_mention_content_length():
         "server.py docstring must not mention Content-Length — "
         "the transport is newline-delimited JSON, not LSP framing."
     )
-

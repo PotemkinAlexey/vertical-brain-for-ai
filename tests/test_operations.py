@@ -242,13 +242,46 @@ def test_append_gold_aspect_creates_gold_chunk_and_extends_on_fit(tmp_path):
     executor = StorageOperationExecutor(store)
     store.save_chunk(Chunk(node_path="WORK/DataArt", content="silver summary", layer="silver"))
 
-    executor.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/DataArt", gold_aspect="migration"))
-    executor.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/DataArt", gold_aspect="clusters"))
+    first = executor.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/DataArt", gold_aspect="migration"))
+    second = executor.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/DataArt", gold_aspect="clusters"))
 
+    assert first.aspect_too_long is False
+    assert second.aspect_too_long is False
     gold = [c for c in store.get_chunks_by_path("WORK/DataArt") if c.layer == "gold" and c.status == "active"]
     assert len(gold) == 1
     from vertical_brain.core.gold import parse_gold_content
     assert parse_gold_content(gold[0].content) == ["migration", "clusters"]
+
+
+def test_append_gold_aspect_over_limit_sets_aspect_too_long(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="silver summary", layer="silver"))
+
+    result = executor.apply(StorageOperation(
+        operation="append_gold_aspect",
+        target_path="WORK/DataArt",
+        gold_aspect="x" * 151,
+    ))
+
+    assert result.aspect_too_long is True
+    assert result.status == "applied"
+    gold = [c for c in store.get_chunks_by_path("WORK/DataArt") if c.layer == "gold" and c.status == "active"]
+    assert len(gold) == 1
+
+
+def test_append_gold_aspect_exactly_at_limit_no_aspect_too_long(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="silver summary", layer="silver"))
+
+    result = executor.apply(StorageOperation(
+        operation="append_gold_aspect",
+        target_path="WORK/DataArt",
+        gold_aspect="x" * 150,
+    ))
+
+    assert result.aspect_too_long is False
 
 
 def test_append_gold_aspect_creates_overflow_sibling_when_full(tmp_path):

@@ -179,6 +179,9 @@ class OperationResult(JsonSerializable):
     # quality embeddings. Not an error — but the agent should split the content into
     # smaller single-fact chunks so each one embeds meaningfully.
     chunk_too_large: bool = False
+    # True when a Gold aspect was written but is longer than the recommended size for
+    # precise routing. Not an error — Gold aspects are search tags and should stay short.
+    aspect_too_long: bool = False
 
 
 @dataclass

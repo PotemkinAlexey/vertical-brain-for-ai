@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from vertical_brain.core.gold import gold_embed_text
+from vertical_brain.core.gold import parse_gold_content
 from vertical_brain.core.models import EmbeddingRouteCandidate
 from vertical_brain.llm.embedding import EmbeddingProvider, cosine_similarity
 
@@ -52,7 +52,7 @@ def _path_score(query_tokens: set[str], path: str) -> float:
 
 
 class EmbeddingRouter:
-    """Routes text to namespaces by comparing against Gold chunk embeddings.
+    """Routes text to namespaces by comparing against individual Gold aspects.
 
     Fallback: namespaces with no Gold chunk can still appear as candidates
     based on lexical path/name overlap with the query.  Semantic Gold scores
@@ -73,7 +73,7 @@ class EmbeddingRouter:
         query_vec = self._provider.embed(text)
         query_tokens = _path_tokens(text)
 
-        # --- semantic scoring against active Gold chunks ---
+        # --- semantic scoring against active Gold aspects ---
         gold_chunks = [
             c for c in self._store.list_chunks()  # type: ignore[attr-defined]
             if c.layer == "gold" and c.status == "active"
@@ -81,15 +81,15 @@ class EmbeddingRouter:
 
         best: dict[str, tuple[float, str]] = {}
         for chunk in gold_chunks:
-            # Embed clean aspect text, not the raw JSON (which contains UUIDs and
-            # ISO timestamps that dilute the semantic signal).
-            embed_text = gold_embed_text(chunk.content)
-            if embed_text not in self._cache:
-                self._cache[embed_text] = self._provider.embed(embed_text)
-            sim = cosine_similarity(query_vec, self._cache[embed_text])
-            path = chunk.node_path
-            if path not in best or sim > best[path][0]:
-                best[path] = (sim, embed_text)
+            # Gold is an index: each aspect is a short independent routing anchor.
+            # Embedding the joined chunk would average unrelated topics together.
+            for aspect_text in _gold_aspect_texts(chunk.content):
+                if aspect_text not in self._cache:
+                    self._cache[aspect_text] = self._provider.embed(aspect_text)
+                sim = cosine_similarity(query_vec, self._cache[aspect_text])
+                path = chunk.node_path
+                if path not in best or sim > best[path][0]:
+                    best[path] = (sim, aspect_text)
 
         # --- path fallback for nodes with no Gold chunk ---
         gold_paths = set(best.keys())
@@ -107,3 +107,7 @@ class EmbeddingRouter:
         ]
         candidates.sort(key=lambda c: (-c.score, c.path))
         return candidates[:limit]
+
+
+def _gold_aspect_texts(content: str) -> list[str]:
+    return [text.strip() for text in parse_gold_content(content) if text.strip()]

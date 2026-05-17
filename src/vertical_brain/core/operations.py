@@ -52,6 +52,10 @@ _SIMILAR_BRONZE_MIN_SCORE = 8
 # be diluted across unrelated topics, degrading routing and search quality.
 _BRONZE_MAX_CHARS = 600
 
+# Gold aspects are routing anchors, not summaries. Longer aspects still get written,
+# but the warning tells agents to split them into shorter search tags.
+_GOLD_ASPECT_MAX_CHARS = 150
+
 
 def _next_overflow_path(path: str) -> str:
     parent, _, name = path.rpartition("/")
@@ -242,6 +246,7 @@ class StorageOperationExecutor:
         if operation.operation == "append_gold_aspect":
             assert operation.gold_aspect is not None
             overflow_path = self._apply_append_gold_aspect(operation.target_path, operation.gold_aspect)
+            aspect_too_long = len(operation.gold_aspect.strip()) > _GOLD_ASPECT_MAX_CHARS
             self._mark_ancestors_dirty(operation.target_path)
             if overflow_path is not None:
                 self._mark_ancestors_dirty(overflow_path)
@@ -249,6 +254,7 @@ class StorageOperationExecutor:
                 operation=operation.operation,
                 target_path=operation.target_path,
                 overflow_path=overflow_path,
+                aspect_too_long=aspect_too_long,
             )
 
         if operation.operation == "rename_namespace":

@@ -156,14 +156,14 @@ Silver and Gold are exempt from both checks.
 
 ### `append_gold_aspect`
 
-Add or refresh a semantic label in the Gold summary of a namespace. Exact-text duplicates refresh `updated_at` without creating a new aspect. Returns `overflow_path` if a new sibling namespace was created (when the 20-aspect limit is reached).
+Add or refresh a short semantic routing tag in the Gold index of a namespace. Exact-text duplicates refresh `updated_at` without creating a new aspect. Returns `overflow_path` if a new sibling namespace was created (when the 20-aspect limit is reached). Returns `aspect_too_long: true` if the aspect exceeds 150 characters.
 
 > **Prerequisite:** An active Silver chunk must exist at `path`. Call `update_silver` first if it doesn't.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `path` | string | **required** Target namespace |
-| `aspect` | string | **required** The semantic label text |
+| `aspect` | string | **required** Short search tag; target ~30–100 characters |
 
 > **Naming note:** This MCP tool accepts the argument as `aspect`. The underlying `StorageOperation` field is `gold_aspect`. When building operation batches for the `operations` tool or `vb operation apply`, use `gold_aspect`.
 

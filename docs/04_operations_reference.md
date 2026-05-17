@@ -134,25 +134,39 @@ Replace the active Silver summary for a namespace atomically. Supersedes the old
 
 > **Prerequisite:** An active Silver chunk must exist at `target_path`. If none is found, the operation is rejected with a `ValueError` instructing you to call `update_silver` first.
 
-Add or refresh a semantic label in the Gold summary of a namespace.
+Add or refresh a short semantic routing tag in the Gold index of a namespace.
 
 - Exact-text duplicates refresh `updated_at` without creating a new aspect
 - Each aspect gets a stable UUID that persists across rewrites
 - Max 20 aspects per node; overflow creates a sibling namespace (`{path}_2`, `{path}_3`, …)
+- Aspects are embedded individually by `EmbeddingRouter`; use precise search tags, not summaries
+- Aspects longer than 150 characters are written but return `aspect_too_long: true`
 
 ```json
 {
   "operation": "append_gold_aspect",
   "target_path": "WORK/DataArt/Databricks",
-  "gold_aspect": "Delta Lake Z-ordering reduces scan range by clustering rows on selected columns.",
-  "reasoning_summary": "Stable Gold label for Z-ordering knowledge."
+  "gold_aspect": "Delta Lake Z-ordering lookup",
+  "reasoning_summary": "Stable Gold routing tag for Z-ordering knowledge."
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `target_path` | string | **required** Namespace to update |
-| `gold_aspect` | string | **required** The semantic label text |
+| `gold_aspect` | string | **required** Short search tag; target ~30–100 characters |
+
+**Result warnings:**
+
+```json
+{
+  "operation": "append_gold_aspect",
+  "status": "applied",
+  "aspect_too_long": true
+}
+```
+
+If `aspect_too_long` is true, split the aspect into smaller, semantically distinct search tags and append them separately.
 
 > **MCP vs StorageOperation naming:** The MCP `append_gold_aspect` tool accepts the argument as `aspect`, but the underlying `StorageOperation` field is `gold_aspect`. When building operation batches directly (e.g. via the `operations` MCP tool or `vb operation apply`), use `gold_aspect`.
 
