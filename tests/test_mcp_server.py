@@ -50,7 +50,7 @@ def test_tools_list_contains_expected_tools(tmp_path):
         "search", "search_semantic", "context_search", "context_search_semantic",
         "route", "append_chunk", "append_gold_aspect", "create_link",
         "mark_stale", "batch_append", "session_end", "update_silver", "optimize",
-        "operations", "doctor", "vacuum", "ingest_file",
+        "operations", "doctor", "vacuum", "ingest_file", "ingest_url",
     }
 
 
@@ -861,6 +861,116 @@ def test_ingest_file_hash_is_sha256(tmp_path):
     text = _text(resp)
 
     assert expected_hash in text
+
+
+def test_ingest_url_fetches_and_returns_header(tmp_path):
+    """ingest_url fetches a URL, computes sha256, returns metadata header with content."""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import threading
+    import hashlib
+
+    body = b"Field 32A: value date, currency, amount."
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):  # silence test output
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    mcp, _ = _mcp(tmp_path)
+    url = f"http://127.0.0.1:{port}/docs/MT103"
+    try:
+        resp = _call(mcp, "ingest_url", {"url": url, "authority": "SWIFT", "doc_slug": "MT103"})
+    finally:
+        server.shutdown()
+
+    text = _text(resp)
+    expected_hash = hashlib.sha256(body).hexdigest()
+
+    assert "SOURCES/SWIFT/MT103" in text
+    assert expected_hash in text
+    assert "Field 32A" in text            # content embedded
+    assert "AGENTS.md" in text
+
+
+def test_ingest_url_strips_html_tags(tmp_path):
+    """ingest_url strips HTML tags, leaving only visible text."""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import threading
+
+    html_body = b"<html><head><title>T</title><script>x=1</script></head><body><h1>Hello</h1><p>World</p></body></html>"
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(html_body)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    mcp, _ = _mcp(tmp_path)
+    try:
+        resp = _call(mcp, "ingest_url", {"url": f"http://127.0.0.1:{port}/"})
+    finally:
+        server.shutdown()
+
+    text = _text(resp)
+    assert "Hello" in text
+    assert "World" in text
+    assert "<html>" not in text
+    assert "x=1" not in text             # script tag content stripped
+
+
+def test_ingest_url_rejects_non_http_scheme(tmp_path):
+    mcp, _ = _mcp(tmp_path)
+    resp = _call(mcp, "ingest_url", {"url": "ftp://example.com/doc"})
+    assert resp.get("error") or resp.get("result", {}).get("isError")
+
+
+def test_ingest_url_derives_authority_from_hostname(tmp_path):
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import threading
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"some content")
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    mcp, _ = _mcp(tmp_path)
+    try:
+        resp = _call(mcp, "ingest_url", {"url": f"http://127.0.0.1:{port}/specs/my-doc"})
+    finally:
+        server.shutdown()
+
+    text = _text(resp)
+    assert "SOURCES/127" in text          # hostname used as authority
+    assert "my-doc" in text              # last path segment used as slug
 
 
 def test_server_module_docstring_does_not_mention_content_length():

@@ -291,15 +291,28 @@ deletion.
 
 ### `ingest_file`
 
-Reads a file from disk and returns its content wrapped in a structured agent prompt that guides full ingestion into Vertical Brain. The prompt instructs the agent to register the source under `SOURCES/{authority}/{doc_slug}`, extract atomic Bronze facts, synthesise Silver, handle conflicts, link namespaces, and append Gold aspects.
+Registers a document that was attached to the conversation via the chat UI. Pass the file content and name; the tool computes a SHA-256 fingerprint, derives the suggested `SOURCES` namespace, and returns a compact metadata header. The full ingestion protocol is loaded from `AGENTS.md` at session start — the agent follows it without further instruction.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `file_path` | string (required) | Absolute or relative path to the file to ingest |
-| `authority` | string | Source authority prefix (e.g. `SWIFT`, `ISO`). Defaults to empty string |
-| `doc_slug` | string | Short document identifier. Defaults to the filename without extension |
+| `content` | string (required) | Full text content of the attached file |
+| `file_name` | string (required) | Original file name, e.g. `MT103.txt` |
+| `authority` | string | Issuing authority (e.g. `SWIFT`, `ISO`). Inferred from content if omitted |
+| `doc_slug` | string | Short namespace identifier. Defaults to filename without extension |
 
-The returned text contains file metadata (name, size, SHA-256 hash), embedded ingestion instructions, and the full file content.
+---
+
+### `ingest_url`
+
+Fetches a URL and registers its content as a source document. Supports plain text, Markdown, JSON, YAML, and HTML (tags are stripped with stdlib `html.parser`). No external dependencies.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `url` | string (required) | `http` or `https` URL to fetch |
+| `authority` | string | Issuing authority. Defaults to the URL hostname |
+| `doc_slug` | string | Short namespace identifier. Defaults to the last URL path segment |
+
+The returned text contains the URL, SHA-256 of the fetched content, size, suggested `SOURCES` namespace, and the extracted text. The agent then applies the File Ingestion Protocol from `AGENTS.md`.
 
 ---
 

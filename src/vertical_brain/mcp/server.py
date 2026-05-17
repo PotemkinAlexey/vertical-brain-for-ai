@@ -6,11 +6,14 @@ No external dependencies — pure stdlib.
 from __future__ import annotations
 
 import hashlib
+import html.parser
 import io
 import json
 import os
 import sys
 import traceback
+import urllib.error
+import urllib.request
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -425,6 +428,40 @@ _TOOLS: list[dict[str, Any]] = [
             "required": ["content", "file_name"],
         },
     },
+    {
+        "name": "ingest_url",
+        "description": (
+            "Fetch a URL and register its content as a source document. "
+            "Supports plain text, Markdown, JSON, YAML, and HTML (tags are stripped). "
+            "Computes SHA-256, derives the SOURCES namespace, and returns a metadata header. "
+            "Then apply the File Ingestion Protocol from AGENTS.md to complete the ingestion."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "URL to fetch (http or https).",
+                },
+                "authority": {
+                    "type": "string",
+                    "description": (
+                        "Issuing authority or origin (e.g. 'SWIFT', 'ISO', 'stripe.com'). "
+                        "Used to construct SOURCES/{authority}/{slug}. "
+                        "If omitted, derived from the URL hostname."
+                    ),
+                },
+                "doc_slug": {
+                    "type": "string",
+                    "description": (
+                        "Short identifier for the document (e.g. 'payment-intents-api'). "
+                        "Defaults to the last path segment of the URL."
+                    ),
+                },
+            },
+            "required": ["url"],
+        },
+    },
 ]
 
 _TOOLS_BY_NAME: dict[str, dict[str, Any]] = {tool["name"]: tool for tool in _TOOLS}
@@ -432,30 +469,74 @@ _TOOLS_BY_NAME: dict[str, dict[str, Any]] = {tool["name"]: tool for tool in _TOO
 
 def _build_ingest_header(
     *,
-    file_name: str,
+    label: str,
     file_hash: str,
     file_size: int,
     authority: str,
     doc_slug: str,
+    content: str | None = None,
+    url: str | None = None,
 ) -> str:
-    """Return a compact metadata header for ingest_file.
+    """Return a compact metadata header for ingest_file / ingest_url.
 
     The full ingestion protocol lives in AGENTS.md and is loaded by session_start.
-    This header provides only the file-specific facts the agent needs to execute it.
-    The file content is already in the conversation context (attached via chat).
+    When *content* is provided it is appended (ingest_url fetches remotely).
+    For ingest_file the content is already in the conversation context.
     """
     size_kb = file_size / 1024
     source_ns = f"SOURCES/{authority}/{doc_slug}" if authority else f"SOURCES/{doc_slug}"
+    origin_line = f"url: {url}" if url else "source: chat attachment"
 
-    return f"""# ingest_file — {file_name}
+    header = f"""# ingest — {label}
 
+{origin_line}
 sha256: {file_hash}
 size: {size_kb:.1f} KB
 authority: {authority or "(infer from content)"}
 source_namespace: {source_ns}
 
-Apply the File Ingestion Protocol from AGENTS.md.
-The file content is already in the conversation context above."""
+Apply the File Ingestion Protocol from AGENTS.md."""
+
+    if content is not None:
+        header += f"\n\n---\n\n{content}"
+    else:
+        header += "\nThe file content is already in the conversation context above."
+
+    return header
+
+
+class _HTMLTextExtractor(html.parser.HTMLParser):
+    """Strip HTML tags and return visible text."""
+
+    _SKIP_TAGS = {"script", "style", "noscript", "head"}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._parts: list[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: object) -> None:
+        if tag.lower() in self._SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in self._SKIP_TAGS:
+            self._skip_depth = max(0, self._skip_depth - 1)
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth == 0:
+            stripped = data.strip()
+            if stripped:
+                self._parts.append(stripped)
+
+    def get_text(self) -> str:
+        return "\n".join(self._parts)
+
+
+def _strip_html(raw: str) -> str:
+    extractor = _HTMLTextExtractor()
+    extractor.feed(raw)
+    return extractor.get_text()
 
 
 class MessageParseError(ValueError):
@@ -851,6 +932,9 @@ class VerticalBrainMCP:
         if name == "ingest_file":
             return self._handle_ingest_file(args)
 
+        if name == "ingest_url":
+            return self._handle_ingest_url(args)
+
         raise KeyError(name)
 
     def _handle_ingest_file(self, args: dict[str, Any]) -> str:
@@ -865,11 +949,64 @@ class VerticalBrainMCP:
         doc_slug = raw_slug.strip().replace(" ", "_").replace(".", "_")
 
         return _build_ingest_header(
-            file_name=file_name,
+            label=file_name,
             file_hash=file_hash,
             file_size=file_size,
             authority=authority,
             doc_slug=doc_slug,
+        )
+
+    def _handle_ingest_url(self, args: dict[str, Any]) -> str:
+        import urllib.parse
+
+        url: str = args["url"]
+        if not url.startswith(("http://", "https://")):
+            raise ValueError(f"Only http/https URLs are supported, got: {url!r}")
+
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "vertical-brain/1.0"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw_bytes: bytes = resp.read()
+                content_type: str = resp.headers.get_content_type() or ""
+        except urllib.error.URLError as exc:
+            raise ValueError(f"Failed to fetch URL: {exc}") from exc
+
+        # Decode bytes
+        charset = "utf-8"
+        if hasattr(resp.headers, "get_content_charset"):
+            charset = resp.headers.get_content_charset() or "utf-8"
+        try:
+            raw_text = raw_bytes.decode(charset, errors="replace")
+        except (LookupError, UnicodeDecodeError):
+            raw_text = raw_bytes.decode("utf-8", errors="replace")
+
+        # Strip HTML tags for browser-rendered content
+        if "html" in content_type:
+            content = _strip_html(raw_text)
+        else:
+            content = raw_text
+
+        file_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        file_size = len(content.encode("utf-8"))
+
+        # Derive authority from hostname if not provided
+        parsed = urllib.parse.urlparse(url)
+        authority: str = (args.get("authority") or parsed.hostname or "").strip().replace(" ", "_")
+
+        # Derive slug from last non-empty path segment
+        path_parts = [p for p in parsed.path.split("/") if p]
+        default_slug = path_parts[-1] if path_parts else parsed.hostname or "doc"
+        raw_slug = args.get("doc_slug") or default_slug
+        doc_slug = raw_slug.strip().replace(" ", "_").replace(".", "_")
+
+        return _build_ingest_header(
+            label=url,
+            file_hash=file_hash,
+            file_size=file_size,
+            authority=authority,
+            doc_slug=doc_slug,
+            content=content,
+            url=url,
         )
 
     # ------------------------------------------------------------------
