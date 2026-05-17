@@ -31,13 +31,13 @@ Call `optimize` with a path after writing many chunks to a namespace. Global `op
 
 ## How to read memory
 
-When consuming context, read layers in reverse order — most distilled first:
+When consuming context, read layers in reverse order — most distilled first. **Stop as soon as you have enough to answer.**
 
-1. **Gold first** — authoritative conclusions, stable decisions, orientation. Trust this to answer "what do we know for sure".
-2. **Silver second** — working summaries and refined facts. Use when Gold is not specific enough.
+1. **Gold first** — authoritative conclusions, stable decisions, orientation. If Gold answers the question, stop here.
+2. **Silver second** — working summaries and refined facts. Read only if Gold was too brief or missing. If Silver answers the question, stop here.
 3. **Bronze last** — raw source material. Read only when you need the original wording, a timestamp, or a detail that Silver didn't preserve.
 
-`session_start` already surfaces Gold. Use `read_context` for Silver/Bronze only when you need more depth on a specific namespace.
+`session_start` already surfaces Gold. Call `read_context` only when Gold is insufficient for the task at hand.
 
 ## Mandatory write layering
 
