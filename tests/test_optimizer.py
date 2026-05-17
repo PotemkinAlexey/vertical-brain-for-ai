@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, patch
 
 from vertical_brain.core.models import Chunk
 from vertical_brain.core.optimizer import SimpleOptimizer
+from vertical_brain.llm.embedding import MockEmbeddingProvider
 from vertical_brain.storage.sqlite_store import SQLiteStore
 from vertical_brain.storage.json_store import JsonStore
 
@@ -313,3 +314,125 @@ def test_optimizer_decay_default_rate_1_never_decays(tmp_path):
 
     chunks = store.get_chunks_by_path(path)
     assert all(c.status == "active" for c in chunks)
+
+
+# ── optimize_all ──────────────────────────────────────────────────────────────
+
+def test_optimize_all_deduplicates_across_namespaces(tmp_path):
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="PROJECTS/alpha", content="duplicate fact"))
+    store.save_chunk(Chunk(node_path="PROJECTS/alpha", content="duplicate fact"))
+    store.save_chunk(Chunk(node_path="PROJECTS/beta", content="unique fact"))
+
+    report = build_optimizer(store).optimize_all()
+
+    chunks = store.get_chunks_by_path("PROJECTS/alpha")
+    assert sum(1 for c in chunks if c.status == "active") == 1
+    assert "1 exact duplicates marked stale" in report
+
+
+def test_optimize_all_includes_link_discovery(tmp_path):
+    store = JsonStore(tmp_path)
+    text = "machine learning model training pipeline gradient descent"
+    store.save_chunk(Chunk(node_path="PROJECTS/alpha", content=text, layer="silver"))
+    store.save_chunk(Chunk(node_path="PROJECTS/beta", content=text, layer="silver"))
+
+    provider = MockEmbeddingProvider()
+    optimizer = SimpleOptimizer(
+        store,
+        min_compaction_path_parts=MIN_COMPACTION_PATH_PARTS,
+        embedding_provider=provider,
+        link_similarity_threshold=0.5,
+    )
+    report = optimizer.optimize_all()
+
+    assert store.list_links()
+    assert "link(s) created" in report
+
+
+# ── discover_links ─────────────────────────────────────────────────────────────
+
+def test_discover_links_skips_without_provider(tmp_path):
+    store = JsonStore(tmp_path)
+    result = build_optimizer(store).discover_links()
+    assert "skipped" in result.lower()
+
+
+def test_discover_links_creates_link_for_similar_silver_chunks(tmp_path):
+    store = JsonStore(tmp_path)
+    # Two Silver chunks in different namespaces with very similar content
+    repeated_text = "machine learning model training pipeline gradient descent"
+    store.save_chunk(Chunk(node_path="PROJECTS/alpha", content=repeated_text, layer="silver"))
+    store.save_chunk(Chunk(node_path="PROJECTS/beta", content=repeated_text, layer="silver"))
+
+    provider = MockEmbeddingProvider()
+    optimizer = SimpleOptimizer(
+        store,
+        min_compaction_path_parts=MIN_COMPACTION_PATH_PARTS,
+        embedding_provider=provider,
+        link_similarity_threshold=0.5,
+    )
+    result = optimizer.discover_links()
+
+    links = store.list_links()
+    assert len(links) == 1
+    assert {links[0].source_path, links[0].target_path} == {"PROJECTS/alpha", "PROJECTS/beta"}
+    assert "1 link(s) created" in result
+
+
+def test_discover_links_skips_existing_link(tmp_path):
+    from vertical_brain.core.models import Link
+    store = JsonStore(tmp_path)
+    text = "machine learning model training pipeline gradient descent"
+    store.save_chunk(Chunk(node_path="PROJECTS/alpha", content=text, layer="silver"))
+    store.save_chunk(Chunk(node_path="PROJECTS/beta", content=text, layer="silver"))
+    store.save_link(Link(source_path="PROJECTS/alpha", target_path="PROJECTS/beta", link_type="related", reason="manual"))
+
+    provider = MockEmbeddingProvider()
+    optimizer = SimpleOptimizer(
+        store,
+        min_compaction_path_parts=MIN_COMPACTION_PATH_PARTS,
+        embedding_provider=provider,
+        link_similarity_threshold=0.5,
+    )
+    result = optimizer.discover_links()
+
+    assert len(store.list_links()) == 1  # no new link created
+    assert "no cross-namespace" in result.lower()
+
+
+def test_discover_links_ignores_bronze_and_gold_chunks(tmp_path):
+    store = JsonStore(tmp_path)
+    text = "machine learning model training pipeline gradient descent"
+    store.save_chunk(Chunk(node_path="PROJECTS/alpha", content=text, layer="bronze"))
+    store.save_chunk(Chunk(node_path="PROJECTS/beta", content=text, layer="gold"))
+
+    provider = MockEmbeddingProvider()
+    optimizer = SimpleOptimizer(
+        store,
+        min_compaction_path_parts=MIN_COMPACTION_PATH_PARTS,
+        embedding_provider=provider,
+        link_similarity_threshold=0.5,
+    )
+    result = optimizer.discover_links()
+
+    assert store.list_links() == []
+    assert "fewer than 2" in result or "no cross-namespace" in result.lower()
+
+
+def test_discover_links_no_link_for_dissimilar_chunks(tmp_path):
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="PROJECTS/alpha", content="quantum physics particle accelerator", layer="silver"))
+    store.save_chunk(Chunk(node_path="PROJECTS/beta", content="cookie recipe butter flour sugar bake", layer="silver"))
+
+    provider = MockEmbeddingProvider()
+    optimizer = SimpleOptimizer(
+        store,
+        min_compaction_path_parts=MIN_COMPACTION_PATH_PARTS,
+        embedding_provider=provider,
+        link_similarity_threshold=0.95,
+    )
+    result = optimizer.discover_links()
+
+    assert store.list_links() == []
+    assert "no cross-namespace" in result.lower()

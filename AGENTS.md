@@ -21,6 +21,14 @@ Read the response and briefly tell the user what you see in memory.
 - **batch_append** — record multiple facts at once
 - **session_end** — at the end of the session, write a short summary of what was done
 
+## Storage maintenance
+
+- **optimize** (no args) — full sweep: dedup, Silver compaction, decay, cross-namespace link discovery. Call this periodically or when the namespace feels cluttered.
+- **optimize** with `path` — same sweep but scoped to one branch only, then global link discovery.
+- **vacuum** — physical purge of stale/superseded chunks past retention. Dry-run by default; pass `dry_run: false` to actually delete.
+
+Call `optimize` (no args) at the end of long sessions or when you've written many chunks.
+
 ## Mandatory write layering
 
 Every new memory item must be written in this order:

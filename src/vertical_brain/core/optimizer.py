@@ -8,16 +8,19 @@ from vertical_brain.core.models import (
     Chunk,
     ChunkInput,
     ContentType,
+    LinkInput,
     StorageOperation,
     StorageOperationBatch,
 )
 from vertical_brain.core.operations import StorageOperationExecutor
+from vertical_brain.llm.embedding import EmbeddingProvider, cosine_similarity
 
 if TYPE_CHECKING:
     from vertical_brain.storage.protocol import StorageProvider
 
 
 COMPACTION_SOURCE = "optimizer:namespace_compaction"
+LINK_DISCOVERY_SOURCE = "optimizer:link_discovery"
 
 
 class SimpleOptimizer:
@@ -38,12 +41,16 @@ class SimpleOptimizer:
         decay_rate: float = 1.0,
         decay_days: int = 30,
         stale_threshold: float = 0.2,
+        embedding_provider: EmbeddingProvider | None = None,
+        link_similarity_threshold: float = 0.80,
     ) -> None:
         self.store = store
         self.min_compaction_path_parts = min_compaction_path_parts
         self.decay_rate = decay_rate
         self.decay_days = decay_days
         self.stale_threshold = stale_threshold
+        self._embedding_provider = embedding_provider
+        self._link_similarity_threshold = link_similarity_threshold
 
     # ── public interface ──────────────────────────────────────────────────────
 
@@ -65,6 +72,138 @@ class SimpleOptimizer:
             batch.branch_path = path
             batch.start_version = node_version
         return batch
+
+    def optimize_all(self) -> str:
+        """Run full optimization across every namespace, then discover cross-namespace links.
+
+        Unlike optimize_branch, this reads all chunks in one pass and applies a single
+        transactional batch. OCC is not applied — this is intended as a periodic maintenance
+        sweep, not a targeted branch update.
+        """
+        all_chunks = self.store.list_chunks()
+        linked_paths = self._linked_paths_if_decay_enabled()
+        batch = self._build_plan(all_chunks, "", linked_paths=linked_paths)
+        if batch.operations:
+            StorageOperationExecutor(self.store).apply_batch(batch)
+        branch_report = self._build_report("(all namespaces)", all_chunks, batch)
+        link_report = self.discover_links()
+        return branch_report + "\n\n" + link_report
+
+    def discover_links(self, root_path: str | None = None) -> str:
+        """Find and create links between semantically similar Silver chunks from different namespaces.
+
+        Requires an embedding_provider to be set at construction time.
+        Reads storage once, embeds Silver chunks, then runs pure pairwise similarity.
+        Creates at most one link per namespace pair, skipping pairs that are already linked.
+        """
+        if self._embedding_provider is None:
+            return "Link discovery skipped: no embedding provider configured."
+        silver_chunks, existing_pairs = self._snapshot_for_links(root_path)
+        if len(silver_chunks) < 2:
+            return "Link discovery: fewer than 2 Silver chunks found, nothing to link."
+        vectors = self._embed_chunks(silver_chunks)
+        operations = self._build_link_plan(silver_chunks, vectors, existing_pairs)
+        if operations:
+            batch = StorageOperationBatch(
+                operations=operations,
+                reasoning_summary="Cross-namespace Silver link discovery.",
+            )
+            StorageOperationExecutor(self.store).apply_batch(batch)
+        return self._build_link_report(operations)
+
+    def _snapshot_for_links(
+        self, root_path: str | None
+    ) -> tuple[list[Chunk], set[tuple[str, str]]]:
+        if root_path:
+            all_chunks = self.store.get_chunks_by_path(root_path, include_children=True)
+        else:
+            all_chunks = self.store.list_chunks()
+        silver_chunks = [
+            c for c in all_chunks
+            if c.status == "active" and c.layer == "silver"
+        ]
+        existing_pairs: set[tuple[str, str]] = set()
+        for lnk in self.store.list_links():
+            existing_pairs.add((lnk.source_path, lnk.target_path))
+            existing_pairs.add((lnk.target_path, lnk.source_path))
+        return silver_chunks, existing_pairs
+
+    def _embed_chunks(self, chunks: list[Chunk]) -> dict[str, list[float]]:
+        assert self._embedding_provider is not None
+        model_name = getattr(self._embedding_provider, "model_name", None)
+        vectors: dict[str, list[float]] = {}
+        for chunk in chunks:
+            cached: list[float] | None = None
+            if model_name:
+                get_vector = getattr(self.store, "get_vector", None)
+                if callable(get_vector):
+                    cached = get_vector(chunk.content_hash, model_name)
+            if cached is not None:
+                vectors[chunk.id] = cached
+                continue
+            vec = self._embedding_provider.embed(chunk.content)
+            if not isinstance(vec, list):
+                continue
+            vectors[chunk.id] = vec
+            if model_name:
+                set_vector = getattr(self.store, "set_vector", None)
+                if callable(set_vector):
+                    set_vector(chunk.content_hash, model_name, vec)
+        return vectors
+
+    def _build_link_plan(
+        self,
+        chunks: list[Chunk],
+        vectors: dict[str, list[float]],
+        existing_pairs: set[tuple[str, str]],
+    ) -> list[StorageOperation]:
+        by_node: dict[str, list[Chunk]] = defaultdict(list)
+        for c in chunks:
+            by_node[c.node_path].append(c)
+
+        paths = sorted(by_node.keys())
+        operations: list[StorageOperation] = []
+
+        for i, path_a in enumerate(paths):
+            for path_b in paths[i + 1:]:
+                if (path_a, path_b) in existing_pairs:
+                    continue
+                best_score = 0.0
+                for chunk_a in by_node[path_a]:
+                    vec_a = vectors.get(chunk_a.id)
+                    if vec_a is None:
+                        continue
+                    for chunk_b in by_node[path_b]:
+                        vec_b = vectors.get(chunk_b.id)
+                        if vec_b is None:
+                            continue
+                        score = cosine_similarity(vec_a, vec_b)
+                        if score > best_score:
+                            best_score = score
+                if best_score >= self._link_similarity_threshold:
+                    operations.append(StorageOperation(
+                        operation="create_link",
+                        target_path=path_a,
+                        links=[LinkInput(
+                            target_path=path_b,
+                            link_type="related",
+                            reason=f"Silver similarity {best_score:.2f} ({LINK_DISCOVERY_SOURCE})",
+                        )],
+                        reasoning_summary=(
+                            f"Cross-namespace Silver similarity {best_score:.2f} "
+                            f"between {path_a} and {path_b}."
+                        ),
+                    ))
+        return operations
+
+    def _build_link_report(self, operations: list[StorageOperation]) -> str:
+        if not operations:
+            return "Link discovery: no cross-namespace Silver links found above threshold."
+        lines = [f"Link discovery: {len(operations)} link(s) created."]
+        for op in operations:
+            for lnk in op.links:
+                lines.append(f"  {op.target_path} → {lnk.target_path}  ({lnk.reason})")
+        return "\n".join(lines)
 
     def _snapshot_branch(
         self, path: str

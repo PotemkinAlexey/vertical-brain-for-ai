@@ -282,13 +282,18 @@ _TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "optimize",
-        "description": "Run compaction optimizer on a namespace branch. Merges redundant Silver chunks.",
+        "description": (
+            "Run the storage optimizer. "
+            "Without path: full sweep across all namespaces — dedup, Silver compaction, decay, "
+            "and cross-namespace Silver link discovery. "
+            "With path: optimize that branch only, then run link discovery globally."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
             },
-            "required": ["path"],
+            "required": [],
         },
     },
     {
@@ -641,10 +646,18 @@ class VerticalBrainMCP:
             model_file = Path(__file__).resolve().parents[3] / "data" / "namespaces" / "model.json"
             model = StorageModel.load(str(model_file)) if model_file.exists() else None
             min_parts = model.min_compaction_path_parts if model else 3
-            result = SimpleOptimizer(
+            optimizer = SimpleOptimizer(
                 self._store,  # type: ignore[arg-type]
                 min_compaction_path_parts=min_parts,
-            ).optimize_branch(args["path"])
+                embedding_provider=self._provider,
+            )
+            path = args.get("path")
+            if path:
+                branch_result = optimizer.optimize_branch(path)
+                link_result = optimizer.discover_links()
+                result = branch_result + "\n\n" + link_result
+            else:
+                result = optimizer.optimize_all()
             return json.dumps({"status": "applied", "result": str(result)})
 
         if name == "operations":
