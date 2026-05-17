@@ -145,7 +145,7 @@ def test_cli_ingest_route_json_is_inspectable(monkeypatch, capsys, tmp_path):
 
 
 def test_cli_ingest_prints_stale_candidates_without_mutating_old_chunks(monkeypatch, capsys, tmp_path):
-    first_response_file = write_llm_response(tmp_path, "first_ingest.json", ingest_response())
+    first_response_file = write_llm_response(tmp_path, "first_ingest.json", ingest_response(layer="bronze"))
     run_cli(
         monkeypatch,
         capsys,
@@ -160,6 +160,7 @@ def test_cli_ingest_prints_stale_candidates_without_mutating_old_chunks(monkeypa
         tmp_path,
         "second_ingest.json",
         ingest_response(
+            layer="bronze",
             content_type="correction",
             peer_links=[
                 {
@@ -288,30 +289,33 @@ def test_cli_uses_configured_data_dir(monkeypatch, capsys, tmp_path):
 
 
 def test_cli_optimize_marks_duplicates_and_reports_gold_file(monkeypatch, capsys, tmp_path):
-    response_file = write_llm_response(tmp_path, "ingest.json", ingest_response())
+    first_response_file = write_llm_response(tmp_path, "ingest1.json", ingest_response(layer="bronze"))
     run_cli(
         monkeypatch,
         capsys,
         tmp_path,
         "--llm-response-file",
-        str(response_file),
+        str(first_response_file),
         "ingest",
         "Databricks Delta schema evolution",
     )
-    run_cli(
-        monkeypatch,
-        capsys,
-        tmp_path,
-        "--llm-response-file",
-        str(response_file),
-        "ingest",
-        "Databricks Delta schema evolution",
+    # Second ingest with different but same-hash content (use a different response file
+    # but same payload so the optimizer sees a duplicate after direct store injection).
+    # Instead, inject a duplicate directly into the store to test optimizer dedup.
+    store = JsonStore(tmp_path / "data")
+    first_chunk = store.get_chunks_by_path(STRUCTURED_SCHEMA_PATH)[0]
+    from vertical_brain.core.models import Chunk
+    duplicate = Chunk(
+        node_path=STRUCTURED_SCHEMA_PATH,
+        content=first_chunk.content,
+        layer="bronze",
+        source="manual",
     )
+    store.save_chunk(duplicate)
 
     output = run_cli(monkeypatch, capsys, tmp_path, "optimize", STRUCTURED_SCHEMA_PATH)
 
     assert "1 exact duplicates marked stale" in output
-    store = JsonStore(tmp_path / "data")
     chunks = store.get_chunks_by_path(STRUCTURED_SCHEMA_PATH)
     assert [chunk.status for chunk in chunks].count("stale") == 1
 

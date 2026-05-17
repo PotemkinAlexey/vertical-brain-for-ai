@@ -21,6 +21,7 @@ OperationType = Literal[
     "supersede_chunk",
     "append_gold_aspect",
     "rename_namespace",
+    "update_silver",
 ]
 Action = Literal[
     "append_bronze",
@@ -136,6 +137,8 @@ class StorageOperation(JsonSerializable):
     new_path: str | None = None
     confidence: float = 1.0
     reasoning_summary: str = ""
+    current_silver_id: str | None = None
+    source_chunk_ids: list[str] = field(default_factory=list)
 
 
 @dataclass

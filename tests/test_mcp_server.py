@@ -683,28 +683,6 @@ def test_batch_append_default_reasoning_summary_appears_in_audit(tmp_path):
     assert audit[0]["reasoning_summary"] == "Batch appended via MCP batch_append."
 
 
-def test_update_silver_creates_first_silver(tmp_path):
-    """No existing Silver — current_silver_id=None creates the first Silver chunk."""
-    mcp, store = _mcp(tmp_path)
-    bronze = store.save_chunk(Chunk(node_path="PROJECTS/alpha", content="raw fact", layer="bronze"))
-
-    resp = _call(mcp, "update_silver", {
-        "path": "PROJECTS/alpha",
-        "content": "Refined summary of raw fact.",
-        "current_silver_id": None,
-        "bronze_ids": [bronze.id],
-    })
-    result = json.loads(_text(resp))
-
-    assert result["status"] == "applied"
-    assert result["superseded"] == []
-    chunks = store.get_chunks_by_path("PROJECTS/alpha")
-    silver = [c for c in chunks if c.layer == "silver" and c.status == "active"]
-    assert len(silver) == 1
-    assert silver[0].content == "Refined summary of raw fact."
-    assert bronze.id in silver[0].lineage
-
-
 def test_update_silver_supersedes_old_and_writes_new(tmp_path):
     """Existing Silver — new call supersedes old, writes new."""
     mcp, store = _mcp(tmp_path)
@@ -712,18 +690,40 @@ def test_update_silver_supersedes_old_and_writes_new(tmp_path):
 
     resp = _call(mcp, "update_silver", {
         "path": "PROJECTS/alpha",
-        "content": "Updated summary with new fact.",
+        "new_content": "Updated summary with new fact.",
         "current_silver_id": old_silver.id,
     })
     result = json.loads(_text(resp))
 
     assert result["status"] == "applied"
-    assert old_silver.id in result["superseded"]
+    assert "chunk_id" in result
+    assert result["chunk_id"] is not None
     chunks = store.get_chunks_by_path("PROJECTS/alpha")
     active_silver = [c for c in chunks if c.layer == "silver" and c.status == "active"]
     assert len(active_silver) == 1
     assert active_silver[0].content == "Updated summary with new fact."
     assert next(c for c in chunks if c.id == old_silver.id).status == "superseded"
+
+
+def test_update_silver_with_source_chunk_ids(tmp_path):
+    """source_chunk_ids are recorded in new Silver lineage."""
+    mcp, store = _mcp(tmp_path)
+    old_silver = store.save_chunk(Chunk(node_path="PROJECTS/alpha", content="old summary", layer="silver"))
+    bronze = store.save_chunk(Chunk(node_path="PROJECTS/alpha", content="raw fact", layer="bronze"))
+
+    resp = _call(mcp, "update_silver", {
+        "path": "PROJECTS/alpha",
+        "new_content": "Refined summary of raw fact.",
+        "current_silver_id": old_silver.id,
+        "source_chunk_ids": [bronze.id],
+    })
+    result = json.loads(_text(resp))
+
+    assert result["status"] == "applied"
+    chunks = store.get_chunks_by_path("PROJECTS/alpha")
+    new_silver = next(c for c in chunks if c.id == result["chunk_id"])
+    assert bronze.id in new_silver.lineage
+    assert old_silver.id in new_silver.lineage
 
 
 def test_update_silver_occ_rejects_stale_id(tmp_path):
@@ -733,23 +733,58 @@ def test_update_silver_occ_rejects_stale_id(tmp_path):
 
     resp = _call(mcp, "update_silver", {
         "path": "PROJECTS/alpha",
-        "content": "New summary.",
+        "new_content": "New summary.",
         "current_silver_id": "nonexistent-id",
     })
     assert "error" in resp
 
 
-def test_update_silver_occ_rejects_null_when_silver_exists(tmp_path):
-    """OCC: passing null when Silver already exists returns an error."""
+def test_update_silver_occ_rejects_null_current_silver_id(tmp_path):
+    """Passing null current_silver_id returns a validation error."""
     mcp, store = _mcp(tmp_path)
     store.save_chunk(Chunk(node_path="PROJECTS/alpha", content="existing silver", layer="silver"))
 
     resp = _call(mcp, "update_silver", {
         "path": "PROJECTS/alpha",
-        "content": "New summary.",
+        "new_content": "New summary.",
         "current_silver_id": None,
     })
     assert "error" in resp
+
+
+def test_update_silver_audit_record_has_correct_operation_type(tmp_path):
+    """MCP update_silver audit record must have operation_type='update_silver', not two records."""
+    mcp, store = _mcp(tmp_path)
+    old_silver = store.save_chunk(Chunk(node_path="PROJECTS/alpha", content="v1", layer="silver"))
+
+    _call(mcp, "update_silver", {
+        "path": "PROJECTS/alpha",
+        "new_content": "v2",
+        "current_silver_id": old_silver.id,
+    })
+
+    audit = store.list_audit()
+    silver_ops = [a for a in audit if a.get("operation_type") == "update_silver"]
+    assert len(silver_ops) == 1, f"Expected exactly one update_silver audit record, got: {audit}"
+
+
+def test_update_silver_returns_valid_chunk_id(tmp_path):
+    """MCP update_silver returns status=applied and a valid chunk_id."""
+    mcp, store = _mcp(tmp_path)
+    old_silver = store.save_chunk(Chunk(node_path="PROJECTS/alpha", content="v1", layer="silver"))
+
+    resp = _call(mcp, "update_silver", {
+        "path": "PROJECTS/alpha",
+        "new_content": "v2",
+        "current_silver_id": old_silver.id,
+    })
+    result = json.loads(_text(resp))
+
+    assert result["status"] == "applied"
+    chunk_id = result["chunk_id"]
+    assert isinstance(chunk_id, str) and chunk_id
+    chunks = store.get_chunks_by_path("PROJECTS/alpha")
+    assert any(c.id == chunk_id and c.layer == "silver" and c.status == "active" for c in chunks)
 
 
 def test_server_module_docstring_does_not_mention_content_length():

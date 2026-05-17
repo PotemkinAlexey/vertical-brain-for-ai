@@ -287,21 +287,22 @@ _TOOLS: list[dict[str, Any]] = [
         "name": "update_silver",
         "description": (
             "Atomically rewrite the Silver summary for a namespace. "
-            "Supersedes all existing Silver chunks and writes a new one. "
-            "Requires current_silver_id — the ID of the Silver chunk you read before synthesizing. "
-            "Pass null if you confirmed there is no Silver yet. "
-            "Fails if Silver has changed since you read it (OCC protection)."
+            "Supersedes the existing Silver chunk and writes a new one. "
+            "Requires current_silver_id — the ID of the active Silver chunk you read before synthesizing. "
+            "Fails if Silver has changed since you read it (OCC protection). "
+            "Use append_chunk(layer=silver) only for the very first Silver at a namespace."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Namespace to update"},
-                "content": {"type": "string", "description": "Complete rewritten Silver summary"},
-                "current_silver_id": {"description": "ID of the Silver chunk you read, or null if none existed"},
-                "bronze_ids": {"type": "array", "items": {"type": "string"}, "description": "Optional IDs of Bronze chunks incorporated into this Silver"},
-                "content_type": {"type": "string", "description": "Content type (default: note)"},
+                "new_content": {"type": "string", "description": "Complete rewritten Silver summary"},
+                "current_silver_id": {"type": "string", "description": "ID of the active Silver chunk you read"},
+                "source_chunk_ids": {"type": "array", "items": {"type": "string"}, "description": "Optional IDs of Bronze chunks incorporated into this Silver"},
+                "confidence": {"type": "number", "description": "Confidence score (default: 1.0)"},
+                "reasoning_summary": {"type": "string", "description": "Optional reasoning summary for the audit log"},
             },
-            "required": ["path", "content", "current_silver_id"],
+            "required": ["path", "new_content", "current_silver_id"],
         },
     },
     {
@@ -686,68 +687,22 @@ class VerticalBrainMCP:
             return json.dumps(out)
 
         if name == "update_silver":
-            path = args["path"]
-            content = args["content"]
-            current_silver_id: str | None = args.get("current_silver_id")
-            bronze_ids: list[str] = args.get("bronze_ids") or []
-            content_type = args.get("content_type", "note")
-
-            # Find current active Silver chunks
-            all_chunks = self._store.get_chunks_by_path(path)
-            active_silver = [c for c in all_chunks if c.status == "active" and c.layer == "silver"]
-
-            # OCC check — agent must have read current Silver before calling
-            actual_ids = [c.id for c in active_silver]
-            if current_silver_id is None:
-                if active_silver:
-                    raise ValueError(
-                        f"update_silver rejected: Silver already exists at '{path}' "
-                        f"(current id: {active_silver[0].id}). "
-                        f"You cannot skip reading it. "
-                        f"Call read_context('{path}') first, get the Silver chunk id, "
-                        f"synthesize new content from current Silver + your Bronze fact, "
-                        f"then call update_silver again with that id."
-                    )
-            else:
-                if current_silver_id not in actual_ids:
-                    raise ValueError(
-                        f"update_silver rejected: Silver at '{path}' changed since you read it. "
-                        f"You passed id '{current_silver_id}' but current Silver is {actual_ids}. "
-                        f"Someone else updated it — or you are reusing a stale id. "
-                        f"Call read_context('{path}') again, re-synthesize, and retry."
-                    )
-
-            ops: list[StorageOperation] = []
-            if active_silver:
-                ops.append(StorageOperation(
-                    operation="supersede_chunk",
-                    target_path=path,
-                    chunk_ids=actual_ids,
-                    reasoning_summary="Superseded by update_silver.",
-                ))
-            ops.append(StorageOperation(
-                operation="append_chunk",
-                target_path=path,
+            op = StorageOperation(
+                operation="update_silver",
+                target_path=args["path"],
+                current_silver_id=args["current_silver_id"],
+                source_chunk_ids=args.get("source_chunk_ids") or [],
                 chunk=ChunkInput(
-                    content=content,
+                    content=args["new_content"],
                     layer="silver",
-                    content_type=content_type,
+                    content_type="note",
                     source=self._client_source,
-                    lineage=bronze_ids,
+                    confidence=args.get("confidence", 1.0),
                 ),
-                reasoning_summary="Silver rewritten via update_silver.",
-            ))
-            batch = StorageOperationBatch(
-                operations=ops,
-                reasoning_summary="update_silver: atomic Silver rewrite with OCC.",
+                reasoning_summary=args.get("reasoning_summary") or "Updated Silver summary via MCP update_silver.",
             )
-            batch_result = self._executor.apply_batch(batch)
-            new_id = next((r.chunk_id for r in batch_result.results if r.chunk_id), None)
-            return json.dumps({
-                "status": batch_result.status,
-                "chunk_id": new_id,
-                "superseded": actual_ids,
-            })
+            result = self._executor.apply(op)
+            return json.dumps({"status": "applied", "chunk_id": result.chunk_id})
 
         if name == "optimize":
             from vertical_brain.core.optimizer import SimpleOptimizer

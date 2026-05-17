@@ -174,6 +174,18 @@ class StorageOperationExecutor:
                     f"If the fact changed, mark the old chunk stale first with "
                     f"mark_stale('{operation.target_path}', [<chunk_id>]), then write the updated content."
                 )
+            if candidate.layer == "silver" and candidate.source != "optimizer:namespace_compaction":
+                existing_silver = [
+                    c for c in self.store.get_chunks_by_path(operation.target_path, include_children=False)
+                    if c.layer == "silver" and c.status == "active"
+                ]
+                if existing_silver:
+                    raise ValueError(
+                        f"append_chunk(layer=silver) rejected at '{operation.target_path}': "
+                        f"an active Silver already exists (id: {existing_silver[0].id}). "
+                        f"Use update_silver with current_silver_id='{existing_silver[0].id}' to replace it. "
+                        f"append_chunk(layer=silver) is only for creating the first Silver summary."
+                    )
             chunk = self.store.save_chunk(candidate)
             links = [
                 self.store.save_link(self._link_from_input(operation.target_path, link_input))
@@ -235,6 +247,68 @@ class StorageOperationExecutor:
             self._do_rename_namespace(operation.target_path, operation.new_path)
             self._mark_ancestors_dirty(operation.new_path)
             return OperationResult(operation=operation.operation, target_path=operation.target_path)
+
+        if operation.operation == "update_silver":
+            assert operation.chunk is not None
+            assert operation.current_silver_id is not None
+
+            # Runtime re-check — storage state may have changed since validation
+            get_chunk = getattr(self.store, "get_chunk", None)
+            old_chunk = get_chunk(operation.current_silver_id) if callable(get_chunk) else next(
+                (c for c in self.store.list_chunks() if c.id == operation.current_silver_id), None
+            )
+            if old_chunk is None:
+                raise ValueError(
+                    f"update_silver rejected: chunk '{operation.current_silver_id}' not found. "
+                    f"Call read_context('{operation.target_path}') to get the current Silver id."
+                )
+            if old_chunk.status != "active":
+                raise ValueError(
+                    f"update_silver rejected: chunk '{operation.current_silver_id}' is {old_chunk.status}, not active. "
+                    f"Call read_context('{operation.target_path}') to get the current Silver id."
+                )
+            if old_chunk.layer != "silver":
+                raise ValueError(
+                    f"update_silver rejected: chunk '{operation.current_silver_id}' is layer={old_chunk.layer}, not silver."
+                )
+            if old_chunk.node_path != operation.target_path:
+                raise ValueError(
+                    f"update_silver rejected: chunk '{operation.current_silver_id}' belongs to "
+                    f"'{old_chunk.node_path}', not '{operation.target_path}'."
+                )
+
+            # Validate source_chunk_ids — storage-level checks
+            for src_id in operation.source_chunk_ids:
+                src = get_chunk(src_id) if callable(get_chunk) else next(
+                    (c for c in self.store.list_chunks() if c.id == src_id), None
+                )
+                if src is None:
+                    raise ValueError(f"update_silver rejected: source chunk '{src_id}' not found.")
+                if src.layer == "gold":
+                    raise ValueError(
+                        f"update_silver rejected: source chunk '{src_id}' is Gold. "
+                        f"Gold cannot be used as source evidence for Silver."
+                    )
+
+            # Build new Silver chunk
+            new_chunk = self._chunk_from_input(operation.target_path, operation.chunk)
+            new_chunk.layer = "silver"
+            new_chunk.lineage = [operation.current_silver_id] + list(operation.source_chunk_ids)
+            new_chunk.supersedes = [operation.current_silver_id]
+            new_chunk = self.store.save_chunk(new_chunk)
+
+            # Supersede old Silver
+            old_chunk.status = "superseded"
+            old_chunk.valid_to = utc_now()
+            old_chunk.updated_at = utc_now()
+            self.store.update_chunk(old_chunk)
+
+            self._mark_ancestors_dirty(operation.target_path)
+            return OperationResult(
+                operation=operation.operation,
+                target_path=operation.target_path,
+                chunk_id=new_chunk.id,
+            )
 
         raise ValueError(f"Unsupported storage operation: {operation.operation}")
 
@@ -481,6 +555,35 @@ class StorageOperationExecutor:
                 )
             return
 
+        if operation.operation == "update_silver":
+            if not operation.current_silver_id or not operation.current_silver_id.strip():
+                issues.append(ValidationIssue(
+                    path=f"{path}.current_silver_id",
+                    message="update_silver requires a non-empty current_silver_id",
+                ))
+            if operation.chunk is None:
+                issues.append(ValidationIssue(path=f"{path}.chunk", message="update_silver requires chunk"))
+            else:
+                if not isinstance(operation.chunk.content, str) or not operation.chunk.content.strip():
+                    issues.append(ValidationIssue(path=f"{path}.chunk.content", message="chunk content must be non-empty"))
+                if operation.chunk.layer != "silver":
+                    issues.append(ValidationIssue(path=f"{path}.chunk.layer", message="update_silver chunk.layer must be 'silver'"))
+            seen: set[str] = set()
+            for src_id in operation.source_chunk_ids:
+                if not isinstance(src_id, str) or not src_id.strip():
+                    issues.append(ValidationIssue(
+                        path=f"{path}.source_chunk_ids",
+                        message="source_chunk_ids items must be non-empty strings",
+                    ))
+                elif src_id in seen:
+                    issues.append(ValidationIssue(
+                        path=f"{path}.source_chunk_ids",
+                        message=f"Duplicate source chunk id: {src_id}",
+                    ))
+                else:
+                    seen.add(src_id)
+            return
+
         if operation.operation == "rename_namespace":
             if not isinstance(operation.new_path, str) or not operation.new_path.strip():
                 issues.append(ValidationIssue(
@@ -651,6 +754,8 @@ def operation_from_dict(payload: Mapping[str, Any]) -> StorageOperation:
         "new_path",
         "confidence",
         "reasoning_summary",
+        "current_silver_id",
+        "source_chunk_ids",
     }
     if unknown:
         raise ValueError(f"Unknown StorageOperation fields: {', '.join(sorted(unknown))}")
@@ -659,6 +764,8 @@ def operation_from_dict(payload: Mapping[str, Any]) -> StorageOperation:
     chunk = _chunk_input_from_dict(chunk_payload) if chunk_payload is not None else None
     links_payload = _list_value(payload, "links", default=[])
     stale_payload = _list_value(payload, "stale_candidates", default=[])
+    current_silver_id = payload.get("current_silver_id")
+    source_chunk_ids = [_string_item(x, "source_chunk_ids") for x in _list_value(payload, "source_chunk_ids", default=[])]
 
     return StorageOperation(
         operation=_string_value(payload, "operation"),
@@ -671,6 +778,8 @@ def operation_from_dict(payload: Mapping[str, Any]) -> StorageOperation:
         new_path=payload.get("new_path"),
         confidence=_number_value(payload, "confidence", default=1.0),
         reasoning_summary=_string_value(payload, "reasoning_summary", default=""),
+        current_silver_id=current_silver_id,
+        source_chunk_ids=source_chunk_ids,
     )
 
 

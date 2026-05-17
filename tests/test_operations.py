@@ -380,8 +380,23 @@ def test_append_bronze_allows_different_content_same_path(tmp_path):
     assert len(store.get_chunks_by_path("WORK/DataArt")) == 2
 
 
-def test_append_silver_duplicate_is_allowed(tmp_path):
-    """Dedup guard applies only to Bronze; Silver can be overwritten freely."""
+def test_append_silver_first_silver_allowed(tmp_path):
+    """append_chunk(layer=silver) is allowed when no active Silver exists yet."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    result = executor.apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/DataArt",
+        chunk=ChunkInput(content="summary v1", layer="silver"),
+    ))
+    assert result.status == "applied"
+    chunks = store.get_chunks_by_path("WORK/DataArt")
+    assert len(chunks) == 1
+    assert chunks[0].layer == "silver"
+
+
+def test_append_silver_second_silver_rejected(tmp_path):
+    """append_chunk(layer=silver) is rejected when an active Silver already exists."""
     store = JsonStore(tmp_path)
     executor = StorageOperationExecutor(store)
     executor.apply(StorageOperation(
@@ -389,14 +404,12 @@ def test_append_silver_duplicate_is_allowed(tmp_path):
         target_path="WORK/DataArt",
         chunk=ChunkInput(content="summary v1", layer="silver"),
     ))
-    # Writing the same Silver content again must NOT raise.
-    executor.apply(StorageOperation(
-        operation="append_chunk",
-        target_path="WORK/DataArt",
-        chunk=ChunkInput(content="summary v1", layer="silver"),
-    ))
-
-    assert len(store.get_chunks_by_path("WORK/DataArt")) == 2
+    with pytest.raises(ValueError, match="update_silver"):
+        executor.apply(StorageOperation(
+            operation="append_chunk",
+            target_path="WORK/DataArt",
+            chunk=ChunkInput(content="summary v1", layer="silver"),
+        ))
 
 
 def test_append_bronze_similar_content_returns_soft_warn(tmp_path):
@@ -473,3 +486,202 @@ def test_dirty_flag_only_set_for_mutations_not_reads(tmp_path):
 
     nodes = {n.path: n for n in store.list_nodes()}
     assert all(not n.is_dirty for n in nodes.values())
+
+
+# ── update_silver ─────────────────────────────────────────────────────────────
+
+def test_update_silver_replaces_active_silver(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    old = store.save_chunk(Chunk(node_path="WORK/A", content="old summary", layer="silver"))
+    bronze = store.save_chunk(Chunk(node_path="WORK/A", content="new fact", layer="bronze"))
+
+    result = executor.apply(StorageOperation(
+        operation="update_silver",
+        target_path="WORK/A",
+        current_silver_id=old.id,
+        source_chunk_ids=[bronze.id],
+        chunk=ChunkInput(content="new summary", layer="silver"),
+    ))
+
+    chunks = store.get_chunks_by_path("WORK/A")
+    old_chunk = next(c for c in chunks if c.id == old.id)
+    new_chunk = next(c for c in chunks if c.id == result.chunk_id)
+
+    assert old_chunk.status == "superseded"
+    assert old_chunk.valid_to is not None
+    assert new_chunk.status == "active"
+    assert new_chunk.layer == "silver"
+    assert old.id in new_chunk.lineage
+    assert bronze.id in new_chunk.lineage
+    assert old.id in new_chunk.supersedes
+
+
+def test_update_silver_exactly_one_active_silver_after(tmp_path):
+    """After update_silver there must be exactly one active Silver chunk."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    old = store.save_chunk(Chunk(node_path="WORK/A", content="v1", layer="silver"))
+
+    result = executor.apply(StorageOperation(
+        operation="update_silver",
+        target_path="WORK/A",
+        current_silver_id=old.id,
+        chunk=ChunkInput(content="v2", layer="silver"),
+    ))
+
+    active_silver = [
+        c for c in store.get_chunks_by_path("WORK/A")
+        if c.layer == "silver" and c.status == "active"
+    ]
+    assert len(active_silver) == 1
+    assert active_silver[0].id == result.chunk_id
+
+
+def test_update_silver_chain_keeps_single_active_silver(tmp_path):
+    """Two successive update_silver calls must leave exactly one active Silver."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    v1 = store.save_chunk(Chunk(node_path="WORK/A", content="v1", layer="silver"))
+
+    r1 = executor.apply(StorageOperation(
+        operation="update_silver", target_path="WORK/A",
+        current_silver_id=v1.id, chunk=ChunkInput(content="v2", layer="silver"),
+    ))
+    r2 = executor.apply(StorageOperation(
+        operation="update_silver", target_path="WORK/A",
+        current_silver_id=r1.chunk_id, chunk=ChunkInput(content="v3", layer="silver"),
+    ))
+
+    active_silver = [
+        c for c in store.get_chunks_by_path("WORK/A")
+        if c.layer == "silver" and c.status == "active"
+    ]
+    assert len(active_silver) == 1
+    assert active_silver[0].id == r2.chunk_id
+
+
+def test_update_silver_rejects_missing_current_silver_id(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    validation = executor.validate(StorageOperation(
+        operation="update_silver", target_path="WORK/A",
+        current_silver_id=None,
+        chunk=ChunkInput(content="new summary", layer="silver"),
+    ))
+    assert not validation.valid
+    assert any("current_silver_id" in i.path for i in validation.issues)
+
+
+def test_update_silver_rejects_id_from_another_namespace(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    other = store.save_chunk(Chunk(node_path="WORK/B", content="other Silver", layer="silver"))
+    with pytest.raises(ValueError, match="belongs to"):
+        executor.apply(StorageOperation(
+            operation="update_silver", target_path="WORK/A",
+            current_silver_id=other.id,
+            chunk=ChunkInput(content="new summary", layer="silver"),
+        ))
+
+
+def test_update_silver_rejects_bronze_as_current_silver_id(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    bronze = store.save_chunk(Chunk(node_path="WORK/A", content="a fact", layer="bronze"))
+    with pytest.raises(ValueError, match="layer=bronze"):
+        executor.apply(StorageOperation(
+            operation="update_silver", target_path="WORK/A",
+            current_silver_id=bronze.id,
+            chunk=ChunkInput(content="summary", layer="silver"),
+        ))
+
+
+def test_update_silver_rejects_superseded_current_silver_id(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    old = store.save_chunk(Chunk(node_path="WORK/A", content="v1", layer="silver"))
+    old.status = "superseded"
+    store.update_chunk(old)
+    with pytest.raises(ValueError, match="superseded"):
+        executor.apply(StorageOperation(
+            operation="update_silver", target_path="WORK/A",
+            current_silver_id=old.id,
+            chunk=ChunkInput(content="v2", layer="silver"),
+        ))
+
+
+def test_update_silver_rejects_gold_source_chunk(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    silver = store.save_chunk(Chunk(node_path="WORK/A", content="summary", layer="silver"))
+    gold = store.save_chunk(Chunk(node_path="WORK/A", content="gold", layer="gold"))
+    with pytest.raises(ValueError, match="Gold cannot be used"):
+        executor.apply(StorageOperation(
+            operation="update_silver", target_path="WORK/A",
+            current_silver_id=silver.id,
+            source_chunk_ids=[gold.id],
+            chunk=ChunkInput(content="new summary", layer="silver"),
+        ))
+
+
+def test_update_silver_rejects_duplicate_source_chunk_ids(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    silver = store.save_chunk(Chunk(node_path="WORK/A", content="summary", layer="silver"))
+    bronze = store.save_chunk(Chunk(node_path="WORK/A", content="fact", layer="bronze"))
+    validation = executor.validate(StorageOperation(
+        operation="update_silver", target_path="WORK/A",
+        current_silver_id=silver.id,
+        source_chunk_ids=[bronze.id, bronze.id],
+        chunk=ChunkInput(content="new summary", layer="silver"),
+    ))
+    assert not validation.valid
+    assert any("source_chunk_ids" in i.path for i in validation.issues)
+
+
+def test_update_silver_increments_version_and_marks_dirty(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    store.ensure_node("WORK/A")
+    silver = store.save_chunk(Chunk(node_path="WORK/A", content="v1", layer="silver"))
+    v0 = store.get_node("WORK/A").version
+
+    executor.apply(StorageOperation(
+        operation="update_silver", target_path="WORK/A",
+        current_silver_id=silver.id,
+        chunk=ChunkInput(content="v2", layer="silver"),
+    ))
+
+    node = store.get_node("WORK/A")
+    assert node.version > v0
+    assert node.is_dirty is True
+
+
+def test_append_chunk_silver_rejected_when_active_silver_exists(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    store.save_chunk(Chunk(node_path="WORK/A", content="existing Silver", layer="silver"))
+    with pytest.raises(ValueError, match="update_silver"):
+        executor.apply(StorageOperation(
+            operation="append_chunk", target_path="WORK/A",
+            chunk=ChunkInput(content="second Silver", layer="silver"),
+        ))
+
+
+def test_append_gold_aspect_succeeds_after_update_silver(tmp_path):
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    old = store.save_chunk(Chunk(node_path="WORK/A", content="v1 silver", layer="silver"))
+    executor.apply(StorageOperation(
+        operation="update_silver", target_path="WORK/A",
+        current_silver_id=old.id,
+        chunk=ChunkInput(content="v2 silver", layer="silver"),
+    ))
+    # Must not raise — new active Silver exists
+    executor.apply(StorageOperation(
+        operation="append_gold_aspect", target_path="WORK/A",
+        gold_aspect="stable conclusion",
+    ))
+    gold = [c for c in store.get_chunks_by_path("WORK/A") if c.layer == "gold" and c.status == "active"]
+    assert len(gold) == 1

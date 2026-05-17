@@ -197,6 +197,10 @@ class JsonStore:
                 return node
         raise ValueError(f"Node not found: {node.path}")
 
+    def get_chunk(self, chunk_id: str) -> Chunk | None:
+        row = next((r for r in self._read(self.chunks_file) if r["id"] == chunk_id), None)
+        return self._chunk_from_row(row) if row is not None else None
+
     def list_chunks(self) -> list[Chunk]:
         return [self._chunk_from_row(row) for row in self._read(self.chunks_file)]
 

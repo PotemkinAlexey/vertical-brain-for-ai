@@ -693,6 +693,10 @@ class SQLiteStore:
         if self._fts_enabled:
             self.rebuild_search_index()
 
+    def get_chunk(self, chunk_id: str) -> Chunk | None:
+        row = self.conn.execute("SELECT * FROM chunks WHERE id = ?", (chunk_id,)).fetchone()
+        return self._chunk_from_row(row) if row is not None else None
+
     def list_chunks(self) -> list[Chunk]:
         rows = self.conn.execute("SELECT * FROM chunks ORDER BY rowid").fetchall()
         return [self._chunk_from_row(row) for row in rows]
