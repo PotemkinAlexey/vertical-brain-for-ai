@@ -656,3 +656,14 @@ def test_batch_append_default_reasoning_summary_appears_in_audit(tmp_path):
     audit = store.list_audit()
     assert len(audit) == 1
     assert audit[0]["reasoning_summary"] == "Batch appended via MCP batch_append."
+
+
+def test_server_module_docstring_does_not_mention_content_length():
+    """Guard against re-introducing incorrect LSP-style framing docs."""
+    import vertical_brain.mcp.server as server_module
+    doc = server_module.__doc__ or ""
+    assert "Content-Length" not in doc, (
+        "server.py docstring must not mention Content-Length — "
+        "the transport is newline-delimited JSON, not LSP framing."
+    )
+

@@ -1,6 +1,6 @@
 """MCP stdio server for Vertical Brain.
 
-Protocol: JSON-RPC 2.0 over stdio with Content-Length framing (LSP-style).
+Protocol: JSON-RPC 2.0 over stdio, newline-delimited JSON (one object per line).
 No external dependencies — pure stdlib.
 """
 from __future__ import annotations

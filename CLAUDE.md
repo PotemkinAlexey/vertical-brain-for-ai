@@ -100,15 +100,15 @@ Implement `StorageProvider` from `storage/protocol.py` — it is a `runtime_chec
 
 ## Gold Aspects
 
-Gold content is stored as v2 JSON at `node.gold_summary`:
+Gold content is stored as Gold-layer chunks attached to a node. The canonical format (v2 JSON) is:
 
 ```json
 {"aspects": [{"id": "...", "text": "...", "updated_at": "..."}]}
 ```
 
-Use `parse_gold_aspects(content)` → `list[GoldAspect]` to read, and `serialize_gold_aspects(aspects)` → `str` to write. `parse_gold_content(content)` → `list[str]` extracts just the text strings (backward compatible with plain text and v1 JSON formats).
+**Always use `append_gold_aspect` (MCP) or the `append_gold_aspect` operation (StorageOperationBatch) to write Gold.** Never mutate Gold chunks directly or construct the JSON by hand.
 
-Never write Gold content as a raw string — always go through the serialize/parse functions.
+Use `parse_gold_aspects(content)` → `list[GoldAspect]` to read, and `serialize_gold_aspects(aspects)` → `str` to write internally. `parse_gold_content(content)` → `list[str]` extracts just the text strings (backward compatible with plain text and v1 JSON formats).
 
 ---
 
@@ -138,6 +138,9 @@ This repo uses conventional commit messages. Keep messages short and factual. Mu
 
 - **Do not add external Python dependencies.** The zero-runtime-dependency constraint is intentional.
 - **Do not bypass the JSON Schema validation.** Never call `_apply_*` methods directly from outside the executor.
-- **Do not write raw strings to `node.gold_summary`.** Always use `serialize_gold_aspects`.
+- **Do not write raw strings to Gold.** Always use `append_gold_aspect` / `serialize_gold_aspects` — never mutate Gold chunks directly.
 - **Do not share `SQLiteStore` across threads.** Use `ThreadLocalSQLiteStoreProxy`.
 - **Do not read storage inside `_build_plan`.** The optimizer is pure over its snapshot input.
+- **Do not run `vacuum` with `dry_run=False` unless explicitly requested.** Always dry-run first to inspect what will be deleted.
+- **Do not run `rename_namespace` unless explicitly requested.** It is atomic but irreversible without manual intervention.
+- **Prefer `optimize` with an explicit path.** Global `optimize` (no path) is a full maintenance sweep — only run it when explicitly asked or at a natural session boundary.
