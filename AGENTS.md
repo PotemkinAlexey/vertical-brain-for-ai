@@ -23,11 +23,11 @@ Read the response and briefly tell the user what you see in memory.
 
 ## Storage maintenance
 
-- **optimize** (no args) — full sweep: dedup, Silver compaction, decay, cross-namespace link discovery. Call this periodically or when the namespace feels cluttered.
-- **optimize** with `path` — same sweep but scoped to one branch only, then global link discovery.
-- **vacuum** — physical purge of stale/superseded chunks past retention. Dry-run by default; pass `dry_run: false` to actually delete.
+- **optimize** with `path` — preferred form: dedup, Silver compaction, decay, then global link discovery, scoped to one branch.
+- **optimize** (no args) — full sweep across all namespaces. Use only at a natural session boundary or when explicitly asked. Do not call speculatively.
+- **vacuum** — physical purge of stale/superseded chunks past retention. Always dry-run first (default). Never pass `dry_run: false` unless the user explicitly asks to delete.
 
-Call `optimize` (no args) at the end of long sessions or when you've written many chunks.
+Call `optimize` with a path after writing many chunks to a namespace. Global `optimize` only at end of session or on explicit request.
 
 ## Mandatory write layering
 
@@ -53,3 +53,6 @@ If using `batch_append`, order chunks Bronze before Silver in the batch, then ca
 2. Use `search` to find a specific fact
 3. Use `read_context` to read everything stored under a specific namespace
 4. The default write layer for new information is `bronze`; Silver and Gold are promotion layers, not first-write targets
+5. Never run `vacuum` with `dry_run: false` unless the user explicitly requests deletion
+6. Never run `rename_namespace` unless the user explicitly requests it — it is irreversible without manual intervention
+7. Never call global `optimize` (no path) speculatively — only at session end or on explicit request
