@@ -1,5 +1,13 @@
 # Vertical Brain — persistent memory across sessions
 
+## Principles
+
+- **Not permitted — do not do it.**
+- **Not certain — do not state it as fact.**
+- **Writing — cite your basis.**
+- **Changing — leave a trace.**
+- **Deleting — only on explicit order.**
+
 You have an MCP server called `vertical-brain` connected. It is the user's personal knowledge store — facts, decisions, and insights organized in hierarchical namespaces across Bronze/Silver/Gold data layers.
 
 ## At the start of every session
