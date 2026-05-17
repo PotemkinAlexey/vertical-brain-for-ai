@@ -105,7 +105,7 @@ Bronze is an append-only log. Silver is a living document you keep current. Gold
 **The pattern for every new fact:**
 
 1. **Bronze** — `append_chunk` the raw fact as-is. Never edit Bronze.
-2. **Silver** — call `read_context` to get the current Silver chunk and its ID, then synthesize new Silver (current Silver + new Bronze fact), then call `update_silver(path, new_content, current_silver_id)`. Silver is always one complete up-to-date distillation per namespace.
+2. **Silver** — if no active Silver exists yet, create it with `append_chunk(layer="silver")`. For all subsequent updates: call `read_context` to get the current Silver and its ID, synthesize new Silver (current Silver + new Bronze fact), then call `update_silver(path, new_content, current_silver_id)`. Silver is always one complete up-to-date distillation per namespace.
 3. **Gold** — only when a conclusion is stable enough to orient future sessions, call `append_gold_aspect`.
 
 `update_silver` enforces OCC: it rejects the write if Silver changed since you read it, forcing a re-read and re-synthesis. This makes it impossible to overwrite someone else's update accidentally.
@@ -130,7 +130,9 @@ If writing multiple Bronze chunks at once, use `batch_append`, then call `update
 2. **Call `session_end` last** if the session produced durable knowledge. If nothing worth persisting happened, skip it — but tell the user explicitly that no memory was created.
 3. **Search before every Bronze write.** Use `search` to check for existing chunks before calling `append_chunk`. If a matching chunk is found — stop. Do not write a duplicate.
 4. **One fact per chunk.** Do not bundle multiple unrelated facts into one chunk. Each chunk must be independently meaningful and stale-able.
-5. **After every Bronze write, update Silver.** Call `read_context` to get the current Silver and its ID, synthesize new Silver (old Silver + new fact), then call `update_silver`. Never leave Bronze orphaned without a Silver update.
+5. **After every Bronze write, update Silver.**
+   - If no active Silver exists yet at this namespace, create the first one with `append_chunk(layer="silver")`.
+   - If an active Silver already exists, call `read_context` to get its ID, synthesize new Silver (old Silver + new fact), then call `update_silver`. Never leave Bronze orphaned without a Silver update.
 6. **Call `read_context` before every `update_silver`.** You must pass `current_silver_id` — the ID of the Silver chunk you are replacing. Never call `update_silver` without having read the current Silver first.
 7. **Never write Gold before Silver.** The infrastructure will reject it. If `append_gold_aspect` fails with "no active Silver found", call `update_silver` first, then retry.
 8. **Never write Gold as the first record of a new idea.** Bronze → Silver → Gold, always in that order.
@@ -138,7 +140,7 @@ If writing multiple Bronze chunks at once, use `batch_append`, then call `update
 ### Response to dedup signals
 
 9. **If `append_chunk` is rejected with "identical content already exists"** — do not retry with the same content. Either the fact is already recorded (do nothing) or it changed (call `mark_stale` on the old chunk first, then write the corrected version).
-10. **If `append_chunk` returns `similar_bronze`** — you must act. Call `mark_stale` on any listed chunk that is superseded by the new fact before proceeding to `update_silver`. Do not silently ignore the warning.
+10. **If `append_chunk` returns `similar_bronze`** — you must review and decide. Do not ignore the warning. Mark stale only if the older chunk is actually superseded or contradicted by the new fact. If both chunks are still valid (different aspects of the same topic), keep both and mention this in the Silver update.
 
 ### Destructive operations
 
