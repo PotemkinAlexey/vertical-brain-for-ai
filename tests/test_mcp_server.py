@@ -812,14 +812,14 @@ def test_update_silver_returns_valid_chunk_id(tmp_path):
     assert any(c.id == chunk_id and c.layer == "silver" and c.status == "active" for c in chunks)
 
 
-def test_ingest_file_returns_prompt_with_content(tmp_path):
-    """ingest_file returns compact metadata header with embedded file content."""
+def test_ingest_file_returns_metadata_header(tmp_path):
+    """ingest_file returns compact metadata header for content passed directly."""
     mcp, _ = _mcp(tmp_path)
-    sample = tmp_path / "MT103.txt"
-    sample.write_text("Field 32A: Value Date, Currency, Amount. Format: 6!n3!a15d")
+    file_content = "Field 32A: Value Date, Currency, Amount. Format: 6!n3!a15d"
 
     resp = _call(mcp, "ingest_file", {
-        "file_path": str(sample),
+        "content": file_content,
+        "file_name": "MT103.txt",
         "authority": "SWIFT",
         "doc_slug": "MT103",
     })
@@ -827,25 +827,27 @@ def test_ingest_file_returns_prompt_with_content(tmp_path):
 
     assert "MT103.txt" in text
     assert "SOURCES/SWIFT/MT103" in text
-    assert "Field 32A" in text        # file content embedded
     assert "sha256" in text.lower()   # hash present
     assert "AGENTS.md" in text        # references the universal protocol
+    # file content is already in conversation context — not re-embedded
+    assert "Field 32A" not in text
 
 
 def test_ingest_file_defaults_slug_to_filename(tmp_path):
     mcp, _ = _mcp(tmp_path)
-    sample = tmp_path / "my_spec.md"
-    sample.write_text("# Spec\nSome content here.")
 
-    resp = _call(mcp, "ingest_file", {"file_path": str(sample)})
+    resp = _call(mcp, "ingest_file", {
+        "content": "# Spec\nSome content here.",
+        "file_name": "my_spec.md",
+    })
     text = _text(resp)
 
     assert "my_spec" in text          # slug derived from filename
 
 
-def test_ingest_file_raises_on_missing_file(tmp_path):
+def test_ingest_file_rejects_missing_required_args(tmp_path):
     mcp, _ = _mcp(tmp_path)
-    resp = _call(mcp, "ingest_file", {"file_path": str(tmp_path / "nonexistent.txt")})
+    resp = _call(mcp, "ingest_file", {"file_name": "doc.txt"})  # missing content
     assert resp.get("error") or (resp.get("result", {}).get("isError"))
 
 
@@ -853,11 +855,9 @@ def test_ingest_file_hash_is_sha256(tmp_path):
     import hashlib
     mcp, _ = _mcp(tmp_path)
     content = "deterministic content for hashing"
-    sample = tmp_path / "doc.txt"
-    sample.write_text(content)
     expected_hash = hashlib.sha256(content.encode()).hexdigest()
 
-    resp = _call(mcp, "ingest_file", {"file_path": str(sample)})
+    resp = _call(mcp, "ingest_file", {"content": content, "file_name": "doc.txt"})
     text = _text(resp)
 
     assert expected_hash in text

@@ -388,18 +388,21 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "ingest_file",
         "description": (
-            "Read a file from disk and return its content together with a structured ingestion prompt. "
-            "The prompt instructs the agent exactly how to register the document as an immutable "
-            "artifact, extract atomic Bronze facts with provenance, derive Silver interpretation, "
-            "handle conflicts, and report results. The agent must follow the returned prompt to "
-            "complete the ingestion using subsequent append_chunk / update_silver / create_link calls."
+            "Register a document that was attached to the conversation. "
+            "Pass the file content and name; the tool computes a SHA-256 fingerprint, "
+            "derives the suggested SOURCES namespace, and returns a compact metadata header. "
+            "Then apply the File Ingestion Protocol from AGENTS.md to complete the ingestion."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "file_path": {
+                "content": {
                     "type": "string",
-                    "description": "Absolute or relative path to the file to ingest.",
+                    "description": "Full text content of the attached file.",
+                },
+                "file_name": {
+                    "type": "string",
+                    "description": "Original file name, e.g. 'MT103.txt' or 'openapi.yaml'.",
                 },
                 "authority": {
                     "type": "string",
@@ -407,19 +410,19 @@ _TOOLS: list[dict[str, Any]] = [
                         "Issuing authority or origin of the document "
                         "(e.g. 'SWIFT', 'ISO', 'Internal', 'Vendor'). "
                         "Used to construct the SOURCES/{authority}/{slug} namespace. "
-                        "If omitted, the agent will try to infer it from the content."
+                        "If omitted, infer from content."
                     ),
                 },
                 "doc_slug": {
                     "type": "string",
                     "description": (
                         "Short identifier for the document used in the namespace path "
-                        "(e.g. 'MT103', 'openapi-v2', 'terms-of-service'). "
+                        "(e.g. 'MT103', 'openapi-v2'). "
                         "Defaults to the file name without extension."
                     ),
                 },
             },
-            "required": ["file_path"],
+            "required": ["content", "file_name"],
         },
     },
 ]
@@ -430,34 +433,29 @@ _TOOLS_BY_NAME: dict[str, dict[str, Any]] = {tool["name"]: tool for tool in _TOO
 def _build_ingest_header(
     *,
     file_name: str,
-    file_path: str,
     file_hash: str,
     file_size: int,
     authority: str,
     doc_slug: str,
-    content: str,
 ) -> str:
     """Return a compact metadata header for ingest_file.
 
     The full ingestion protocol lives in AGENTS.md and is loaded by session_start.
     This header provides only the file-specific facts the agent needs to execute it.
+    The file content is already in the conversation context (attached via chat).
     """
     size_kb = file_size / 1024
     source_ns = f"SOURCES/{authority}/{doc_slug}" if authority else f"SOURCES/{doc_slug}"
 
     return f"""# ingest_file — {file_name}
 
-file: {file_path}
 sha256: {file_hash}
 size: {size_kb:.1f} KB
 authority: {authority or "(infer from content)"}
 source_namespace: {source_ns}
 
 Apply the File Ingestion Protocol from AGENTS.md.
-
----
-
-{content}"""
+The file content is already in the conversation context above."""
 
 
 class MessageParseError(ValueError):
@@ -856,39 +854,22 @@ class VerticalBrainMCP:
         raise KeyError(name)
 
     def _handle_ingest_file(self, args: dict[str, Any]) -> str:
-        file_path: str = args["file_path"]
-        if not os.path.isabs(file_path):
-            file_path = os.path.abspath(file_path)
-        if not os.path.isfile(file_path):
-            raise ValueError(f"File not found: {file_path}")
-
-        file_name = os.path.basename(file_path)
-        file_size = os.path.getsize(file_path)
-
-        # Read as text; reject binary files gracefully.
-        try:
-            with open(file_path, encoding="utf-8", errors="replace") as fh:
-                content = fh.read()
-        except OSError as exc:
-            raise ValueError(f"Cannot read file: {exc}") from exc
+        content: str = args["content"]
+        file_name: str = args["file_name"]
 
         file_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        file_size = len(content.encode("utf-8"))
 
-        authority: str = args.get("authority") or ""
-        doc_slug: str = args.get("doc_slug") or os.path.splitext(file_name)[0]
-
-        # Normalise to safe path segments (replace spaces and dots).
-        authority = authority.strip().replace(" ", "_")
-        doc_slug = doc_slug.strip().replace(" ", "_").replace(".", "_")
+        authority: str = (args.get("authority") or "").strip().replace(" ", "_")
+        raw_slug = args.get("doc_slug") or os.path.splitext(file_name)[0]
+        doc_slug = raw_slug.strip().replace(" ", "_").replace(".", "_")
 
         return _build_ingest_header(
             file_name=file_name,
-            file_path=file_path,
             file_hash=file_hash,
             file_size=file_size,
             authority=authority,
             doc_slug=doc_slug,
-            content=content,
         )
 
     # ------------------------------------------------------------------
