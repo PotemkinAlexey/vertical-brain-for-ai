@@ -92,6 +92,38 @@ Or run directly:
 vb --data-dir ~/.brain mcp
 ```
 
+### Cursor
+
+Add to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "vertical-brain": {
+      "command": "vb",
+      "args": ["--data-dir", "/Users/you/.brain", "mcp"]
+    }
+  }
+}
+```
+
+Reload the window. Vertical Brain will appear in Cursor's MCP tools panel.
+
+### OpenAI Codex CLI
+
+Add to `~/.codex/config.json`:
+
+```json
+{
+  "mcpServers": {
+    "vertical-brain": {
+      "command": "vb",
+      "args": ["--data-dir", "/Users/you/.brain", "mcp"]
+    }
+  }
+}
+```
+
 ### With semantic search (Ollama)
 
 Install [Ollama](https://ollama.ai), pull an embedding model, then point Vertical Brain at it:
