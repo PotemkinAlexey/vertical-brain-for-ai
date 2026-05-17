@@ -393,7 +393,8 @@ def test_batch_append_writes_all_chunks(tmp_path):
     assert len(store.get_chunks_by_path("WORK/B")) == 1
 
 
-def test_session_end_writes_silver_note(tmp_path):
+def test_session_end_summary_only_writes_bronze(tmp_path):
+    """Without notes, summary is stored as Bronze — Silver promotion is left to the optimizer."""
     mcp, store = _mcp(tmp_path)
 
     resp = _call(mcp, "session_end", {
@@ -404,7 +405,29 @@ def test_session_end_writes_silver_note(tmp_path):
 
     assert result["status"] == "applied"
     chunks = store.get_chunks_by_path("WORK/DataArt")
-    assert any(c.layer == "silver" and c.content_type == "note" for c in chunks)
+    assert any(c.layer == "bronze" and c.content_type == "note" for c in chunks)
+    assert not any(c.layer == "silver" for c in chunks)
+
+
+def test_session_end_with_notes_writes_bronze_then_silver(tmp_path):
+    """With notes + summary: Bronze = raw notes, Silver = refined summary."""
+    mcp, store = _mcp(tmp_path)
+
+    resp = _call(mcp, "session_end", {
+        "path": "WORK/DataArt",
+        "notes": "Raw session facts: added merge schema, tested on 3 tables.",
+        "summary": "Confirmed mergeSchema=true pattern for schema evolution.",
+    })
+    result = json.loads(_text(resp))
+
+    assert result["status"] == "applied"
+    chunks = store.get_chunks_by_path("WORK/DataArt")
+    assert any(c.layer == "bronze" for c in chunks)
+    assert any(c.layer == "silver" for c in chunks)
+    bronze = next(c for c in chunks if c.layer == "bronze")
+    silver = next(c for c in chunks if c.layer == "silver")
+    assert "Raw session facts" in bronze.content
+    assert "mergeSchema" in silver.content
 
 
 def test_session_end_with_gold_aspect(tmp_path):

@@ -60,7 +60,14 @@ The old Gold aspect will be naturally displaced by the optimizer over time.
 
 ## At the end of every session
 
-Call `session_end` with a Bronze-layer summary of what was done, decided, or learned. Keep it factual — one sentence per significant event. Then call `optimize` with the most-written namespace path.
+Call `session_end` with:
+- `notes` — raw Bronze capture: bullet list of what was done, decided, or learned this session
+- `summary` — refined Silver summary: one concise paragraph distilling the key outcome
+- `gold_aspect` — optional: only if a durable insight emerged that should orient future sessions
+
+If the session was short and only one field feels natural, pass just `summary` — it will be stored as Bronze and promoted to Silver by the optimizer later.
+
+Then call `optimize` with the most-written namespace path.
 
 ## Mandatory write layering
 

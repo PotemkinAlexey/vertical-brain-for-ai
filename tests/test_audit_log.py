@@ -122,7 +122,7 @@ def test_mcp_session_end_audit_has_default_summary(tmp_path):
     mcp, store = _mcp_sqlite(tmp_path)
     _call(mcp, "session_end", {"path": "WORK/A", "summary": "session wrap-up"})
     record = store.list_audit()[0]
-    assert record["reasoning_summary"] == "Persisted session summary."
+    assert record["reasoning_summary"] == "Persisted session Bronze notes."
 
 
 def test_mcp_mark_stale_without_reason_uses_default_summary(tmp_path):

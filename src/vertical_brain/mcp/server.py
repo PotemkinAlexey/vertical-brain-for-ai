@@ -267,15 +267,18 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "session_end",
         "description": (
-            "Write a session summary as a Silver/note chunk. "
-            "Call at the end of a session to persist what was learned."
+            "Persist a session summary following Bronze → Silver → Gold layering. "
+            "If 'notes' is provided: writes notes as Bronze and summary as Silver. "
+            "If only 'summary' is provided: writes it as Bronze (Silver promotion happens via optimizer). "
+            "Optionally appends a Gold aspect."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Namespace to write the summary to"},
-                "summary": {"type": "string", "description": "What was learned or done this session"},
-                "gold_aspect": {"type": "string", "description": "Optional semantic label to append to Gold"},
+                "summary": {"type": "string", "description": "Refined Silver summary of what was learned or done"},
+                "notes": {"type": "string", "description": "Optional raw Bronze notes — detailed facts, decisions, observations from the session"},
+                "gold_aspect": {"type": "string", "description": "Optional durable insight to append to Gold"},
             },
             "required": ["path", "summary"],
         },
@@ -613,19 +616,41 @@ class VerticalBrainMCP:
             return json.dumps({"status": batch_result.status, "chunk_ids": chunk_ids_written})
 
         if name == "session_end":
-            op = StorageOperation(
+            notes = args.get("notes")
+            summary = args["summary"]
+            ops: list[StorageOperation] = []
+            # Bronze: raw notes if provided, otherwise summary is the raw capture
+            ops.append(StorageOperation(
                 operation="append_chunk",
                 target_path=args["path"],
                 chunk=ChunkInput(
-                    content=args["summary"],
-                    layer="silver",
+                    content=notes if notes else summary,
+                    layer="bronze",
                     content_type="note",
                     source=self._client_source,
                 ),
-                reasoning_summary="Persisted session summary.",
+                reasoning_summary="Persisted session Bronze notes.",
+            ))
+            # Silver: only when notes and summary are distinct
+            if notes:
+                ops.append(StorageOperation(
+                    operation="append_chunk",
+                    target_path=args["path"],
+                    chunk=ChunkInput(
+                        content=summary,
+                        layer="silver",
+                        content_type="note",
+                        source=self._client_source,
+                    ),
+                    reasoning_summary="Persisted session Silver summary.",
+                ))
+            batch = StorageOperationBatch(
+                operations=ops,
+                reasoning_summary="session_end: Bronze → Silver layering.",
             )
-            result = self._executor.apply(op)
-            out = {"status": result.status, "chunk_id": result.chunk_id}
+            batch_result = self._executor.apply_batch(batch)
+            chunk_ids = [r.chunk_id for r in batch_result.results if r.chunk_id]
+            out = {"status": batch_result.status, "chunk_ids": chunk_ids}
             if args.get("gold_aspect"):
                 gold_op = StorageOperation(
                     operation="append_gold_aspect",
