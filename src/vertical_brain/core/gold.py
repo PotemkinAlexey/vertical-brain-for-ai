@@ -103,6 +103,19 @@ def parse_gold_aspects(content: str) -> list[GoldAspect]:
     return [GoldAspect(text=part) for part in (s.strip() for s in text.split(" | ")) if part]
 
 
+def gold_embed_text(content: str) -> str:
+    """Return clean embedding text for a Gold chunk.
+
+    Strips JSON structure (IDs, timestamps) and joins aspect texts with `` | ``.
+    This produces a compact, noise-free string suitable for embedding models —
+    no UUIDs, no ISO timestamps, just the semantic content of each aspect.
+
+    Falls back to the raw *content* if parsing yields nothing (e.g. empty chunk).
+    """
+    texts = [t.strip() for t in parse_gold_content(content) if t.strip()]
+    return " | ".join(texts) if texts else content
+
+
 def serialize_gold_aspects(aspects: list[GoldAspect]) -> str:
     """Serialize a list of GoldAspects to the v2 JSON storage format."""
     return json.dumps(

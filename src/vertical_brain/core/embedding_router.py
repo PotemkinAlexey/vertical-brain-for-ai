@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from vertical_brain.core.gold import gold_embed_text
 from vertical_brain.core.models import EmbeddingRouteCandidate
 from vertical_brain.llm.embedding import EmbeddingProvider, cosine_similarity
 
@@ -80,12 +81,15 @@ class EmbeddingRouter:
 
         best: dict[str, tuple[float, str]] = {}
         for chunk in gold_chunks:
-            if chunk.content not in self._cache:
-                self._cache[chunk.content] = self._provider.embed(chunk.content)
-            sim = cosine_similarity(query_vec, self._cache[chunk.content])
+            # Embed clean aspect text, not the raw JSON (which contains UUIDs and
+            # ISO timestamps that dilute the semantic signal).
+            embed_text = gold_embed_text(chunk.content)
+            if embed_text not in self._cache:
+                self._cache[embed_text] = self._provider.embed(embed_text)
+            sim = cosine_similarity(query_vec, self._cache[embed_text])
             path = chunk.node_path
             if path not in best or sim > best[path][0]:
-                best[path] = (sim, chunk.content)
+                best[path] = (sim, embed_text)
 
         # --- path fallback for nodes with no Gold chunk ---
         gold_paths = set(best.keys())

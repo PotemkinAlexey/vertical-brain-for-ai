@@ -159,3 +159,51 @@ def test_router_path_fallback_matches_structuredstreaming_namespace(tmp_path, qu
     candidates = EmbeddingRouter(store, MockEmbeddingProvider()).find_candidates(query)
 
     assert any(c.path == "WORK/DataArt/Databricks/StructuredStreaming" for c in candidates)
+
+
+# ── Gold embed text: clean aspect text, not raw JSON ─────────────────────────
+
+def test_router_embeds_clean_gold_text_not_raw_json(tmp_path):
+    """Router gold_summary must contain clean aspect text, not JSON structure or UUIDs."""
+    import json
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="silver summary", layer="silver"))
+    executor = StorageOperationExecutor(store)
+    executor.apply(StorageOperation(operation="append_gold_aspect", target_path="WORK/DataArt", gold_aspect="Delta Lake autoloader schema drift detection"))
+
+    candidates = EmbeddingRouter(store, MockEmbeddingProvider()).find_candidates("Delta Lake autoloader")
+
+    assert len(candidates) == 1
+    summary = candidates[0].gold_summary
+    # Must contain the actual aspect text
+    assert "Delta Lake" in summary
+    # Must NOT contain JSON noise
+    assert '"id"' not in summary
+    assert '"updated_at"' not in summary
+    assert '"aspects"' not in summary
+
+
+def test_router_gold_embed_text_excludes_uuid_and_timestamps(tmp_path):
+    """Gold chunk stored as v2 JSON must be embedded as clean joined text."""
+    import json
+    from vertical_brain.core.gold import serialize_gold_aspects, GoldAspect
+    from vertical_brain.core.models import Chunk
+
+    store = JsonStore(tmp_path)
+    # Build a v2 Gold chunk directly with known UUIDs and timestamps
+    aspects = [
+        GoldAspect(id="aaaaaaaa-0000-0000-0000-000000000001", text="Fact one about streaming"),
+        GoldAspect(id="bbbbbbbb-0000-0000-0000-000000000002", text="Fact two about Delta Lake"),
+    ]
+    gold_content = serialize_gold_aspects(aspects)
+    store.ensure_node("WORK/Topic")
+    store.save_chunk(Chunk(node_path="WORK/Topic", content=gold_content, layer="gold"))
+
+    candidates = EmbeddingRouter(store, MockEmbeddingProvider()).find_candidates("streaming Delta Lake")
+
+    assert len(candidates) == 1
+    summary = candidates[0].gold_summary
+    assert "Fact one about streaming" in summary
+    assert "Fact two about Delta Lake" in summary
+    assert "aaaaaaaa" not in summary
+    assert "bbbbbbbb" not in summary

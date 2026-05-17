@@ -1,13 +1,31 @@
 from __future__ import annotations
 
+import hashlib
 from typing import TYPE_CHECKING
 
+from vertical_brain.core.gold import gold_embed_text
 from vertical_brain.core.models import SearchResult
 from vertical_brain.llm.embedding import EmbeddingProvider, cosine_similarity
 
 if TYPE_CHECKING:
     from vertical_brain.core.models import Chunk
     from vertical_brain.storage.protocol import StorageProvider
+
+
+def _chunk_embed_info(chunk: "Chunk") -> tuple[str, str]:
+    """Return ``(cache_key, embed_text)`` for a chunk.
+
+    Gold chunks are embedded as clean joined aspect text (no JSON noise).
+    The cache key is derived from the embed text so that if the Gold content
+    changes, the old vector is evicted naturally (different key → cache miss).
+
+    All other layers use the chunk's own ``content_hash`` and ``content``.
+    """
+    if chunk.layer == "gold":
+        text = gold_embed_text(chunk.content)
+        key = hashlib.sha256(text.encode()).hexdigest()
+        return key, text
+    return chunk.content_hash, chunk.content
 
 
 class IncompatibleEmbeddingModelError(Exception):
@@ -137,7 +155,8 @@ class EmbeddingSearch:
 
         count = 0
         for chunk in self._candidate_chunks(root_path=node_path, include_stale=False):
-            self._get_vector(chunk.content_hash, chunk.content)
+            cache_key, embed_text = _chunk_embed_info(chunk)
+            self._get_vector(cache_key, embed_text)
             count += 1
         return count
 
@@ -157,11 +176,12 @@ class EmbeddingSearch:
         results: list[SearchResult] = []
 
         for chunk in self._candidate_chunks(root_path=root_path, include_stale=include_stale):
+            cache_key, embed_text = _chunk_embed_info(chunk)
             score = cosine_similarity(
                 query_vec,
                 self._get_vector(
-                    chunk.content_hash,
-                    chunk.content,
+                    cache_key,
+                    embed_text,
                     expected_dimension=len(query_vec),
                 ),
             )
