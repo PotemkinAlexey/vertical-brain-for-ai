@@ -141,6 +141,4 @@ This repo uses conventional commit messages. Keep messages short and factual. Mu
 - **Do not write raw strings to Gold.** Always use `append_gold_aspect` / `serialize_gold_aspects` — never mutate Gold chunks directly.
 - **Do not share `SQLiteStore` across threads.** Use `ThreadLocalSQLiteStoreProxy`.
 - **Do not read storage inside `_build_plan`.** The optimizer is pure over its snapshot input.
-- **Do not run `vacuum` with `dry_run=False` unless explicitly requested.** Always dry-run first to inspect what will be deleted.
-- **Do not run `rename_namespace` unless explicitly requested.** It is atomic but irreversible without manual intervention.
-- **Prefer `optimize` with an explicit path.** Global `optimize` (no path) is a full maintenance sweep — only run it when explicitly asked or at a natural session boundary.
+- **For agent-facing usage rules** (optimize, vacuum, rename_namespace, write layering) — see `AGENTS.md`.
