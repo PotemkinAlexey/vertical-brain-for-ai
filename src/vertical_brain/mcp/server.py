@@ -10,6 +10,8 @@ import html.parser
 import io
 import json
 import os
+import shutil
+import subprocess
 import sys
 import traceback
 import urllib.error
@@ -403,20 +405,40 @@ _TOOLS: list[dict[str, Any]] = [
         "name": "ingest_file",
         "description": (
             "Register a document that was attached to the conversation. "
-            "Pass the file content and name; the tool computes a SHA-256 fingerprint, "
+            "Prefer source_path so the server reads/extracts the complete file itself. "
+            "For plain text, content may be passed with integrity checks. "
+            "The tool computes SHA-256 fingerprints, "
             "derives the suggested SOURCES namespace, and returns a compact metadata header. "
             "Then apply the File Ingestion Protocol from AGENTS.md to complete the ingestion."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
+                "source_path": {
+                    "type": "string",
+                    "description": (
+                        "Local path to the original source file. Required for PDFs so the server "
+                        "extracts complete text and prevents summarized payloads."
+                    ),
+                },
                 "content": {
                     "type": "string",
-                    "description": "Full text content of the attached file.",
+                    "description": "Full text content of the attached non-PDF file.",
                 },
                 "file_name": {
                     "type": "string",
-                    "description": "Original file name, e.g. 'MT103.txt' or 'openapi.yaml'.",
+                    "description": (
+                        "Original file name, e.g. 'MT103.txt' or 'openapi.yaml'. "
+                        "Defaults to the source_path basename when source_path is used."
+                    ),
+                },
+                "expected_sha256": {
+                    "type": "string",
+                    "description": "Optional SHA-256 expected for the text payload; mismatches are rejected.",
+                },
+                "expected_size_bytes": {
+                    "type": "integer",
+                    "description": "Optional UTF-8 byte count expected for the text payload; mismatches are rejected.",
                 },
                 "authority": {
                     "type": "string",
@@ -436,7 +458,6 @@ _TOOLS: list[dict[str, Any]] = [
                     ),
                 },
             },
-            "required": ["content", "file_name"],
         },
     },
     {
@@ -487,6 +508,9 @@ def _build_ingest_header(
     doc_slug: str,
     content: str | None = None,
     url: str | None = None,
+    source_path: str | None = None,
+    source_hash: str | None = None,
+    source_size: int | None = None,
 ) -> str:
     """Return a compact metadata header for ingest_file / ingest_url.
 
@@ -496,15 +520,29 @@ def _build_ingest_header(
     """
     size_kb = file_size / 1024
     source_ns = f"SOURCES/{authority}/{doc_slug}" if authority else f"SOURCES/{doc_slug}"
-    origin_line = f"url: {url}" if url else "source: chat attachment"
+    if url:
+        origin_line = f"url: {url}"
+    elif source_path:
+        origin_line = f"source_path: {source_path}"
+    else:
+        origin_line = "source: chat attachment"
 
     header = f"""# ingest — {label}
 
 {origin_line}
-sha256: {file_hash}
-size: {size_kb:.1f} KB
+content_sha256: {file_hash}
+content_size: {size_kb:.1f} KB
 authority: {authority or "(infer from content)"}
 source_namespace: {source_ns}
+integrity: {"server_extracted_source" if source_path else "caller_supplied_text"}"""
+
+    if source_hash is not None and source_size is not None:
+        source_size_kb = source_size / 1024
+        header += f"""
+source_sha256: {source_hash}
+source_size: {source_size_kb:.1f} KB"""
+
+    header += """
 
 ⚡ Execute the File Ingestion Protocol from AGENTS.md now.
 Do NOT respond to the user until all steps are complete.
@@ -550,6 +588,50 @@ def _strip_html(raw: str) -> str:
     extractor = _HTMLTextExtractor()
     extractor.feed(raw)
     return extractor.get_text()
+
+
+def _extract_source_text(source_path: str) -> tuple[str, str, int]:
+    """Read source_path and return extracted text plus raw-file integrity data."""
+    if not os.path.isfile(source_path):
+        raise ValueError(f"source_path does not exist or is not a file: {source_path!r}")
+
+    with open(source_path, "rb") as f:
+        raw = f.read()
+
+    source_hash = hashlib.sha256(raw).hexdigest()
+    source_size = len(raw)
+    ext = os.path.splitext(source_path)[1].lower()
+
+    if ext == ".pdf":
+        pdftotext = shutil.which("pdftotext")
+        if not pdftotext:
+            raise ValueError("PDF ingestion from source_path requires the pdftotext command")
+        try:
+            proc = subprocess.run(
+                [pdftotext, source_path, "-"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except subprocess.CalledProcessError as exc:
+            detail = exc.stderr.strip() or exc.stdout.strip()
+            raise ValueError(f"pdftotext failed for source_path {source_path!r}: {detail}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError(f"pdftotext timed out for source_path {source_path!r}") from exc
+
+        content = proc.stdout
+        if not content.strip():
+            raise ValueError(f"pdftotext extracted no text from source_path {source_path!r}")
+        return content, source_hash, source_size
+
+    try:
+        return raw.decode("utf-8"), source_hash, source_size
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            "source_path is not valid UTF-8 text. PDF files are supported via pdftotext; "
+            "other binary formats need a dedicated extractor."
+        ) from exc
 
 
 class MessageParseError(ValueError):
@@ -978,11 +1060,41 @@ class VerticalBrainMCP:
         raise KeyError(name)
 
     def _handle_ingest_file(self, args: dict[str, Any]) -> str:
-        content: str = args["content"]
-        file_name: str = args["file_name"]
+        source_path = (args.get("source_path") or "").strip()
+        source_hash: str | None = None
+        source_size: int | None = None
+
+        if source_path:
+            content, source_hash, source_size = _extract_source_text(source_path)
+            file_name = args.get("file_name") or os.path.basename(source_path)
+        else:
+            if "content" not in args:
+                raise ValueError("ingest_file requires either source_path or content")
+            if "file_name" not in args:
+                raise ValueError("ingest_file requires file_name when content is supplied")
+            content = args["content"]
+            file_name = args["file_name"]
+            ext = os.path.splitext(file_name)[1].lower()
+            if ext == ".pdf":
+                raise ValueError(
+                    "PDF ingestion must use source_path so the server extracts the complete text. "
+                    "Passing caller-supplied content for PDFs is rejected to prevent summarized payloads."
+                )
 
         file_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
         file_size = len(content.encode("utf-8"))
+        expected_hash = (args.get("expected_sha256") or "").strip()
+        if expected_hash and expected_hash != file_hash:
+            raise ValueError(
+                f"ingest_file integrity check failed: expected_sha256={expected_hash}, "
+                f"actual_sha256={file_hash}"
+            )
+        expected_size = args.get("expected_size_bytes")
+        if expected_size is not None and int(expected_size) != file_size:
+            raise ValueError(
+                f"ingest_file integrity check failed: expected_size_bytes={expected_size}, "
+                f"actual_size_bytes={file_size}"
+            )
 
         authority: str = (args.get("authority") or "").strip().replace(" ", "_")
         raw_slug = args.get("doc_slug") or os.path.splitext(file_name)[0]
@@ -994,6 +1106,9 @@ class VerticalBrainMCP:
             file_size=file_size,
             authority=authority,
             doc_slug=doc_slug,
+            source_path=source_path or None,
+            source_hash=source_hash,
+            source_size=source_size,
         )
 
     def _handle_ingest_url(self, args: dict[str, Any]) -> str:

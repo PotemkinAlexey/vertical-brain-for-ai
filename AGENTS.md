@@ -147,10 +147,12 @@ result.aspect_too_long = true
 ### Triggers
 
 **When the user writes `ingest_file` (with a file attached):**
-1. Take the file content and filename from the attachment — do not ask the user for parameters.
-2. Try to infer `authority` from the content (issuing organisation, standard body, domain name in the header, copyright line, etc.). If you cannot infer it with confidence, leave it empty — the namespace will be `SOURCES/{slug}`.
-3. Call `ingest_file(content=<attachment text>, file_name=<attachment name>, authority=<inferred or empty>)`.
-4. Then execute all steps below.
+1. Prefer the original local file path when available and call `ingest_file(source_path=<absolute path>, authority=<inferred or empty>)` so the MCP server reads/extracts the complete source itself.
+2. If no source path is available, take the file content and filename from the attachment — do not ask the user for parameters.
+3. For PDFs, never pass caller-supplied `content`; `ingest_file` must use `source_path` so the server extracts the full text and rejects summarized payloads.
+4. Try to infer `authority` from the content (issuing organisation, standard body, domain name in the header, copyright line, etc.). If you cannot infer it with confidence, leave it empty — the namespace will be `SOURCES/{slug}`.
+5. For non-PDF attachments without a source path, call `ingest_file(content=<attachment text>, file_name=<attachment name>, authority=<inferred or empty>, expected_sha256=<sha256 of attachment text>, expected_size_bytes=<UTF-8 byte count>)`.
+6. Then execute all steps below.
 
 **When the user writes `ingest_url <url>`:**
 1. Call `ingest_url(url=<url>)`. Authority and slug are derived automatically from the hostname and URL path.

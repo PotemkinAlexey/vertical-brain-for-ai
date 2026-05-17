@@ -921,6 +921,50 @@ def test_ingest_file_hash_is_sha256(tmp_path):
     assert expected_hash in text
 
 
+def test_ingest_file_can_read_source_path(tmp_path):
+    import hashlib
+    mcp, _ = _mcp(tmp_path)
+    source = tmp_path / "spec.txt"
+    content = "complete source text\nwith two lines\n"
+    source.write_text(content, encoding="utf-8")
+    expected_hash = hashlib.sha256(content.encode()).hexdigest()
+
+    resp = _call(mcp, "ingest_file", {"source_path": str(source), "authority": "Internal"})
+    text = _text(resp)
+
+    assert "source_path:" in text
+    assert "integrity: server_extracted_source" in text
+    assert expected_hash in text
+    assert "SOURCES/Internal/spec" in text
+
+
+def test_ingest_file_rejects_pdf_content_without_source_path(tmp_path):
+    mcp, _ = _mcp(tmp_path)
+
+    resp = _call(mcp, "ingest_file", {
+        "content": "short summary of a much larger PDF",
+        "file_name": "Global-PA-Payments.pdf",
+    })
+
+    assert resp.get("error") or (resp.get("result", {}).get("isError"))
+    text = json.dumps(resp)
+    assert "PDF ingestion must use source_path" in text
+
+
+def test_ingest_file_rejects_integrity_mismatch(tmp_path):
+    mcp, _ = _mcp(tmp_path)
+
+    resp = _call(mcp, "ingest_file", {
+        "content": "actual payload",
+        "file_name": "doc.txt",
+        "expected_size_bytes": 999,
+    })
+
+    assert resp.get("error") or (resp.get("result", {}).get("isError"))
+    text = json.dumps(resp)
+    assert "integrity check failed" in text
+
+
 def test_ingest_url_fetches_and_returns_header(tmp_path):
     """ingest_url fetches a URL, computes sha256, returns metadata header with content."""
     from http.server import BaseHTTPRequestHandler, HTTPServer

@@ -291,12 +291,15 @@ deletion.
 
 ### `ingest_file`
 
-Registers a document that was attached to the conversation via the chat UI. Pass the file content and name; the tool computes a SHA-256 fingerprint, derives the suggested `SOURCES` namespace, and returns a compact metadata header. The full ingestion protocol is loaded from `AGENTS.md` at session start — the agent follows it without further instruction.
+Registers a document that was attached to the conversation via the chat UI. Prefer `source_path` when a local file path is available so the server reads or extracts the complete source itself. For plain text, callers may pass `content` with optional integrity checks. PDF ingestion rejects caller-supplied `content` and requires `source_path` to prevent summarized payloads. The tool computes SHA-256 fingerprints, derives the suggested `SOURCES` namespace, and returns a compact metadata header. The full ingestion protocol is loaded from `AGENTS.md` at session start — the agent follows it without further instruction.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `content` | string (required) | Full text content of the attached file |
-| `file_name` | string (required) | Original file name, e.g. `MT103.txt` |
+| `source_path` | string | Local path to the original file; required for PDFs |
+| `content` | string | Full text content of the attached non-PDF file |
+| `file_name` | string | Original file name, e.g. `MT103.txt`; defaults to `source_path` basename |
+| `expected_sha256` | string | Optional SHA-256 expected for the text payload; mismatches are rejected |
+| `expected_size_bytes` | integer | Optional UTF-8 byte count expected for the text payload; mismatches are rejected |
 | `authority` | string | Issuing authority (e.g. `SWIFT`, `ISO`). Inferred from content if omitted |
 | `doc_slug` | string | Short namespace identifier. Defaults to filename without extension |
 
