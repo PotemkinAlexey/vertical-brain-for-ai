@@ -29,11 +29,15 @@ class SQLiteStore:
         self.gold_dir.mkdir(parents=True, exist_ok=True)
         self._transaction_depth = 0
 
-        self.conn = sqlite3.connect(self.db_file, check_same_thread=False)
+        # timeout=30: Python-level retry while DB is locked (default is 5 s).
+        # Must be set before busy_timeout PRAGMA takes effect.
+        self.conn = sqlite3.connect(self.db_file, check_same_thread=False, timeout=30)
         self.conn.row_factory = sqlite3.Row
+        # busy_timeout FIRST — protects journal_mode=WAL from "database is locked"
+        # when multiple threads open the same file simultaneously.
+        self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
-        self.conn.execute("PRAGMA busy_timeout=5000")
         self._init_schema()
         self._fts_enabled = self._init_search_index()
         if self._fts_enabled:
