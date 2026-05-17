@@ -195,11 +195,7 @@ Write one `immutable: true` Bronze chunk at `SOURCES/{authority}/{slug}`:
 - Content: file name, SHA-256 from the tool output, authority, document version or date if present, a one-sentence description. Max 600 characters.
 - Record the returned chunk ID — every subsequent Silver update references this chunk as provenance.
 
-**Step 2 — Write a Silver summary at the source namespace**
-
-After step 1, call `update_silver` (or `append_chunk(layer="silver")` if none exists) at `SOURCES/{authority}/{slug}`. Silver is: what the document is, who issues it, what it governs, key sections. Reference the registration chunk ID from step 1.
-
-**Step 3 — Extract atomic Bronze facts**
+**Step 2 — Extract atomic Bronze facts first**
 
 For each distinct rule, definition, field, constraint, or code value in the document:
 - One chunk = one fact. Max 600 characters. If a fact is longer, split it.
@@ -208,7 +204,18 @@ For each distinct rule, definition, field, constraint, or code value in the docu
 - `immutable: false` for contextual notes and explanatory passages.
 - `content_type: "fact"` for confirmed statements; `content_type: "question"` for ambiguous or contradictory passages.
 
-Use `batch_append` for bulk extraction — **max 10 chunks per call**. For large documents, split into multiple `batch_append` calls (e.g. per section or per country). After all batches complete, call `update_silver` once with all chunk IDs incorporated.
+Use `batch_append` for bulk extraction — **max 10 chunks per call**. For large documents, split into multiple `batch_append` calls (e.g. per section or per country). Collect every returned chunk ID.
+
+**Step 3 — Write Silver from Bronze, never from the source**
+
+⛔ Do NOT write Silver by summarising the source document directly. Silver must be synthesized exclusively from the Bronze chunks you just wrote.
+
+After all Bronze batches are complete:
+1. Call `list_chunks(path=..., layer="bronze")` to read back all the Bronze chunks you wrote.
+2. Synthesize Silver from those chunks — not from your memory of the PDF/page.
+3. Call `update_silver` (or `append_chunk(layer="silver")` if none exists) with `source_chunk_ids` set to the IDs of every Bronze chunk it covers.
+
+This ensures the Silver→Bronze dependency graph is honest and verifiable. If you skip this step, Silver is ungrounded fiction.
 
 **Step 4 — Write interpretation to WORK/ Silver, not Bronze**
 
