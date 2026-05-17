@@ -36,11 +36,11 @@ It returns a map of all namespaces with active chunk counts and Gold insights. R
 
 - **optimize** with `path` — preferred form: dedup, Silver compaction, decay, then global link discovery, scoped to one branch.
 - **optimize** (no args) — full sweep across all namespaces. Use only at a natural session boundary or when explicitly asked. Do not call speculatively.
-- **vacuum** — physical purge of stale/superseded chunks past retention. Always dry-run first (default). Never pass `dry_run: false` unless the user explicitly asks to delete.
+- **vacuum** — physical purge of stale/superseded chunks past retention. Always dry-run first (default). Never pass `dry_run: false` unless the user explicitly asks to delete. Immutable chunks are physically purged only when `include_immutable: true` is explicitly passed with `force: true`.
 - **mark_stale** — mark chunks stale by ID, or all active non-gold chunks at a path. Parameters:
   - `recursive: true` — includes all descendant namespaces (e.g. whole subtree).
   - `include_immutable: true` — also marks immutable chunks stale. Use **only** when wiping a namespace for re-ingestion. Without this flag immutable chunks are silently skipped.
-  - Full wipe before re-ingestion: `mark_stale(path=..., recursive=true, include_immutable=true, reason="re-ingestion")` then `vacuum(dry_run=false)`.
+  - Full wipe before re-ingestion: `mark_stale(path=..., recursive=true, include_immutable=true, reason="re-ingestion")` then `vacuum(dry_run=false, force=true, include_immutable=true)`.
 
 Call `optimize` with a path after writing many chunks to a namespace. Global `optimize` only at end of session or on explicit request.
 
@@ -195,7 +195,7 @@ Do **not** use `immutable: true` for:
 - Contextual notes and explanatory text you added.
 - Anything you are not certain is verbatim from the source.
 
-Immutable chunks are protected by default — `mark_stale` and `vacuum` skip them silently. To wipe a namespace completely for re-ingestion, use `mark_stale(include_immutable=true)`. In normal operation, if a newer version of the document changes a field, write a new Bronze chunk with `content_type: "correction"` and reference both the old and new immutable chunk IDs in the text.
+Immutable chunks are protected by default — `mark_stale` and `vacuum` skip them silently. To wipe a namespace completely for re-ingestion, use `mark_stale(include_immutable=true)` followed by `vacuum(include_immutable=true, force=true)`. In normal operation, if a newer version of the document changes a field, write a new Bronze chunk with `content_type: "correction"` and reference both the old and new immutable chunk IDs in the text.
 
 ### Referencing immutable chunks from Silver
 

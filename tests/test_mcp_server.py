@@ -752,6 +752,33 @@ def test_vacuum_tool_can_apply_with_force(tmp_path):
     assert store.get_chunks_by_path("WORK/Old") == []
 
 
+def test_vacuum_tool_can_include_immutable(tmp_path):
+    store = SQLiteStore(tmp_path)
+    mcp = VerticalBrainMCP(store)
+    store.save_chunk(
+        Chunk(
+            node_path="WORK/Old",
+            content="immutable obsolete fact",
+            status="stale",
+            immutable=True,
+            valid_to="2000-01-01T00:00:00+00:00",
+            updated_at="2000-01-01T00:00:00+00:00",
+        )
+    )
+
+    resp = _call(mcp, "vacuum", {
+        "retention_hours": 0,
+        "dry_run": False,
+        "force": True,
+        "include_immutable": True,
+    })
+    data = json.loads(_text(resp))
+
+    assert data["include_immutable"] is True
+    assert data["deleted_chunks"] == 1
+    assert store.get_chunks_by_path("WORK/Old") == []
+
+
 # ── batch_append default reasoning_summary ────────────────────────────────────
 
 def test_batch_append_default_reasoning_summary_appears_in_audit(tmp_path):

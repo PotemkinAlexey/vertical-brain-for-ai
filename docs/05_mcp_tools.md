@@ -279,6 +279,7 @@ Databricks-style maintenance cleanup. Dry-run by default. Physically purges old 
 | `retention_hours` | number | Retention window before an inactive chunk is eligible (default 168) |
 | `dry_run` | boolean | Preview candidates without deleting (default true) |
 | `force` | boolean | Required to apply retention below 168 hours |
+| `include_immutable` | boolean | Also purge immutable inactive chunks; requires `force=true` when applying |
 | `prune_empty_nodes` | boolean | Remove namespace nodes with no chunks, links, or children (default true) |
 | `prune_vector_cache` | boolean | Remove orphan embedding vectors while preserving active chunk and Gold aspect vectors (default true) |
 | `reclaim_space` | boolean | Run SQLite `VACUUM` after purging |

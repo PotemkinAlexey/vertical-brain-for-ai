@@ -395,6 +395,10 @@ _TOOLS: list[dict[str, Any]] = [
                     "type": "boolean",
                     "description": "Required to apply retention below 168 hours",
                 },
+                "include_immutable": {
+                    "type": "boolean",
+                    "description": "Also purge immutable inactive chunks. Requires force=true when applying.",
+                },
                 "prune_empty_nodes": {"type": "boolean", "description": "Default true"},
                 "prune_vector_cache": {"type": "boolean", "description": "Default true"},
                 "reclaim_space": {"type": "boolean", "description": "Run SQLite VACUUM after purging"},
@@ -1045,6 +1049,7 @@ class VerticalBrainMCP:
                 retention_hours=args.get("retention_hours", 168.0),
                 dry_run=args.get("dry_run", True),
                 force=args.get("force", False),
+                include_immutable=args.get("include_immutable", False),
                 prune_empty_nodes=args.get("prune_empty_nodes", True),
                 prune_vector_cache=args.get("prune_vector_cache", True),
                 reclaim_space=args.get("reclaim_space", False),

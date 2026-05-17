@@ -175,6 +175,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     vacuum.add_argument("--apply", action="store_true", help="Actually delete eligible data; default is dry-run")
     vacuum.add_argument("--force", action="store_true", help="Allow retention below 168 hours when applying")
+    vacuum.add_argument(
+        "--include-immutable",
+        action="store_true",
+        help="Also purge immutable inactive chunks; requires --force when applying",
+    )
     vacuum.add_argument("--backup", default=None, help="SQLite backup file to write before applying")
     vacuum.add_argument("--overwrite-backup", action="store_true", help="Replace backup file if it already exists")
     vacuum.add_argument("--no-prune-empty-nodes", action="store_true", help="Keep empty namespace nodes")
@@ -548,6 +553,7 @@ def main() -> None:
             retention_hours=args.retention_hours,
             dry_run=not args.apply,
             force=args.force,
+            include_immutable=args.include_immutable,
             prune_empty_nodes=not args.no_prune_empty_nodes,
             prune_vector_cache=not args.no_prune_vector_cache,
             reclaim_space=args.reclaim_space,

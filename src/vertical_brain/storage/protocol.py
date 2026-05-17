@@ -83,6 +83,7 @@ class VacuumCapableStorageProvider(Protocol):
         retention_hours: float = 168.0,
         dry_run: bool = True,
         force: bool = False,
+        include_immutable: bool = False,
         prune_empty_nodes: bool = True,
         prune_vector_cache: bool = True,
         reclaim_space: bool = False,

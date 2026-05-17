@@ -291,6 +291,7 @@ class SQLiteStore:
         retention_hours: float = VACUUM_MIN_RETENTION_HOURS,
         dry_run: bool = True,
         force: bool = False,
+        include_immutable: bool = False,
         prune_empty_nodes: bool = True,
         prune_vector_cache: bool = True,
         reclaim_space: bool = False,
@@ -306,9 +307,11 @@ class SQLiteStore:
             raise ValueError("retention_hours must be non-negative")
         if not dry_run and retention_hours < self.VACUUM_MIN_RETENTION_HOURS and not force:
             raise ValueError("Vacuum retention below 168 hours requires force=True")
+        if not dry_run and include_immutable and not force:
+            raise ValueError("Vacuuming immutable chunks requires force=True")
 
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=retention_hours)).isoformat()
-        candidate_rows = self._vacuum_candidate_rows(cutoff)
+        candidate_rows = self._vacuum_candidate_rows(cutoff, include_immutable=include_immutable)
         candidates = [
             {
                 "id": row["id"],
@@ -332,6 +335,7 @@ class SQLiteStore:
             "retention_hours": retention_hours,
             "cutoff": cutoff,
             "statuses": list(self.VACUUM_INACTIVE_STATUSES),
+            "include_immutable": include_immutable,
             "eligible_chunks": len(candidates),
             "eligible_by_status": by_status,
             "deleted_chunks": 0,
@@ -431,15 +435,16 @@ class SQLiteStore:
             raise
         return backup_file
 
-    def _vacuum_candidate_rows(self, cutoff: str) -> list[sqlite3.Row]:
+    def _vacuum_candidate_rows(self, cutoff: str, *, include_immutable: bool = False) -> list[sqlite3.Row]:
         placeholders = ",".join("?" for _ in self.VACUUM_INACTIVE_STATUSES)
+        immutable_clause = "" if include_immutable else "AND immutable = 0"
         return self.conn.execute(
             f"""
             SELECT *
             FROM chunks
             WHERE status IN ({placeholders})
               AND COALESCE(NULLIF(valid_to, ''), updated_at, created_at) <= ?
-              AND immutable = 0
+              {immutable_clause}
             ORDER BY node_path ASC, created_at ASC
             """,
             (*self.VACUUM_INACTIVE_STATUSES, cutoff),
