@@ -515,6 +515,41 @@ def test_mark_stale_passes_reason_to_audit(tmp_path):
     assert audit[0]["reasoning_summary"] == "superseded by new analysis"
 
 
+def test_mark_stale_recursive_marks_children(tmp_path):
+    """mark_stale with recursive=true marks chunks in descendant namespaces."""
+    store = SQLiteStore(tmp_path)
+    mcp = VerticalBrainMCP(store)
+    store.save_chunk(Chunk(node_path="SOURCES/BofA", content="parent fact"))
+    store.save_chunk(Chunk(node_path="SOURCES/BofA/north-america", content="child fact"))
+    store.save_chunk(Chunk(node_path="SOURCES/BofA/emea", content="emea fact"))
+
+    resp = _call(mcp, "mark_stale", {"path": "SOURCES/BofA", "recursive": True, "reason": "redo"})
+    result = json.loads(_text(resp))
+
+    assert result["marked"] == 3
+    all_chunks = (
+        store.get_chunks_by_path("SOURCES/BofA") +
+        store.get_chunks_by_path("SOURCES/BofA/north-america") +
+        store.get_chunks_by_path("SOURCES/BofA/emea")
+    )
+    assert all(c.status == "stale" for c in all_chunks)
+
+
+def test_mark_stale_recursive_skips_immutable(tmp_path):
+    """mark_stale with recursive=true silently skips immutable chunks."""
+    store = SQLiteStore(tmp_path)
+    mcp = VerticalBrainMCP(store)
+    store.save_chunk(Chunk(node_path="SOURCES/BofA", content="mutable fact", immutable=False))
+    store.save_chunk(Chunk(node_path="SOURCES/BofA/sub", content="immutable artifact", immutable=True))
+
+    resp = _call(mcp, "mark_stale", {"path": "SOURCES/BofA", "recursive": True})
+    result = json.loads(_text(resp))
+
+    assert result["marked"] == 1
+    immutable_chunk = store.get_chunks_by_path("SOURCES/BofA/sub")[0]
+    assert immutable_chunk.status == "active"  # untouched
+
+
 def test_batch_append_uses_atomic_transaction_sqlite(tmp_path):
     store = SQLiteStore(tmp_path)
     mcp = VerticalBrainMCP(store)

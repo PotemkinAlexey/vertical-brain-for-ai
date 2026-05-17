@@ -240,7 +240,9 @@ _TOOLS: list[dict[str, Any]] = [
         "name": "mark_stale",
         "description": (
             "Mark chunks as stale. Pass chunk_ids to target specific chunks, "
-            "or omit to mark all active non-gold chunks at path."
+            "or omit to mark all active non-gold mutable chunks at path. "
+            "Use recursive=true to include all descendant namespaces. "
+            "Immutable chunks are silently skipped."
         ),
         "inputSchema": {
             "type": "object",
@@ -249,9 +251,13 @@ _TOOLS: list[dict[str, Any]] = [
                 "chunk_ids": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Specific chunk IDs to mark stale. Omit to mark all active non-gold at path.",
+                    "description": "Specific chunk IDs to mark stale. Omit to mark all active non-gold mutable at path.",
                 },
                 "reason": {"type": "string", "description": "Why these chunks are stale (for audit trail)"},
+                "recursive": {
+                    "type": "boolean",
+                    "description": "Also mark stale in all descendant namespaces (default false). Useful for bulk cleanup of an entire subtree.",
+                },
             },
             "required": ["path"],
         },
@@ -767,22 +773,39 @@ class VerticalBrainMCP:
         if name == "mark_stale":
             chunk_ids: list[str] = args.get("chunk_ids") or []
             if not chunk_ids:
-                # Mark all active non-gold chunks at path
-                chunks = self._store.get_chunks_by_path(args["path"])  # type: ignore[attr-defined]
+                # Collect all active non-gold mutable chunks at path (+ children if recursive).
+                include_children = bool(args.get("recursive", False))
+                chunks = self._store.get_chunks_by_path(  # type: ignore[attr-defined]
+                    args["path"], include_children=include_children
+                )
                 chunk_ids = [
                     c.id for c in chunks
-                    if c.status == "active" and c.layer != "gold"
+                    if c.status == "active" and c.layer != "gold" and not c.immutable
                 ]
             if not chunk_ids:
                 return json.dumps({"status": "applied", "marked": 0})
-            op = StorageOperation(
-                operation="mark_stale",
-                target_path=args["path"],
-                chunk_ids=chunk_ids,
-                reasoning_summary=args.get("reason", "Marked stale via MCP."),
-            )
-            self._executor.apply(op)
-            return json.dumps({"status": "applied", "marked": len(chunk_ids)})
+            # mark_stale operates per-path; group by node_path to avoid cross-path ops.
+            from collections import defaultdict
+            by_path: dict[str, list[str]] = defaultdict(list)
+            id_to_path = {
+                c.id: c.node_path
+                for c in self._store.get_chunks_by_path(  # type: ignore[attr-defined]
+                    args["path"], include_children=bool(args.get("recursive", False))
+                )
+            }
+            for cid in chunk_ids:
+                by_path[id_to_path.get(cid, args["path"])].append(cid)
+            marked = 0
+            for node_path, ids in by_path.items():
+                op = StorageOperation(
+                    operation="mark_stale",
+                    target_path=node_path,
+                    chunk_ids=ids,
+                    reasoning_summary=args.get("reason", "Marked stale via MCP."),
+                )
+                self._executor.apply(op)
+                marked += len(ids)
+            return json.dumps({"status": "applied", "marked": marked})
 
         if name == "batch_append":
             chunks_data: list[dict[str, Any]] = args.get("chunks", [])
