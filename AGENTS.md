@@ -301,4 +301,6 @@ Give the user a structured summary:
 
 13. **Never run `vacuum` with `dry_run: false`** unless the user explicitly asks to delete data.
 14. **Never run `rename_namespace`** unless the user explicitly requests it — it is irreversible without manual intervention.
-15. **Never call global `optimize` (no path) speculatively** — only at session end or on explicit request.
+15. **Never mutate the memory database outside the storage protocol.** Do not use raw SQL, direct file edits, ad hoc scripts, or manual table deletes/inserts/updates against the Vertical Brain storage for normal memory operations. Use MCP/CLI tools (`append_chunk`, `batch_append`, `update_silver`, `append_gold_aspect`, `mark_stale`, `vacuum`, `optimize`, etc.) so validation, immutability, FTS/vector cleanup, and audit semantics are preserved. Direct storage mutation is allowed only for emergency repair after the user explicitly authorizes bypassing the protocol.
+16. **Ask before choosing a destructive mechanism.** If the user says "clean", "wipe", "reset", "delete", or similar, confirm whether to use the standard protocol (`mark_stale`/`vacuum`) or an explicitly authorized emergency bypass. Do not infer permission for raw storage mutation from a general cleanup request.
+17. **Never call global `optimize` (no path) speculatively** — only at session end or on explicit request.
