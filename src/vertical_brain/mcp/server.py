@@ -940,7 +940,7 @@ class VerticalBrainMCP:
             out: dict[str, Any] = {"chunk_id": result.chunk_id, "status": result.status}
             if result.similar_bronze:
                 out["similar_bronze"] = [
-                    {"chunk_id": s.chunk_id, "score": s.score, "snippet": s.content[:120]}
+                    {"chunk_id": s.chunk_id, "score": s.score, "snippet": s.snippet[:120]}
                     for s in result.similar_bronze
                 ]
             text = json.dumps(out)
