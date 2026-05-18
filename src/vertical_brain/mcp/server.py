@@ -937,7 +937,20 @@ class VerticalBrainMCP:
                 reasoning_summary=args.get("reasoning_summary", "Appended via MCP append_chunk."),
             )
             result = self._executor.apply(op)
-            return json.dumps({"chunk_id": result.chunk_id, "status": result.status})
+            out: dict[str, Any] = {"chunk_id": result.chunk_id, "status": result.status}
+            if result.similar_bronze:
+                out["similar_bronze"] = [
+                    {"chunk_id": s.chunk_id, "score": s.score, "snippet": s.content[:120]}
+                    for s in result.similar_bronze
+                ]
+            text = json.dumps(out)
+            layer = args.get("layer", "bronze")
+            if layer == "bronze":
+                text += (
+                    "\n\n---\nAGENTS: Bronze written → update Silver now (update_silver). "
+                    "Write after every decision or code change — not only at session_end."
+                )
+            return text
 
         if name == "append_gold_aspect":
             op = StorageOperation(
