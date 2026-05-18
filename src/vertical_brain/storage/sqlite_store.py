@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from vertical_brain.core.gold import gold_aspect_embed_key, parse_gold_content
 from vertical_brain.core.models import Chunk, Link, Node, SearchResult, utc_now
+from vertical_brain.core.namespace_map import normalize_namespace_root_path
 
 if TYPE_CHECKING:
     from vertical_brain.core.models import OperationResult, StorageOperation
@@ -820,6 +821,7 @@ class SQLiteStore:
         limit: int = 10,
         include_stale: bool = False,
     ) -> list[SearchResult]:
+        root_path = normalize_namespace_root_path(root_path)
         terms = tokenize_query(query)
         if not terms or limit <= 0:
             return []

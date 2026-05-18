@@ -106,6 +106,19 @@ def test_session_start_returns_orientation_text(tmp_path):
     assert "Delta migration" in text
 
 
+def test_session_start_slash_root_path_returns_full_tree(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="Delta migration", layer="gold"))
+    store.save_chunk(Chunk(node_path="PERSONAL/Blog", content="Personal note"))
+
+    resp = _call(mcp, "session_start", {"root_path": "/", "max_depth": 4})
+    text = _text(resp)
+
+    assert "WORK/DataArt" in text
+    assert "PERSONAL/Blog" in text
+    assert "0 nodes · 0 active chunks" not in text
+
+
 def test_session_start_returns_agents_md_contract(tmp_path, monkeypatch):
     agents_file = tmp_path / "AGENTS.md"
     agents_file.write_text("# Agent Contract\n\nSearch before Bronze writes.", encoding="utf-8")

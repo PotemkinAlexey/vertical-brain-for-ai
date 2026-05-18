@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from vertical_brain.core.models import Chunk, SearchResult
+from vertical_brain.core.namespace_map import normalize_namespace_root_path
 
 if TYPE_CHECKING:
     from vertical_brain.storage.protocol import StorageProvider
@@ -53,6 +54,7 @@ class BrainSearch:
         limit: int = 10,
         include_stale: bool = False,
     ) -> list[SearchResult]:
+        root_path = normalize_namespace_root_path(root_path)
         search = getattr(self.store, "search", None)
         if callable(search):
             return search(query, root_path=root_path, limit=limit, include_stale=include_stale)
@@ -156,6 +158,7 @@ def _score_text(*, query: str, terms: list[str], path: str, text: str) -> int:
 
 
 def _path_in_scope(path: str, root_path: str | None) -> bool:
-    if root_path is None or not root_path:
+    root_path = normalize_namespace_root_path(root_path)
+    if root_path is None:
         return True
     return path == root_path or path.startswith(root_path + "/")

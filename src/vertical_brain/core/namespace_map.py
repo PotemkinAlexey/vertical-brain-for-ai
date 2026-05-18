@@ -8,6 +8,15 @@ from vertical_brain.core.models import Chunk, Link, LinkHandle, NamespaceMap, Na
 if TYPE_CHECKING:
     from vertical_brain.storage.protocol import StorageProvider
 
+def normalize_namespace_root_path(root_path: str | None) -> str | None:
+    """Map agent-sent sentinels ('/', whitespace) to no filter."""
+    if root_path is None:
+        return None
+    trimmed = root_path.strip()
+    if not trimmed or trimmed == "/":
+        return None
+    return trimmed
+
 
 class NamespaceMapBuilder:
     """Builds a model-facing map without exposing raw chunk content."""
@@ -22,6 +31,7 @@ class NamespaceMapBuilder:
         max_depth: int | None = None,
         summary_max_chars: int = 240,
     ) -> NamespaceMap:
+        root_path = normalize_namespace_root_path(root_path)
         nodes = [node for node in self.store.list_nodes() if _path_in_scope(node.path, root_path)]
         visible_nodes, omitted_nodes = _apply_depth_limit(nodes, root_path=root_path, max_depth=max_depth)
         visible_paths = {node.path for node in visible_nodes}
@@ -75,7 +85,8 @@ class NamespaceMapBuilder:
 
 
 def _path_in_scope(path: str, root_path: str | None) -> bool:
-    if root_path is None or not root_path:
+    root_path = normalize_namespace_root_path(root_path)
+    if root_path is None:
         return True
     return path == root_path or path.startswith(root_path + "/")
 

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from vertical_brain.core.gold import gold_embed_text
 from vertical_brain.core.models import SearchResult
+from vertical_brain.core.namespace_map import normalize_namespace_root_path
 from vertical_brain.llm.embedding import EmbeddingProvider, cosine_similarity
 
 if TYPE_CHECKING:
@@ -119,6 +120,7 @@ class EmbeddingSearch:
         root_path: str | None,
         include_stale: bool,
     ) -> list["Chunk"]:
+        root_path = normalize_namespace_root_path(root_path)
         if root_path:
             chunks = self._store.get_chunks_by_path(root_path, include_children=True)  # type: ignore[attr-defined]
         else:

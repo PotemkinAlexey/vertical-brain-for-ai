@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from vertical_brain.storage.protocol import StorageProvider
 
 from vertical_brain.core.context_session import ContextSession
+from vertical_brain.core.namespace_map import normalize_namespace_root_path
 from vertical_brain.core.embedding_router import EmbeddingRouter
 from vertical_brain.core.embedding_search import EmbeddingSearch
 from vertical_brain.core.json_schema import format_json_schema_errors, validate_json_schema
@@ -50,6 +51,20 @@ _SERVER_VERSION = "0.1.0"
 def _source_namespace(doc_slug: str) -> str:
     return f"SOURCES/{doc_slug}"
 
+
+_ROOT_PATH_SCHEMA = {
+    "type": "string",
+    "description": (
+        "Optional namespace prefix (e.g. PROJECTS/vertical-brain). "
+        "Omit for the full tree. '/' means no filter — not a filesystem path."
+    ),
+}
+
+
+def _root_path_from_args(args: dict[str, Any]) -> str | None:
+    return normalize_namespace_root_path(args.get("root_path"))
+
+
 _TOOLS: list[dict[str, Any]] = [
     # ── Read / orientation ──────────────────────────────────────────────
     {
@@ -62,7 +77,7 @@ _TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "root_path": {"type": "string"},
+                "root_path": _ROOT_PATH_SCHEMA,
                 "max_depth": {"type": "integer"},
                 "summary_chars": {"type": "integer", "description": "Max Gold chars per node (default 200)"},
             },
@@ -74,7 +89,7 @@ _TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "root_path": {"type": "string"},
+                "root_path": _ROOT_PATH_SCHEMA,
                 "max_depth": {"type": "integer"},
                 "summary_chars": {"type": "integer"},
             },
@@ -122,7 +137,7 @@ _TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "query": {"type": "string"},
-                "root_path": {"type": "string"},
+                "root_path": _ROOT_PATH_SCHEMA,
                 "limit": {"type": "integer"},
                 "include_stale": {"type": "boolean"},
             },
@@ -136,7 +151,7 @@ _TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "query": {"type": "string"},
-                "root_path": {"type": "string"},
+                "root_path": _ROOT_PATH_SCHEMA,
                 "limit": {"type": "integer"},
                 "threshold": {"type": "number"},
             },
@@ -153,7 +168,7 @@ _TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "query": {"type": "string"},
-                "root_path": {"type": "string"},
+                "root_path": _ROOT_PATH_SCHEMA,
                 "search_limit": {"type": "integer"},
                 "context_limit": {"type": "integer"},
                 "items_per_context": {"type": "integer"},
@@ -172,7 +187,7 @@ _TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "query": {"type": "string"},
-                "root_path": {"type": "string"},
+                "root_path": _ROOT_PATH_SCHEMA,
                 "search_limit": {"type": "integer"},
                 "context_limit": {"type": "integer"},
                 "items_per_context": {"type": "integer"},
@@ -938,14 +953,14 @@ class VerticalBrainMCP:
         # ── Read / orientation ──────────────────────────────────────────
         if name == "session_start":
             return self._session.session_prompt(
-                root_path=args.get("root_path"),
+                root_path=_root_path_from_args(args),
                 max_depth=args.get("max_depth"),
                 summary_max_chars=args.get("summary_chars", 200),
             )
 
         if name == "namespace_map":
             return self._session.namespace_map(
-                root_path=args.get("root_path"),
+                root_path=_root_path_from_args(args),
                 max_depth=args.get("max_depth"),
                 summary_max_chars=args.get("summary_chars", 240),
             ).to_json()
@@ -982,7 +997,7 @@ class VerticalBrainMCP:
         if name == "search":
             results = BrainSearch(self._store).search(  # type: ignore[arg-type]
                 args["query"],
-                root_path=args.get("root_path"),
+                root_path=_root_path_from_args(args),
                 limit=args.get("limit", 10),
                 include_stale=args.get("include_stale", False),
             )
@@ -995,7 +1010,7 @@ class VerticalBrainMCP:
         if name == "search_semantic":
             results = EmbeddingSearch(self._store, self._provider).search(
                 args["query"],
-                root_path=args.get("root_path"),
+                root_path=_root_path_from_args(args),
                 limit=args.get("limit", 10),
                 threshold=args.get("threshold", 0.0),
             )
@@ -1008,7 +1023,7 @@ class VerticalBrainMCP:
         if name == "context_search":
             result = self._session.search_locked_context(
                 args["query"],
-                root_path=args.get("root_path"),
+                root_path=_root_path_from_args(args),
                 search_limit=args.get("search_limit", 10),
                 context_limit=args.get("context_limit", 3),
                 items_per_context=args.get("items_per_context", 6),
@@ -1020,7 +1035,7 @@ class VerticalBrainMCP:
             result = self._session.search_locked_context_semantic(
                 args["query"],
                 self._provider,
-                root_path=args.get("root_path"),
+                root_path=_root_path_from_args(args),
                 search_limit=args.get("search_limit", 10),
                 context_limit=args.get("context_limit", 3),
                 items_per_context=args.get("items_per_context", 6),
