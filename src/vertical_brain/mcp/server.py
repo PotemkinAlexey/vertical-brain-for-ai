@@ -809,6 +809,32 @@ class VerticalBrainMCP:
         if callable(delete):
             delete(session_key)
 
+    def _cancel_ingest_sessions_for_namespace(self, source_namespace: str) -> int:
+        """Remove in-memory and persisted ingest sessions targeting *source_namespace*."""
+        keys_to_remove: set[str] = set()
+        for key, session in self._ingest_sessions.items():
+            if session.get("source_namespace") == source_namespace:
+                keys_to_remove.add(key)
+
+        list_sessions = getattr(self._store, "list_ingest_sessions", None)
+        if callable(list_sessions):
+            for row in list_sessions():
+                key = row.get("session_key") or ""
+                if not key:
+                    continue
+                try:
+                    session = json.loads(row["session_json"])
+                except json.JSONDecodeError:
+                    keys_to_remove.add(key)
+                    continue
+                if session.get("source_namespace") == source_namespace:
+                    keys_to_remove.add(key)
+
+        for key in keys_to_remove:
+            self._ingest_sessions.pop(key, None)
+            self._delete_persisted_ingest_session(key)
+        return len(keys_to_remove)
+
     def _require_ingest_session(self, session_key: str) -> dict[str, Any]:
         session = self._ingest_sessions.get(session_key)
         if session is not None:
@@ -1329,8 +1355,10 @@ class VerticalBrainMCP:
                 )
 
         wiped = 0
+        cancelled_sessions = 0
         if force:
             wiped = self._wipe_source_namespace(source_ns)
+            cancelled_sessions = self._cancel_ingest_sessions_for_namespace(source_ns)
 
         session_key = secrets.token_hex(8)
         service_chunks = split_service_chunks(content, session_key)
@@ -1357,6 +1385,11 @@ class VerticalBrainMCP:
             lines += [
                 "",
                 f"force re-ingest: marked {wiped} prior chunk(s) stale under {source_ns}.",
+            ]
+        if cancelled_sessions > 0:
+            lines += [
+                "",
+                f"cancelled_sessions: {cancelled_sessions}",
             ]
         return "\n".join(lines)
 

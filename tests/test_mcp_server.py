@@ -1320,6 +1320,36 @@ def test_ingest_file_force_wipes_namespace(tmp_path):
     assert all(c.id != old.id for c in active)
 
 
+def test_ingest_file_force_cancels_zombie_sessions_for_namespace(tmp_path):
+    """force=true removes prior ingest sessions for the same source_namespace."""
+    store = SQLiteStore(root=tmp_path)
+    mcp = _mcp_from_store(store)
+    first = _call(mcp, "ingest_file", {
+        "content": "Field 32A: value date, currency, amount.",
+        "file_name": "MT103.txt",
+        "doc_slug": "MT103",
+        "mode": "routing",
+    })
+    old_session_key = _parse_session_key(_text(first))
+    assert old_session_key in mcp._ingest_sessions
+    assert store.get_ingest_session(old_session_key) is not None
+
+    second = _call(mcp, "ingest_file", {
+        "content": "Field 32B: updated value date, currency, amount.",
+        "file_name": "MT103.txt",
+        "doc_slug": "MT103",
+        "mode": "routing",
+        "force": True,
+    })
+    text = _text(second)
+    new_session_key = _parse_session_key(text)
+    assert "cancelled_sessions: 1" in text
+    assert old_session_key not in mcp._ingest_sessions
+    assert store.get_ingest_session(old_session_key) is None
+    assert new_session_key in mcp._ingest_sessions
+    assert store.get_ingest_session(new_session_key) is not None
+
+
 def test_ingest_session_survives_mcp_restart(tmp_path):
     store = SQLiteStore(root=tmp_path)
     mcp1 = _mcp_from_store(store)
