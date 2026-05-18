@@ -127,16 +127,12 @@ def test_session_prompt_finds_agents_md_via_module_path_when_cwd_is_unrelated(tm
     This reproduces the Claude Desktop scenario where the MCP server starts with
     cwd=/ or cwd=~ and _find_agents_md() would otherwise return None.
     """
-    import os
-    from pathlib import Path
-
     agents_file = tmp_path / "AGENTS.md"
     agents_file.write_text("# Contract\n\nDo not skip Bronze.", encoding="utf-8")
 
-    # Patch __file__ of the context_session module to point into tmp_path so that
-    # the module-relative upward search finds our AGENTS.md there.
+    # Patch _find_agents_md so the session_prompt picks up our tmp_path AGENTS.md
+    # regardless of cwd or module location.
     import vertical_brain.core.context_session as cs_module
-    fake_module_file = str(tmp_path / "core" / "context_session.py")
     monkeypatch.setattr(cs_module, "_find_agents_md",
                         lambda: agents_file)
 
