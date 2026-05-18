@@ -361,3 +361,16 @@ def test_ingest_registry_upsert(tmp_path):
     store.register_ingest("abc", "SOURCES/new", "new.txt")
     entry = store.find_ingest_by_hash("abc")
     assert entry["source_namespace"] == "SOURCES/new"
+
+
+def test_ingest_sessions_persist_and_delete(tmp_path):
+    store = SQLiteStore(root=tmp_path)
+    payload = '{"session_key": "abc123", "state": "EXTRACTING_BRONZE"}'
+    store.save_ingest_session("abc123", "EXTRACTING_BRONZE", payload)
+    row = store.get_ingest_session("abc123")
+    assert row is not None
+    assert row["session_json"] == payload
+    listed = store.list_ingest_sessions()
+    assert len(listed) == 1
+    store.delete_ingest_session("abc123")
+    assert store.get_ingest_session("abc123") is None

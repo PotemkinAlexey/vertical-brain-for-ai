@@ -30,8 +30,11 @@ from vertical_brain.llm.embedding import EmbeddingProvider, MockEmbeddingProvide
 from vertical_brain.mcp.ingest_protocol import (
     DEFAULT_INGEST_MODE,
     build_protocol_lines,
+    inventory_probe_requirement,
+    load_inventory_items,
     normalize_ingest_mode,
     split_service_chunks,
+    validate_inventory_probes,
     validate_namespace_ready_for_complete,
     validate_service_chunk_coverage,
     validate_skip_reason,
@@ -562,6 +565,35 @@ _TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "submit_inventory_probes",
+        "description": (
+            "Submit spot-check probes before complete_ingest (answer_complete mode). "
+            "Each probe names an [INVENTORY] item and cites active Bronze chunk_id(s) that answer it. "
+            "Required count: max(3, 30% of inventory lines)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_key": {"type": "string"},
+                "probes": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "item": {"type": "string"},
+                            "chunk_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "required": ["item", "chunk_ids"],
+                    },
+                },
+            },
+            "required": ["session_key", "probes"],
+        },
+    },
+    {
         "name": "complete_ingest",
         "description": (
             "Complete the ingest session after Silver has been written. "
@@ -771,6 +803,77 @@ class VerticalBrainMCP:
         self._executor = StorageOperationExecutor(store)
         self._client_source: str = "model:mcp"  # updated on initialize
         self._ingest_sessions: dict[str, dict[str, Any]] = {}
+        self._load_ingest_sessions_from_store()
+
+    def _load_ingest_sessions_from_store(self) -> None:
+        list_sessions = getattr(self._store, "list_ingest_sessions", None)
+        if not callable(list_sessions):
+            return
+        for row in list_sessions():
+            try:
+                session = json.loads(row["session_json"])
+            except json.JSONDecodeError:
+                continue
+            key = session.get("session_key") or row["session_key"]
+            self._ingest_sessions[key] = session
+
+    def _persist_ingest_session(self, session: dict[str, Any]) -> None:
+        save = getattr(self._store, "save_ingest_session", None)
+        if not callable(save):
+            return
+        save(
+            session["session_key"],
+            session.get("state", "EXTRACTING_BRONZE"),
+            json.dumps(session, ensure_ascii=False),
+        )
+
+    def _delete_persisted_ingest_session(self, session_key: str) -> None:
+        delete = getattr(self._store, "delete_ingest_session", None)
+        if callable(delete):
+            delete(session_key)
+
+    def _require_ingest_session(self, session_key: str) -> dict[str, Any]:
+        session = self._ingest_sessions.get(session_key)
+        if session is not None:
+            return session
+        load = getattr(self._store, "get_ingest_session", None)
+        if callable(load):
+            row = load(session_key)
+            if row is not None:
+                session = json.loads(row["session_json"])
+                self._ingest_sessions[session_key] = session
+                return session
+        raise ValueError(f"No active ingest session: {session_key!r}")
+
+    def _wipe_source_namespace(self, path: str) -> int:
+        from collections import defaultdict
+
+        get_chunks = getattr(self._store, "get_chunks_by_path", None)
+        if not callable(get_chunks):
+            return 0
+        all_chunks = get_chunks(path, include_children=True)
+        chunk_ids = [
+            c.id for c in all_chunks
+            if c.status == "active" and c.layer != "gold"
+        ]
+        if not chunk_ids:
+            return 0
+        id_to_path = {c.id: c.node_path for c in all_chunks}
+        by_path: dict[str, list[str]] = defaultdict(list)
+        for cid in chunk_ids:
+            by_path[id_to_path[cid]].append(cid)
+        marked = 0
+        for node_path, ids in by_path.items():
+            op = StorageOperation(
+                operation="mark_stale",
+                target_path=node_path,
+                chunk_ids=ids,
+                reasoning_summary="Auto-wipe before force re-ingest.",
+                force_immutable=True,
+            )
+            self._executor.apply(op)
+            marked += len(ids)
+        return marked
 
     # ------------------------------------------------------------------
     # Protocol dispatch
@@ -1204,6 +1307,9 @@ class VerticalBrainMCP:
         if name == "finish_bronze_extraction":
             return self._handle_finish_bronze_extraction(args)
 
+        if name == "submit_inventory_probes":
+            return self._handle_submit_inventory_probes(args)
+
         if name == "complete_ingest":
             return self._handle_complete_ingest(args)
 
@@ -1243,6 +1349,10 @@ class VerticalBrainMCP:
                     f"Pass force=true to re-ingest (wipe namespace first if replacing content)."
                 )
 
+        wiped = 0
+        if force:
+            wiped = self._wipe_source_namespace(source_ns)
+
         session_key = secrets.token_hex(8)
         service_chunks = split_service_chunks(content, session_key)
         session = {
@@ -1258,9 +1368,18 @@ class VerticalBrainMCP:
             "ingest_mode": ingest_mode,
             "state": "EXTRACTING_BRONZE",
             "chunks": service_chunks,
+            "inventory_probes": [],
+            "force_wiped": wiped,
         }
         self._ingest_sessions[session_key] = session
-        return "\n".join(build_protocol_lines(session))
+        self._persist_ingest_session(session)
+        lines = build_protocol_lines(session)
+        if force and wiped:
+            lines += [
+                "",
+                f"force re-ingest: marked {wiped} prior chunk(s) stale under {source_ns}.",
+            ]
+        return "\n".join(lines)
 
     def _handle_ingest_file(self, args: dict[str, Any]) -> str:
         source_path = (args.get("source_path") or "").strip()
@@ -1318,9 +1437,7 @@ class VerticalBrainMCP:
     def _handle_get_service_chunk(self, args: dict[str, Any]) -> str:
         session_key = args.get("session_key", "")
         chunk_id = args.get("chunk_id", "")
-        session = self._ingest_sessions.get(session_key)
-        if session is None:
-            raise ValueError(f"No active ingest session: {session_key!r}")
+        session = self._require_ingest_session(session_key)
         chunk = next((c for c in session["chunks"] if c["id"] == chunk_id), None)
         if chunk is None:
             raise ValueError(f"Chunk {chunk_id!r} not found in session {session_key!r}")
@@ -1334,9 +1451,7 @@ class VerticalBrainMCP:
 
     def _handle_get_service_chunks(self, args: dict[str, Any]) -> str:
         session_key = args.get("session_key", "")
-        session = self._ingest_sessions.get(session_key)
-        if session is None:
-            raise ValueError(f"No active ingest session: {session_key!r}")
+        session = self._require_ingest_session(session_key)
 
         chunk_ids = args.get("chunk_ids") or []
         if chunk_ids:
@@ -1379,9 +1494,7 @@ class VerticalBrainMCP:
             raise ValueError(f"status must be 'extracted' or 'skipped', got {status!r}")
         if status == "skipped" and not skip_reason:
             raise ValueError("skip_reason is required when status='skipped'")
-        session = self._ingest_sessions.get(session_key)
-        if session is None:
-            raise ValueError(f"No active ingest session: {session_key!r}")
+        session = self._require_ingest_session(session_key)
         if status == "skipped":
             validate_skip_reason(str(skip_reason), mode=session.get("ingest_mode", DEFAULT_INGEST_MODE))
         chunk = next((c for c in session["chunks"] if c["id"] == chunk_id), None)
@@ -1389,6 +1502,7 @@ class VerticalBrainMCP:
             raise ValueError(f"Chunk {chunk_id!r} not found in session {session_key!r}")
         chunk["status"] = status
         chunk["skip_reason"] = skip_reason
+        self._persist_ingest_session(session)
         pending = sum(1 for c in session["chunks"] if c["status"] == "pending")
         return json.dumps(
             {"ok": True, "chunk_id": chunk_id, "status": status, "remaining_pending": pending},
@@ -1397,9 +1511,7 @@ class VerticalBrainMCP:
 
     def _handle_finish_bronze_extraction(self, args: dict[str, Any]) -> str:
         session_key = args.get("session_key", "")
-        session = self._ingest_sessions.get(session_key)
-        if session is None:
-            raise ValueError(f"No active ingest session: {session_key!r}")
+        session = self._require_ingest_session(session_key)
         pending = [c for c in session["chunks"] if c["status"] == "pending"]
         if pending:
             ids = [c["id"] for c in pending[:5]]
@@ -1412,6 +1524,7 @@ class VerticalBrainMCP:
         extracted = sum(1 for c in session["chunks"] if c["status"] == "extracted")
         skipped = sum(1 for c in session["chunks"] if c["status"] == "skipped")
         session["state"] = "BRONZE_COMPLETE"
+        self._persist_ingest_session(session)
         return json.dumps({
             "status": "ok",
             "extracted": extracted,
@@ -1419,15 +1532,33 @@ class VerticalBrainMCP:
             "total": len(session["chunks"]),
             "next_action": (
                 f"list_chunks(path='{session['source_namespace']}', layer='bronze') "
-                "then update_silver."
+                "then update_silver, submit_inventory_probes, complete_ingest."
             ),
+        }, ensure_ascii=False)
+
+    def _handle_submit_inventory_probes(self, args: dict[str, Any]) -> str:
+        session_key = args.get("session_key", "")
+        probes = args.get("probes") or []
+        if not probes:
+            raise ValueError("probes must be a non-empty list of {item, chunk_ids} objects")
+        session = self._require_ingest_session(session_key)
+        session["inventory_probes"] = probes
+        self._persist_ingest_session(session)
+
+        inventory_items = load_inventory_items(self._store, session["source_namespace"])
+        inventory_count = len(inventory_items)
+        required = inventory_probe_requirement(inventory_count)
+
+        return json.dumps({
+            "status": "ok",
+            "submitted": len(probes),
+            "required_for_complete": required,
+            "inventory_item_count": inventory_count,
         }, ensure_ascii=False)
 
     def _handle_complete_ingest(self, args: dict[str, Any]) -> str:
         session_key = args.get("session_key", "")
-        session = self._ingest_sessions.get(session_key)
-        if session is None:
-            raise ValueError(f"No active ingest session: {session_key!r}")
+        session = self._require_ingest_session(session_key)
         if session["state"] != "BRONZE_COMPLETE":
             raise ValueError(
                 f"Cannot complete ingest: state is {session['state']!r}. "
@@ -1435,6 +1566,7 @@ class VerticalBrainMCP:
             )
         validate_service_chunk_coverage(session, phase="complete_ingest")
         storage_check = validate_namespace_ready_for_complete(self._store, session)
+        probe_check = validate_inventory_probes(session, self._store)
         extracted = sum(1 for c in session["chunks"] if c["status"] == "extracted")
         skipped = sum(1 for c in session["chunks"] if c["status"] == "skipped")
         source_ns = session["source_namespace"]
@@ -1448,6 +1580,7 @@ class VerticalBrainMCP:
             )
 
         del self._ingest_sessions[session_key]
+        self._delete_persisted_ingest_session(session_key)
         return json.dumps({
             "status": "completed",
             "source_namespace": source_ns,
@@ -1455,6 +1588,7 @@ class VerticalBrainMCP:
             "bronze_extracted": extracted,
             "service_chunks_skipped": skipped,
             "storage_check": storage_check,
+            "inventory_probes": probe_check,
             "session_key": session_key,
         }, ensure_ascii=False)
 

@@ -82,7 +82,7 @@ def test_tools_list_contains_expected_tools(tmp_path):
         "mark_stale", "batch_append", "session_end", "update_silver", "optimize",
         "operations", "doctor", "vacuum", "ingest_file", "ingest_url",
         "get_service_chunk", "get_service_chunks", "mark_service_chunk",
-        "finish_bronze_extraction", "complete_ingest",
+        "finish_bronze_extraction", "submit_inventory_probes", "complete_ingest",
     }
 
 
@@ -1249,6 +1249,50 @@ def test_ingest_url_derives_slug_from_path_segment(tmp_path):
     text = _text(resp)
     assert "SOURCES/my-doc" in text
     assert "my-doc" in text              # last path segment used as slug
+
+
+def test_ingest_file_force_wipes_namespace(tmp_path):
+    from vertical_brain.core.models import Chunk
+
+    mcp, store = _mcp(tmp_path)
+    path = "SOURCES/MT103"
+    store.ensure_node(path)
+    old = Chunk(node_path=path, layer="bronze", content="old fact", immutable=True)
+    store.save_chunk(old)
+
+    resp = _call(mcp, "ingest_file", {
+        "content": "Field 32A: value date, currency, amount.",
+        "file_name": "MT103.txt",
+        "force": True,
+        "doc_slug": "MT103",
+        "mode": "routing",
+    })
+    text = _text(resp)
+    assert "force re-ingest: marked 1 prior chunk" in text
+    active = [c for c in store.get_chunks_by_path(path) if c.status == "active"]
+    assert all(c.id != old.id for c in active)
+
+
+def test_ingest_session_survives_mcp_restart(tmp_path):
+    store = SQLiteStore(root=tmp_path)
+    mcp1 = _mcp_from_store(store)
+    resp = _call(mcp1, "ingest_file", {
+        "content": "Field 32A: value date.",
+        "file_name": "MT103.txt",
+        "mode": "routing",
+    })
+    session_key = _parse_session_key(_text(resp))
+    chunk_id = mcp1._ingest_sessions[session_key]["chunks"][0]["id"]
+    _call(mcp1, "mark_service_chunk", {
+        "session_key": session_key,
+        "chunk_id": chunk_id,
+        "status": "skipped",
+        "skip_reason": _SKIP_OK,
+    })
+
+    mcp2 = _mcp_from_store(store)
+    assert session_key in mcp2._ingest_sessions
+    assert mcp2._ingest_sessions[session_key]["chunks"][0]["status"] == "skipped"
 
 
 def test_server_module_docstring_does_not_mention_content_length():

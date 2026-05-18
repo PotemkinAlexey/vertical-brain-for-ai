@@ -9,8 +9,11 @@ from vertical_brain.mcp.ingest_protocol import (
     INGEST_MODE_ANSWER_COMPLETE,
     INVENTORY_PREFIX,
     build_protocol_lines,
+    inventory_probe_requirement,
+    parse_inventory_items,
     session_chunk_stats,
     split_service_chunks,
+    validate_inventory_probes,
     validate_namespace_ready_for_complete,
     validate_service_chunk_coverage,
     validate_skip_reason,
@@ -111,6 +114,39 @@ def test_complete_ingest_requires_inventory_and_facts(tmp_path):
     )
     result = validate_namespace_ready_for_complete(store, session)
     assert result["bronze_fact_count"] == 1
+
+
+def test_parse_inventory_items():
+    content = f"{INVENTORY_PREFIX}\n- US wire\n- UK wire\n1. SEPA credit"
+    items = parse_inventory_items(content)
+    assert items == ["US wire", "UK wire", "SEPA credit"]
+
+
+def test_inventory_probe_requirement():
+    assert inventory_probe_requirement(10) == 3
+    assert inventory_probe_requirement(20) == 6
+
+
+def test_validate_inventory_probes_requires_minimum(tmp_path):
+    store = SQLiteStore(root=tmp_path)
+    path = "SOURCES/doc"
+    fact = Chunk(node_path=path, layer="bronze", content="US wire routing 026009593")
+    store.save_chunk(fact)
+    store.save_chunk(
+        Chunk(
+            node_path=path,
+            layer="bronze",
+            content_type="note",
+            content=f"{INVENTORY_PREFIX}\n- US wire\n- UK wire\n- SEPA\n- CHAPS\n- ACH",
+        )
+    )
+    session = {
+        "ingest_mode": INGEST_MODE_ANSWER_COMPLETE,
+        "source_namespace": path,
+        "inventory_probes": [{"item": "US wire", "chunk_ids": [fact.id]}],
+    }
+    with pytest.raises(ValueError, match="at least 3 inventory probe"):
+        validate_inventory_probes(session, store)
 
 
 def test_build_protocol_lines_includes_iron_rules():

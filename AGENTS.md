@@ -65,7 +65,10 @@ When user writes `ingest_file` or `ingest_url`, call the tool and follow the **I
 3. Process **every** service chunk (`get_service_chunk` or `get_service_chunks` batch)
 4. `finish_bronze_extraction` — max 25% skipped, min 50% extracted, zero extracted forbidden
 5. Silver from Bronze only (with `chunk_id` citations)
-6. `complete_ingest` — verifies artifact + inventory + facts + Silver in storage
+6. `submit_inventory_probes` — spot-check ≥30% of inventory items (min 3) with Bronze `chunk_id` citations
+7. `complete_ingest` — verifies artifact + inventory + facts + Silver + probes in storage
+
+`force=true` auto-wipes the target `SOURCES/{slug}` namespace (including immutable chunks) before re-ingest. Sessions persist across MCP restarts until `complete_ingest`.
 
 Use `mode=routing` only when the user explicitly wants discoverability-only ingest (lighter rules).
 

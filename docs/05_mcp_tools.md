@@ -296,7 +296,9 @@ Starts a **stateful ingest session** with inline **IRON RULES** (server-enforced
 
 For PDFs, use `source_path` — the server runs `pdftotext`. For other formats, the agent reads the file and passes `content`. Do not respond to the user until `complete_ingest` succeeds.
 
-**answer_complete gates:** `[INVENTORY]` Bronze, Bronze facts, Silver with `chunk_id` citations, max 25% service chunks skipped, min 50% extracted, `complete_ingest` verifies storage.
+**answer_complete gates:** `[INVENTORY]` Bronze, Bronze facts, Silver with `chunk_id` citations, max 25% service chunks skipped, min 50% extracted, `submit_inventory_probes` (≥30% of inventory, min 3), `complete_ingest` verifies storage.
+
+`force=true` marks all prior chunks in the target namespace stale (including immutable) before starting a new session. Ingest sessions persist in SQLite until `complete_ingest`.
 
 Use `mode=routing` only for discoverability-only ingests (lighter rules).
 
@@ -312,6 +314,17 @@ Source documents are stored under `SOURCES/{slug}`. `authority` is metadata in t
 | `expected_size_bytes` | integer | Optional UTF-8 byte count expected for the text payload; mismatches are rejected |
 | `authority` | string | Issuing authority (e.g. `SWIFT`, `ISO`), stored as metadata |
 | `doc_slug` | string | Short namespace identifier. Defaults to filename without extension |
+
+---
+
+### `submit_inventory_probes`
+
+Before `complete_ingest` in `answer_complete` mode, submit probes that map inventory lines to active Bronze `chunk_id`s. Required: `max(3, ceil(30% × inventory lines))`.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `session_key` | string (required) | Active ingest session |
+| `probes` | array (required) | `{item, chunk_ids[]}` per probe |
 
 ---
 

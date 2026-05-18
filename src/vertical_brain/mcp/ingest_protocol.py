@@ -16,6 +16,8 @@ DEFAULT_INGEST_MODE = INGEST_MODE_ANSWER_COMPLETE
 MAX_SKIP_RATIO_ANSWER_COMPLETE = 0.25
 MIN_EXTRACTED_RATIO_ANSWER_COMPLETE = 0.50
 MIN_BRONZE_FACTS_ANSWER_COMPLETE = 1
+MIN_INVENTORY_PROBE_COUNT = 3
+MIN_INVENTORY_PROBE_RATIO = 0.30
 
 INVENTORY_PREFIX = "[INVENTORY]"
 
@@ -216,13 +218,131 @@ def _active_chunks(store: StorageProvider, path: str) -> list[Chunk]:
     return [c for c in get_chunks(path) if c.status == "active"]
 
 
-def _find_inventory(chunks: list[Chunk]) -> Chunk | None:
+def normalize_inventory_label(label: str) -> str:
+    return re.sub(r"\s+", " ", label.strip().lower())
+
+
+def parse_inventory_items(inventory_content: str) -> list[str]:
+    """Parse bullet/numbered lines from an [INVENTORY] Bronze chunk."""
+    items: list[str] = []
+    for raw in inventory_content.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(INVENTORY_PREFIX):
+            continue
+        if line.startswith(("-", "*", "•", "·")):
+            line = line[1:].strip()
+        line = re.sub(r"^\d+[.)]\s+", "", line)
+        if line:
+            items.append(line)
+    return items
+
+
+def inventory_probe_requirement(item_count: int) -> int:
+    if item_count <= 0:
+        return 0
+    ratio_based = int(item_count * MIN_INVENTORY_PROBE_RATIO + 0.999)
+    return min(item_count, max(MIN_INVENTORY_PROBE_COUNT, ratio_based))
+
+
+def _inventory_item_matches(probe_item: str, inventory_items: list[str]) -> bool:
+    probe_norm = normalize_inventory_label(probe_item)
+    if not probe_norm:
+        return False
+    for item in inventory_items:
+        item_norm = normalize_inventory_label(item)
+        if probe_norm == item_norm or probe_norm in item_norm or item_norm in probe_norm:
+            return True
+    return False
+
+
+def validate_inventory_probes(
+    session: dict[str, Any],
+    store: StorageProvider,
+) -> dict[str, Any]:
+    """Require spot-check probes linking inventory items to Bronze chunk_ids."""
+    mode = session.get("ingest_mode", DEFAULT_INGEST_MODE)
+    if mode != INGEST_MODE_ANSWER_COMPLETE:
+        return {"required": 0, "submitted": 0}
+
+    path = session["source_namespace"]
+    chunks = _active_chunks(store, path)
+    inventory = find_inventory_chunk(chunks)
+    if inventory is None:
+        raise ValueError(
+            "submit_inventory_probes blocked: write [INVENTORY] Bronze before probing coverage."
+        )
+
+    inventory_items = parse_inventory_items(inventory.content)
+    required = inventory_probe_requirement(len(inventory_items))
+    probes: list[dict[str, Any]] = list(session.get("inventory_probes") or [])
+    if len(probes) < required:
+        raise ValueError(
+            f"complete_ingest blocked: submit at least {required} inventory probe(s) via "
+            f"submit_inventory_probes (have {len(probes)}, inventory lists {len(inventory_items)} items). "
+            "Each probe must name an inventory item and cite active Bronze chunk_id(s) that answer it."
+        )
+
+    active_ids = {c.id for c in chunks}
+    errors: list[str] = []
+    seen_items: set[str] = set()
+    for probe in probes:
+        item = str(probe.get("item", "")).strip()
+        chunk_ids = probe.get("chunk_ids") or []
+        if not item:
+            errors.append("probe missing item label")
+            continue
+        if not _inventory_item_matches(item, inventory_items):
+            errors.append(f"probe item {item!r} does not match any [INVENTORY] line")
+            continue
+        item_key = normalize_inventory_label(item)
+        if item_key in seen_items:
+            errors.append(f"duplicate probe for inventory item {item!r}")
+            continue
+        seen_items.add(item_key)
+        if not chunk_ids:
+            errors.append(f"probe {item!r} must cite at least one chunk_id")
+            continue
+        missing = [cid for cid in chunk_ids if cid not in active_ids]
+        if missing:
+            errors.append(f"probe {item!r} cites unknown or stale chunk_id(s): {missing}")
+            continue
+        bronze_ids = {
+            c.id
+            for c in chunks
+            if c.id in chunk_ids and c.layer == "bronze" and c.status == "active"
+        }
+        if not bronze_ids:
+            errors.append(f"probe {item!r} must cite at least one active Bronze chunk_id")
+
+    if errors:
+        raise ValueError(
+            "complete_ingest blocked — inventory probe validation failed:\n- " + "\n- ".join(errors)
+        )
+
+    return {
+        "required": required,
+        "submitted": len(probes),
+        "inventory_item_count": len(inventory_items),
+    }
+
+
+def find_inventory_chunk(chunks: list[Chunk]) -> Chunk | None:
     for chunk in chunks:
         if chunk.layer != "bronze" or chunk.status != "active":
             continue
         if chunk.content.strip().startswith(INVENTORY_PREFIX):
             return chunk
     return None
+
+
+def load_inventory_items(store: StorageProvider, path: str) -> list[str]:
+    inventory = find_inventory_chunk(_active_chunks(store, path))
+    if inventory is None:
+        return []
+    return parse_inventory_items(inventory.content)
+
+
+_find_inventory = find_inventory_chunk  # internal alias
 
 
 def _find_artifact(chunks: list[Chunk]) -> Chunk | None:
@@ -262,7 +382,7 @@ def validate_namespace_ready_for_complete(
     chunks = _active_chunks(store, path)
 
     artifact = _find_artifact(chunks)
-    inventory = _find_inventory(chunks)
+    inventory = find_inventory_chunk(chunks)
     silver = next((c for c in chunks if c.layer == "silver" and c.status == "active"), None)
     facts = _bronze_fact_count(
         chunks,
@@ -383,8 +503,12 @@ def build_protocol_lines(session: dict[str, Any]) -> list[str]:
         f"STEP 5 — list_chunks(path='{source_ns}', layer='bronze'); write Silver from Bronze ONLY",
         "  Silver maps topics → chunk_id(s). Required before complete_ingest.",
         "",
+        "STEP 5b — submit_inventory_probes(session_key, probes=[{item, chunk_ids}, ...])",
+        "  Spot-check ≥30% of inventory items (min 3): each probe names an inventory line and cites",
+        "  active Bronze chunk_id(s) that contain the answer. Server blocks complete_ingest without this.",
+        "",
         "STEP 6 — complete_ingest(session_key)",
-        "  Server verifies: artifact + inventory + facts + Silver present in storage.",
+        "  Server verifies: artifact + inventory + facts + Silver + inventory probes in storage.",
         "",
         "Do NOT respond to the user until step 6 succeeds.",
     ]

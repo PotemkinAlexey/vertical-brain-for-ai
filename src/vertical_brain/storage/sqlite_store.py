@@ -138,6 +138,13 @@ class SQLiteStore:
                 file_name TEXT NOT NULL,
                 ingested_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS ingest_sessions (
+                session_key TEXT PRIMARY KEY,
+                state TEXT NOT NULL,
+                session_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         self.conn.commit()
@@ -966,6 +973,56 @@ class SQLiteStore:
             "file_name": row["file_name"],
             "ingested_at": row["ingested_at"],
         }
+
+    # ------------------------------------------------------------------
+    # Ingest sessions (persist across MCP restarts)
+    # ------------------------------------------------------------------
+
+    def save_ingest_session(self, session_key: str, state: str, session_json: str) -> None:
+        now = utc_now()
+        self.conn.execute(
+            """
+            INSERT INTO ingest_sessions (session_key, state, session_json, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(session_key) DO UPDATE SET
+                state=excluded.state,
+                session_json=excluded.session_json,
+                updated_at=excluded.updated_at
+            """,
+            (session_key, state, session_json, now),
+        )
+        self.conn.commit()
+
+    def get_ingest_session(self, session_key: str) -> dict[str, str] | None:
+        row = self.conn.execute(
+            "SELECT state, session_json, updated_at FROM ingest_sessions WHERE session_key = ?",
+            (session_key,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "state": row["state"],
+            "session_json": row["session_json"],
+            "updated_at": row["updated_at"],
+        }
+
+    def delete_ingest_session(self, session_key: str) -> None:
+        self.conn.execute("DELETE FROM ingest_sessions WHERE session_key = ?", (session_key,))
+        self.conn.commit()
+
+    def list_ingest_sessions(self) -> list[dict[str, str]]:
+        rows = self.conn.execute(
+            "SELECT session_key, state, session_json, updated_at FROM ingest_sessions ORDER BY updated_at"
+        ).fetchall()
+        return [
+            {
+                "session_key": row["session_key"],
+                "state": row["state"],
+                "session_json": row["session_json"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
 
     def list_audit(self) -> list[dict[str, Any]]:
         rows = self.conn.execute(
