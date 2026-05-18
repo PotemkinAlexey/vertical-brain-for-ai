@@ -294,6 +294,8 @@ deletion.
 
 Registers a document for guided ingestion. Creates an ingest session, splits the content into service chunks, and returns a `session_key` with a numbered chunk list and the full ingestion protocol inline. For PDFs, use `source_path` — the server runs `pdftotext`. For all other formats, the agent reads the file and passes `content`. The agent must follow the inline protocol to completion before responding to the user.
 
+The primary goal is durable knowledge extraction, not merely reaching `complete_ingest`. Substantive chunks must be extracted into Bronze facts. Use immutable Bronze for source metadata, tables, schemas, account/routing rows, legal/normative text, and other reference data that downstream answers may need to cite exactly.
+
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `source_path` | string | Local path to the original file; required for PDFs |
@@ -319,7 +321,9 @@ Reads the full content of one service chunk from an active ingest session. Call 
 
 ### `mark_service_chunk`
 
-Marks a service chunk as processed. Call with `status='extracted'` after writing Bronze facts, or `status='skipped'` with a reason for boilerplate or irrelevant content. All chunks must be marked before `finish_bronze_extraction` will succeed.
+Marks a service chunk as processed. Call with `status='extracted'` after writing Bronze facts, or `status='skipped'` only for empty/formatting noise, boilerplate, irrelevant text, or duplicates already represented in Bronze. All chunks must be marked before `finish_bronze_extraction` will succeed.
+
+`skipped` is not a shortcut for closing an ingest session. The server rejects skip reasons that describe bulk-closing or completing ingest instead of a content-specific reason.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|

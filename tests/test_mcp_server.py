@@ -921,6 +921,34 @@ def test_ingest_file_returns_metadata_header(tmp_path):
     assert "session_key:" in text
     assert "Service chunks" in text
     assert "Protocol" in text
+    assert "Extract durable knowledge" in text
+    assert "Do not bulk-skip substantive chunks" in text
+
+
+def test_mark_service_chunk_rejects_bulk_close_skip_reason(tmp_path):
+    mcp, _ = _mcp(tmp_path)
+    resp = _call(mcp, "ingest_file", {
+        "content": "Field 32A: Value Date, Currency, Amount. Format: 6!n3!a15d",
+        "file_name": "MT103.txt",
+        "authority": "SWIFT",
+        "doc_slug": "MT103",
+    })
+    session_key = next(
+        line.split(":", 1)[1].strip()
+        for line in _text(resp).splitlines()
+        if line.startswith("session_key:")
+    )
+    chunk_id = mcp._ingest_sessions[session_key]["chunks"][0]["id"]
+
+    result = _call(mcp, "mark_service_chunk", {
+        "session_key": session_key,
+        "chunk_id": chunk_id,
+        "status": "skipped",
+        "skip_reason": "bulk skip for clean re-ingest verification",
+    })
+
+    assert result.get("error") or (result.get("result", {}).get("isError"))
+    assert "not a content reason" in json.dumps(result)
 
 
 def test_ingest_file_defaults_slug_to_filename(tmp_path):

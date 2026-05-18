@@ -32,6 +32,7 @@ Gold = routing only (short search tags, not answers). Use Gold to find which nam
 4. **Call `read_context` before every `update_silver`** to get `current_silver_id`.
 5. **For `batch_append`:** call `update_silver` once after the entire batch, not per chunk.
 6. **To correct wrong memory:** write a Bronze chunk with `content_type="correction"`, then update Silver. Do not overwrite Gold directly.
+7. **Canonical namespace first.** Durable knowledge belongs in its canonical topic namespace. Facts about a current storage, project, source, workstream, or other concrete topic must be written inside that topic's context. `META/agent-contract` is only for general operating rules; `META/sessions/*` is only a trace. `session_end` does not replace Bronze → Silver → Gold updates in the relevant namespace. If placement is unclear, route/read context before writing.
 
 ## Responding to tool signals
 
@@ -55,6 +56,8 @@ When user writes `ingest_file` or `ingest_url`, call the tool and follow the pro
 - PDF: `ingest_file(source_path=<path>, authority=<inferred>)`
 - Other formats: agent reads file → `ingest_file(content=<text>, file_name=<name>, authority=<inferred>)`
 - URL: `ingest_url(url=<url>)`
+
+The goal of ingest is durable knowledge extraction, not merely reaching `complete_ingest`. Use `skipped` only for boilerplate, empty/formatting noise, irrelevant text, or duplicates. Never bulk-skip substantive source chunks to finish the session.
 
 ## Schema / normative lookups
 

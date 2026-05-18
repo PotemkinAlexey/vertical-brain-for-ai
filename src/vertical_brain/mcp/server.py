@@ -30,6 +30,16 @@ from vertical_brain.llm.embedding import EmbeddingProvider, MockEmbeddingProvide
 
 _PROTOCOL_VERSION = "2025-03-26"
 _SERVER_VERSION = "0.1.0"
+_INVALID_SKIP_REASON_FRAGMENTS = (
+    "bulk skip",
+    "mass skip",
+    "skip all",
+    "complete_ingest",
+    "finish_bronze_extraction",
+    "close ingest",
+    "close the ingest",
+    "clean re-ingest verification",
+)
 
 _TOOLS: list[dict[str, Any]] = [
     # ── Read / orientation ──────────────────────────────────────────────
@@ -486,7 +496,8 @@ _TOOLS: list[dict[str, Any]] = [
         "description": (
             "Mark a service chunk as processed. "
             "Call with status='extracted' after writing Bronze facts, "
-            "or status='skipped' with a reason for boilerplate/irrelevant content."
+            "or status='skipped' only when the chunk is boilerplate, empty/formatting noise, "
+            "irrelevant to the source purpose, or a duplicate of Bronze already written."
         ),
         "inputSchema": {
             "type": "object",
@@ -1296,6 +1307,10 @@ class VerticalBrainMCP:
             "",
             "## Protocol — execute now, no exceptions",
             "",
+            "PRIMARY GOAL — Extract durable knowledge from the source document.",
+            "  complete_ingest is valid only after meaningful extraction; it is not the goal.",
+            "  Do not bulk-skip substantive chunks to finish the session.",
+            "",
             "STEP 1 — Register source (immutable=true, content_type=artifact, layer=bronze)",
             f"  namespace: {source_ns}",
             "  content: file name, sha256, authority, size, one-sentence description (≤600 chars)",
@@ -1304,13 +1319,18 @@ class VerticalBrainMCP:
             "  a. Call get_service_chunk(session_key, chunk_id) to read full content",
             "  b. atomic chunk   → write ONE immutable Bronze chunk (no size limit)",
             "     splittable     → extract 0-N Bronze facts (≤600 chars each, max 10 per batch_append)",
+            "     reference data → use immutable Bronze for tables, schemas, account/routing rows, legal/normative text",
             "     boilerplate    → call mark_service_chunk(..., status='skipped', skip_reason='...')",
             "  c. After writing  → call mark_service_chunk(..., status='extracted')",
+            "",
+            "SKIP POLICY — skipped is only for empty/formatting noise, boilerplate, irrelevant text, or duplicates.",
+            "  If a chunk contains source knowledge, extract it. If you cannot finish, report progress instead of skipping.",
             "",
             "STEP 3 — Call finish_bronze_extraction(session_key)",
             "  Server verifies all chunks are extracted or skipped. Returns error if any pending.",
             "",
             f"STEP 4 — list_chunks(path='{source_ns}', layer='bronze'), then write Silver from Bronze only.",
+            "  Silver must summarize the source and cite key immutable Bronze chunk_ids when applicable.",
             "",
             "STEP 5 — Call complete_ingest(session_key)",
             "",
@@ -1344,6 +1364,13 @@ class VerticalBrainMCP:
             raise ValueError(f"status must be 'extracted' or 'skipped', got {status!r}")
         if status == "skipped" and not skip_reason:
             raise ValueError("skip_reason is required when status='skipped'")
+        if status == "skipped":
+            normalized_reason = str(skip_reason).lower()
+            if any(fragment in normalized_reason for fragment in _INVALID_SKIP_REASON_FRAGMENTS):
+                raise ValueError(
+                    "skip_reason describes completing or bulk-closing ingest, not a content reason. "
+                    "Use skipped only for empty/formatting noise, boilerplate, irrelevant text, or duplicates."
+                )
         session = self._ingest_sessions.get(session_key)
         if session is None:
             raise ValueError(f"No active ingest session: {session_key!r}")
