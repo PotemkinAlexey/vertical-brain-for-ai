@@ -509,7 +509,7 @@ def build_protocol_lines(session: dict[str, Any]) -> list[str]:
         f"  namespace: {source_ns}",
         "  content: file name, sha256, authority, size, one-sentence description (≤600 chars)",
         "",
-        f"STEP 2 — Write inventory (layer=bronze, content_type=note, NOT immutable)",
+        "STEP 2 — Write inventory (layer=bronze, content_type=note, NOT immutable)",
         f"  content MUST start with {INVENTORY_PREFIX!r}",
         "  List every answer-critical entity: countries, fields, payment methods, codes, constraints.",
         "",
