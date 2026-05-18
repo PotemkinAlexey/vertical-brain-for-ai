@@ -300,7 +300,14 @@ Starts a **stateful ingest session** with inline **IRON RULES** (server-enforced
 
 For PDFs, use `source_path` — the server runs `pdftotext`. For other formats, the agent reads the file and passes `content`. Do not respond to the user until `complete_ingest` succeeds.
 
-**answer_complete gates:** `[INVENTORY]` Bronze, Bronze facts, Silver with `chunk_id` citations, max 25% service chunks skipped, min 50% extracted, `submit_inventory_probes` (≥30% of inventory, min 3), `complete_ingest` verifies storage.
+**answer_complete gates:** `[INVENTORY]` Bronze, Bronze facts, Silver (either `chunk_id` citations or sub-namespace path references), max 25% service chunks skipped, min 50% extracted, `submit_inventory_probes` (≥30% of inventory, min 3), `complete_ingest` verifies storage.
+
+**Recommended ingest flow for structured documents:**
+1. Scan `section_header` service chunks → plan sub-namespace map (`SOURCES/{slug}/section-slug/`)
+2. Write Bronze verbatim per section into sub-namespaces using `get_service_chunks` + `batch_mark_service_chunks`
+3. Silver per sub-namespace = `[chunk_id] one-line summary` index; root Silver = `[SOURCES/{slug}/section] description`
+
+Service chunk types: `splittable` (prose), `atomic` (code/table block, write verbatim), `section_header` (document heading — mark extracted, use to identify section boundaries).
 
 `force=true` marks all prior chunks in the target namespace stale (including immutable) before starting a new session. Ingest sessions persist in SQLite until `complete_ingest`.
 

@@ -57,16 +57,17 @@ When user writes `ingest_file` or `ingest_url`, call the tool and follow the **I
 - Other formats: agent reads file → `ingest_file(content=<text>, file_name=<name>, authority=<inferred>)`
 - URL: `ingest_url(url=<url>)` — same stateful session as `ingest_file`
 
-**Success criterion:** the source file will not exist later. Any question the document should answer must be answerable from brain alone (Bronze → Silver, cite `chunk_id`).
+**Success criterion:** the source file will not exist later. Any question the document should answer must be answerable from brain alone.
 
 **Mandatory steps (server-enforced in `answer_complete` mode):**
-1. Artifact Bronze (immutable registration)
+1. Artifact Bronze (immutable registration) at `SOURCES/{slug}`
 2. `[INVENTORY]` Bronze listing every answer-critical entity
-3. Process **every** service chunk (`get_service_chunk` or `get_service_chunks` batch)
-4. `finish_bronze_extraction` — max 25% skipped, min 50% extracted, zero extracted forbidden
-5. Silver from Bronze only (with `chunk_id` citations)
-6. `submit_inventory_probes` — spot-check ≥30% of inventory items (min 3) with Bronze `chunk_id` citations
-7. `complete_ingest` — verifies artifact + inventory + facts + Silver + probes in storage
+3. Plan sub-namespace structure — scan `section_header` chunks → map sections to `SOURCES/{slug}/section-slug/` sub-namespaces; write plan as Bronze note at root
+4. Process **every** service chunk in batches by section (`get_service_chunks` + `batch_mark_service_chunks`); write Bronze **verbatim** into the section sub-namespace
+5. `finish_bronze_extraction` — max 25% skipped, min 50% extracted, zero extracted forbidden
+6. Silver per sub-namespace = `[chunk_id] one-line summary` index (pointer map, not synthesis); root Silver = `[SOURCES/{slug}/section] description` section index
+7. `submit_inventory_probes` — spot-check ≥30% of inventory items (min 3) with Bronze `chunk_id` citations
+8. `complete_ingest` — verifies artifact + inventory + facts + Silver + probes in storage
 
 `force=true` auto-wipes the target `SOURCES/{slug}` namespace (including immutable chunks) before re-ingest. Sessions persist across MCP restarts until `complete_ingest`.
 
