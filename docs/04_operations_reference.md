@@ -56,10 +56,11 @@ Add a new chunk to a namespace. Creates the node chain if nodes do not exist.
 |-------|------|---------|-------------|
 | `content` | string | required | The text |
 | `layer` | `bronze`\|`silver`\|`gold` | `bronze` | Knowledge quality layer |
-| `content_type` | enum | `note` | `fact`, `decision`, `question`, `note`, `code`, `artifact`, `correction` |
+| `content_type` | enum | `note` | `fact`, `reference`, `decision`, `question`, `note`, `code`, `artifact`, `correction` |
 | `source` | string | `""` | Who produced this (`user`, `model`, `optimizer:namespace_compaction`, …) |
 | `confidence` | float [0,1] | `1.0` | Routing/quality signal |
 | `lineage` | string[] | `[]` | IDs of source chunks this was distilled from |
+| `immutable` | bool | `false` | Protect reference material from Bronze dedup/size guards and ordinary stale/vacuum operations |
 
 **Bronze dedup enforcement (layer `bronze` only):**
 

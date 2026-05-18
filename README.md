@@ -218,8 +218,8 @@ vb --data-dir ./brain --storage-backend json ...
 
 ```bash
 pip install -e .
-pytest                              # full suite (499 tests)
-pytest tests/test_operations.py -v  # single file
+.venv/bin/python -m pytest                              # full suite (530 tests)
+.venv/bin/python -m pytest tests/test_operations.py -v  # single file
 ```
 
 **Zero Python runtime dependencies.** Core, storage, and MCP server use only the Python standard library. Optional semantic search requires an external OpenAI-compatible embedding endpoint (e.g. Ollama, OpenAI API).

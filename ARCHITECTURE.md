@@ -48,13 +48,14 @@ A chunk is a single piece of content at a node. Multiple chunks can coexist at t
 | `node_path` | string | The namespace this chunk belongs to |
 | `layer` | `bronze`\|`silver`\|`gold` | Knowledge quality layer |
 | `content` | string | The actual text |
-| `content_type` | enum | `fact`, `decision`, `question`, `note`, `code`, `artifact`, `correction` |
+| `content_type` | enum | `fact`, `reference`, `decision`, `question`, `note`, `code`, `artifact`, `correction` |
 | `status` | enum | `active`, `stale`, `superseded`, `legacy`, `contradicted` |
 | `source` | string | Who produced this: `user`, `model`, `optimizer:namespace_compaction`, etc. |
 | `confidence` | float [0,1] | Routing/quality signal |
 | `lineage` | list[UUID] | IDs of source chunks this was distilled from |
 | `content_hash` | string | SHA-256 of content, used for deduplication and vector cache keys |
 | `decay_factor` | float | Per-chunk decay rate (overrides global if < 1.0) |
+| `immutable` | bool | Protected reference material; bypasses Bronze dedup/size guards and is skipped by stale/vacuum operations unless explicitly forced |
 | `valid_from` | ISO 8601 | When this chunk became active |
 | `valid_to` | ISO 8601\|null | Auto-set when status transitions to stale/superseded/legacy/contradicted |
 | `created_at` | ISO 8601 | |

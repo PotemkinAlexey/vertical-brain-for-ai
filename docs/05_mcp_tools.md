@@ -141,9 +141,10 @@ Write a new chunk to a namespace. Creates the node chain if it does not exist.
 | `path` | string | **required** Target namespace |
 | `content` | string | **required** Chunk text |
 | `layer` | `bronze`\|`silver`\|`gold` | Layer (default `bronze`) |
-| `content_type` | `fact`\|`decision`\|`question`\|`note`\|`code`\|`artifact`\|`correction` | |
+| `content_type` | `fact`\|`reference`\|`decision`\|`question`\|`note`\|`code`\|`artifact`\|`correction` | |
 | `source` | string | Who produced this (e.g. `model`, `user`) |
 | `confidence` | number | Quality signal [0, 1] (default 1.0) |
+| `immutable` | boolean | Protect Bronze reference material from dedup/size guards and ordinary stale/vacuum operations |
 
 **Bronze dedup (layer `bronze` only):**
 
@@ -196,13 +197,13 @@ Retire chunks at a namespace. Pass specific `chunk_ids` to target individual chu
 
 ### `batch_append`
 
-Write multiple chunks in one call. All-or-nothing when using the SQLite backend.
+Write multiple chunks in one call, up to 10 chunks per call. All-or-nothing when using the SQLite backend.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `chunks` | object[] | **required** Array of chunk objects (each needs `path` and `content`) |
 
-Each chunk object accepts: `path` (required), `content` (required), `layer`, `content_type`, `source`, `confidence`.
+Each chunk object accepts: `path` (required), `content` (required), `layer`, `content_type`, `source`, `confidence`, `immutable`.
 
 ---
 
@@ -300,7 +301,7 @@ Starts a **stateful ingest session** with inline **IRON RULES** (server-enforced
 
 For PDFs, use `source_path` — the server runs `pdftotext`. For other formats, the agent reads the file and passes `content`. Do not respond to the user until `complete_ingest` succeeds.
 
-**answer_complete gates:** `[INVENTORY]` Bronze, Bronze facts, Silver (either `chunk_id` citations or sub-namespace path references), max 25% service chunks skipped, min 50% extracted, `submit_inventory_probes` (≥30% of inventory, min 3), `complete_ingest` verifies storage.
+**answer_complete gates:** `[INVENTORY]` Bronze, Bronze facts, Silver (either `chunk_id` citations or sub-namespace path references), max 25% service chunks skipped, min 50% extracted, `submit_inventory_probes`, and `complete_ingest` storage verification. Inventory probes must satisfy both the minimum submission count and `inventory_coverage ≥90%`.
 
 **Recommended ingest flow for structured documents:**
 1. Scan `section_header` service chunks → plan sub-namespace map (`SOURCES/{slug}/section-slug/`)
@@ -330,7 +331,7 @@ Source documents are stored under `SOURCES/{slug}`. `authority` is metadata in t
 
 ### `submit_inventory_probes`
 
-Before `complete_ingest` in `answer_complete` mode, submit probes that map inventory lines to active Bronze `chunk_id`s. Required: `max(3, ceil(30% × inventory lines))`.
+Before `complete_ingest` in `answer_complete` mode, submit probes that map inventory lines to active Bronze `chunk_id`s. Minimum submission count: `max(3, ceil(30% × inventory lines))`. Completion also requires `inventory_coverage ≥90%`, so most inventories need probes for at least 90% of listed items.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
