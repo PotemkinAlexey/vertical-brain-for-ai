@@ -14,8 +14,6 @@ import shutil
 import subprocess
 import sys
 import traceback
-import urllib.error
-import urllib.request
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -1272,7 +1270,7 @@ class VerticalBrainMCP:
             f"content_sha256: {file_hash}",
             f"authority: {authority or '(infer from content)'}",
             f"source_namespace: {source_ns}",
-            f"state: EXTRACTING_BRONZE",
+            "state: EXTRACTING_BRONZE",
             "",
             f"## Service chunks ({len(service_chunks)} total: {splittable_count} splittable, {atomic_count} atomic)",
             "",
