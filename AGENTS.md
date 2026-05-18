@@ -61,17 +61,22 @@ When user writes `ingest_file` or `ingest_url`, call the tool and follow the **I
 
 **Mandatory steps (server-enforced in `answer_complete` mode):**
 1. Artifact Bronze (immutable registration) at `SOURCES/{slug}`
-2. `[INVENTORY]` Bronze listing every answer-critical entity
+2. `[INVENTORY]` Bronze — each line = **one answer-critical capability**, not a category.
+   Format: `"<Topic> — <specific fact or method>"`. Examples: `"US ACH payment to BofA"`, `"Germany EUR IBAN wire"`, `"Costa Rica MT103 SWIFT intermediary"`. Never write `"United States"` or `"payment methods"` — too vague to probe.
 3. Plan sub-namespace structure — scan `section_header` chunks → map sections to `SOURCES/{slug}/section-slug/` sub-namespaces; write plan as Bronze note at root
-4. Process **every** service chunk in batches by section (`get_service_chunks` + `batch_mark_service_chunks`); write Bronze **verbatim** into the section sub-namespace
+4. Process **every** service chunk in batches by section (`get_service_chunks` + `batch_mark_service_chunks`); write Bronze into the section sub-namespace:
+   - `content_type="reference"`, `immutable=True` — normative tables, SWIFT/BIC/IBAN/routing/account numbers
+   - `content_type="fact"`, `immutable=True` recommended — prose instructions, rules, constraints
 5. `finish_bronze_extraction` — max 25% skipped, min 50% extracted, zero extracted forbidden
 6. Silver per sub-namespace = `[chunk_id] one-line summary` index (pointer map, not synthesis); root Silver = `[SOURCES/{slug}/section] description` section index
-7. `submit_inventory_probes` — spot-check ≥30% of inventory items (min 3) with Bronze `chunk_id` citations
-8. `complete_ingest` — verifies artifact + inventory + facts + Silver + probes in storage
+7. `submit_inventory_probes` — cite Bronze `chunk_id` for **≥90% of inventory items** (min 3). This is the primary quality gate: `complete_ingest` will fail if `inventory_coverage < 90%`.
+8. `complete_ingest` — verifies artifact + inventory + facts + Silver + probes + coverage score; returns `coverage_score.uncovered_items` if any gaps remain
+9. `append_gold_aspect` — **MANDATORY** after complete_ingest: add routing tags on source namespace and all sub-namespaces. Without Gold the document is invisible to routing.
 
 `force=true` auto-wipes the target `SOURCES/{slug}` namespace (including immutable chunks) before re-ingest. Sessions persist across MCP restarts until `complete_ingest`.
 
-Use `mode=routing` only when the user explicitly wants discoverability-only ingest (lighter rules).
+`mode=routing` — discoverability-only; complete_ingest writes a `[ROUTING ONLY]` Bronze note. Not for authoritative answers.
+`mode=audit` — check coverage gaps on an already-ingested namespace: submit_inventory_probes → complete_ingest. No Bronze writing.
 
 `skipped` is only for true boilerplate (headers, footers, blank pages, disclaimers). If you cannot finish, report blockers — do not call `complete_ingest`.
 

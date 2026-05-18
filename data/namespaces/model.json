@@ -141,7 +141,7 @@
             },
             "content_type": {
               "type": "string",
-              "enum": ["fact", "correction", "decision", "question", "note", "code", "artifact"]
+              "enum": ["fact", "reference", "correction", "decision", "question", "note", "code", "artifact"]
             },
             "source": {
               "type": "string"

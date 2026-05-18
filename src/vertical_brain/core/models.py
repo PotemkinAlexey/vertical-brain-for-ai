@@ -9,7 +9,7 @@ from uuid import uuid4
 
 
 Layer = Literal["bronze", "silver", "gold"]
-ContentType = Literal["fact", "correction", "decision", "question", "note", "code", "artifact"]
+ContentType = Literal["fact", "reference", "correction", "decision", "question", "note", "code", "artifact"]
 ChunkStatus = Literal["active", "stale", "legacy", "superseded", "contradicted", "uncertain"]
 QueryType = Literal["explanation", "lookup", "comparison", "summary", "unknown"]
 LinkExpansionPolicy = Literal["handles_only", "expanded", "none"]

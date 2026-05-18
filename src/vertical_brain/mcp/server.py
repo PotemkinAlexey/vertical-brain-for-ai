@@ -23,13 +23,15 @@ from vertical_brain.core.context_session import ContextSession
 from vertical_brain.core.embedding_router import EmbeddingRouter
 from vertical_brain.core.embedding_search import EmbeddingSearch
 from vertical_brain.core.json_schema import format_json_schema_errors, validate_json_schema
-from vertical_brain.core.models import ChunkInput, LinkInput, StorageOperation, StorageOperationBatch
+from vertical_brain.core.models import Chunk, ChunkInput, LinkInput, StorageOperation, StorageOperationBatch
 from vertical_brain.core.operations import StorageOperationExecutor
 from vertical_brain.core.search import BrainSearch
 from vertical_brain.llm.embedding import EmbeddingProvider, MockEmbeddingProvider
 from vertical_brain.mcp.ingest_protocol import (
     DEFAULT_INGEST_MODE,
+    INGEST_MODE_ROUTING,
     build_protocol_lines,
+    calculate_coverage_score,
     inventory_probe_requirement,
     load_inventory_items,
     normalize_ingest_mode,
@@ -204,7 +206,7 @@ _TOOLS: list[dict[str, Any]] = [
                 "layer": {"type": "string", "enum": ["bronze", "silver", "gold"]},
                 "content_type": {
                     "type": "string",
-                    "enum": ["fact", "correction", "decision", "question", "note", "code", "artifact"],
+                    "enum": ["fact", "reference", "correction", "decision", "question", "note", "code", "artifact"],
                 },
                 "source": {"type": "string", "description": "Who wrote this, e.g. 'model', 'user'"},
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1},
@@ -432,11 +434,13 @@ _TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "mode": {
                     "type": "string",
-                    "enum": ["answer_complete", "routing"],
+                    "enum": ["answer_complete", "routing", "audit"],
                     "description": (
                         "answer_complete (default): enforce inventory, Bronze facts, Silver, "
                         "and coverage limits — source file will not be available later. "
-                        "routing: lighter checklist for discoverability-only ingests."
+                        "routing: discoverability-only ingest; Silver is marked not answer-complete. "
+                        "audit: check an already-ingested namespace for coverage gaps — "
+                        "no Bronze writing, just submit_inventory_probes then complete_ingest."
                     ),
                 },
                 "source_path": {
@@ -653,7 +657,7 @@ _TOOLS: list[dict[str, Any]] = [
                 },
                 "mode": {
                     "type": "string",
-                    "enum": ["answer_complete", "routing"],
+                    "enum": ["answer_complete", "routing", "audit"],
                     "description": "Default answer_complete. Same semantics as ingest_file.",
                 },
                 "authority": {
@@ -1599,9 +1603,24 @@ class VerticalBrainMCP:
         validate_service_chunk_coverage(session, phase="complete_ingest")
         storage_check = validate_namespace_ready_for_complete(self._store, session)
         probe_check = validate_inventory_probes(session, self._store)
+        coverage = calculate_coverage_score(session, self._store)
         extracted = sum(1 for c in session["chunks"] if c["status"] == "extracted")
         skipped = sum(1 for c in session["chunks"] if c["status"] == "skipped")
         source_ns = session["source_namespace"]
+        ingest_mode = session.get("ingest_mode", DEFAULT_INGEST_MODE)
+
+        # Routing mode: write an explicit honesty note in Bronze so storage reflects the limitation.
+        if ingest_mode == INGEST_MODE_ROUTING:
+            self._store.save_chunk(Chunk(
+                node_path=source_ns,
+                layer="bronze",
+                content_type="note",
+                content=(
+                    "[ROUTING ONLY] Discoverability ingest — not answer-complete. "
+                    "Silver contains section index only. "
+                    "Do not cite this namespace for authoritative answers."
+                ),
+            ))
 
         register_ingest = getattr(self._store, "register_ingest", None)
         if callable(register_ingest):
@@ -1616,11 +1635,12 @@ class VerticalBrainMCP:
         return json.dumps({
             "status": "completed",
             "source_namespace": source_ns,
-            "ingest_mode": session.get("ingest_mode", DEFAULT_INGEST_MODE),
+            "ingest_mode": ingest_mode,
             "bronze_extracted": extracted,
             "service_chunks_skipped": skipped,
             "storage_check": storage_check,
             "inventory_probes": probe_check,
+            "coverage_score": coverage,
             "session_key": session_key,
             "next_steps": (
                 "MANDATORY: call append_gold_aspect for the source namespace AND each "

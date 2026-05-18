@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 
 INGEST_MODE_ANSWER_COMPLETE = "answer_complete"
 INGEST_MODE_ROUTING = "routing"
+INGEST_MODE_AUDIT = "audit"
 DEFAULT_INGEST_MODE = INGEST_MODE_ANSWER_COMPLETE
 
 # answer_complete: document must be answerable without the source file
@@ -18,6 +19,7 @@ MIN_EXTRACTED_RATIO_ANSWER_COMPLETE = 0.50
 MIN_BRONZE_FACTS_ANSWER_COMPLETE = 1
 MIN_INVENTORY_PROBE_COUNT = 3
 MIN_INVENTORY_PROBE_RATIO = 0.30
+MIN_INVENTORY_COVERAGE = 0.90   # 90% of inventory items must have probe citation
 
 INVENTORY_PREFIX = "[INVENTORY]"
 
@@ -55,9 +57,10 @@ WEAK_SKIP_REASONS = frozenset({
 
 def normalize_ingest_mode(mode: str | None) -> str:
     value = (mode or DEFAULT_INGEST_MODE).strip().lower()
-    if value not in (INGEST_MODE_ANSWER_COMPLETE, INGEST_MODE_ROUTING):
+    if value not in (INGEST_MODE_ANSWER_COMPLETE, INGEST_MODE_ROUTING, INGEST_MODE_AUDIT):
         raise ValueError(
-            f"ingest mode must be {INGEST_MODE_ANSWER_COMPLETE!r} or {INGEST_MODE_ROUTING!r}, got {mode!r}"
+            f"ingest mode must be {INGEST_MODE_ANSWER_COMPLETE!r}, {INGEST_MODE_ROUTING!r}, "
+            f"or {INGEST_MODE_AUDIT!r}, got {mode!r}"
         )
     return value
 
@@ -347,6 +350,74 @@ def validate_inventory_probes(
     }
 
 
+def calculate_coverage_score(
+    session: dict[str, Any],
+    store: StorageProvider,
+) -> dict[str, Any]:
+    """Return a coverage dict summarising inventory, section, and skip-ratio health."""
+    source_ns = session["source_namespace"]
+    probes: list[dict[str, Any]] = list(session.get("inventory_probes") or [])
+
+    # --- inventory coverage ---
+    inventory = find_inventory_chunk(_active_chunks(store, source_ns))
+    if inventory is None:
+        inventory_coverage = 0.0
+        inventory_items: list[str] = []
+    else:
+        inventory_items = parse_inventory_items(inventory.content)
+
+    cited_items = {normalize_inventory_label(p["item"]) for p in probes}
+    if inventory is not None:
+        covered = sum(
+            1 for item in inventory_items if normalize_inventory_label(item) in cited_items
+        )
+        inventory_coverage = covered / len(inventory_items) if inventory_items else 1.0
+    uncovered_items = [
+        item for item in inventory_items if normalize_inventory_label(item) not in cited_items
+    ]
+
+    # --- section coverage ---
+    # Find a Bronze note at source_ns that describes the sub-namespace plan
+    plan_chunks = _active_chunks(store, source_ns)
+    planned_sub_ns: list[str] = []
+    for c in plan_chunks:
+        if c.layer != "bronze" or c.status != "active":
+            continue
+        if "→ SOURCES/" in c.content or re.search(r"→\s+\S+/", c.content):
+            for line in c.content.splitlines():
+                for m in re.finditer(r"→\s*(SOURCES/\S+)", line):
+                    planned_sub_ns.append(m.group(1).rstrip(",;"))
+
+    missing_sections: list[str] = []
+    for sub_ns in planned_sub_ns:
+        sub_chunks = _active_chunks(store, sub_ns)
+        has_bronze_fact = any(
+            c.layer == "bronze" and c.content_type in ("fact", "reference")
+            for c in sub_chunks
+        )
+        has_silver = any(c.layer == "silver" for c in sub_chunks)
+        if not (has_bronze_fact and has_silver):
+            missing_sections.append(sub_ns)
+
+    section_coverage = len(missing_sections) == 0
+
+    # --- skip ratio ---
+    session_chunks = session.get("chunks") or []
+    total = len(session_chunks)
+    skipped = sum(1 for c in session_chunks if c["status"] == "skipped")
+    skip_ratio = skipped / total if total else 0.0
+    skip_ratio_ok = skip_ratio <= MAX_SKIP_RATIO_ANSWER_COMPLETE
+
+    return {
+        "inventory_coverage": round(inventory_coverage, 3),
+        "uncovered_items": uncovered_items,
+        "section_coverage": section_coverage,
+        "missing_sections": missing_sections,
+        "skip_ratio": round(skip_ratio, 3),
+        "skip_ratio_ok": skip_ratio_ok,
+    }
+
+
 def find_inventory_chunk(chunks: list[Chunk]) -> Chunk | None:
     for chunk in chunks:
         if chunk.layer != "bronze" or chunk.status != "active":
@@ -450,6 +521,22 @@ def validate_namespace_ready_for_complete(
             f"(e.g. '{path}/SectionName')."
         )
 
+    # Coverage score gate (answer_complete only, only if probes submitted)
+    probes_submitted = len(session.get("inventory_probes") or []) if session else 0
+    if mode == INGEST_MODE_ANSWER_COMPLETE and probes_submitted > 0:
+        cov = calculate_coverage_score(session, store)
+        if cov["inventory_coverage"] < MIN_INVENTORY_COVERAGE:
+            errors.append(
+                f"inventory_coverage {cov['inventory_coverage']:.0%} is below the required "
+                f"{MIN_INVENTORY_COVERAGE:.0%}. Uncovered items: {cov['uncovered_items']}. "
+                "Add more inventory probes via submit_inventory_probes."
+            )
+        if not cov["section_coverage"]:
+            errors.append(
+                f"section_coverage incomplete — missing Bronze or Silver in: {cov['missing_sections']}. "
+                "Write Bronze facts and Silver index for each planned section."
+            )
+
     if errors:
         raise ValueError(
             "complete_ingest blocked — storage does not satisfy answer_complete requirements:\n- "
@@ -467,6 +554,21 @@ def validate_namespace_ready_for_complete(
 
 def build_protocol_lines(session: dict[str, Any]) -> list[str]:
     """Inline protocol returned by ingest_file / ingest_url."""
+    if session.get("ingest_mode") == INGEST_MODE_AUDIT:
+        source_ns = session.get("source_namespace", "?")
+        return [
+            "AUDIT MODE — checking existing namespace coverage gaps.",
+            f"Namespace: {source_ns}",
+            "",
+            "STEP 1 — submit_inventory_probes(session_key, probes=[{item, chunk_ids}, ...])",
+            "  For each [INVENTORY] item you can answer: cite the Bronze chunk_id(s).",
+            "  Read existing Bronze via list_chunks or read_context first.",
+            "",
+            "STEP 2 — complete_ingest(session_key)",
+            "  Returns coverage_score + uncovered_items + missing_sections.",
+            "  No Bronze writing required. This mode does not replace answer_complete.",
+        ]
+
     file_name = session["file_name"]
     session_key = session["session_key"]
     source_ns = session["source_namespace"]
@@ -514,9 +616,13 @@ def build_protocol_lines(session: dict[str, Any]) -> list[str]:
         f"  namespace: {source_ns}",
         "  content: file name, sha256, authority, size, one-sentence description (≤600 chars)",
         "",
-        "STEP 2 — Write inventory (layer=bronze, content_type=note, NOT immutable)",
+        "STEP 2 — Write [INVENTORY] Bronze (content_type=note, NOT immutable)",
         f"  content MUST start with {INVENTORY_PREFIX!r}",
-        "  List every answer-critical entity: countries, fields, payment methods, codes, constraints.",
+        "  Each line = ONE answer-critical capability the system MUST be able to answer.",
+        "  Format: '<Topic> — <specific fact or method>'",
+        "  Examples: 'US ACH payment to BofA', 'Germany EUR IBAN wire', 'Costa Rica MT103 SWIFT'",
+        "  NOT 'United States' or 'payment methods' — too vague to probe.",
+        "  Every item will be spot-checked via submit_inventory_probes.",
         "",
         "STEP 3 — Plan sub-namespace structure",
         "  a. Scan chunk list for section_header chunks — these mark document section boundaries.",
@@ -529,6 +635,8 @@ def build_protocol_lines(session: dict[str, Any]) -> list[str]:
         "STEP 4 — Process EVERY service chunk (grouped by section):",
         "  a. get_service_chunks(session_key, chunk_ids=[...]) — fetch all chunks in section at once",
         "  b. Write Bronze VERBATIM into the section sub-namespace (batch_append, max 10 per call):",
+        "     content_type='reference': normative tables, SWIFT/BIC/IBAN/routing/account numbers — set immutable=True.",
+        "     content_type='fact': prose instructions, rules, process notes — immutable=True recommended.",
         "     - section_header → mark_service_chunk(extracted); no Bronze write needed",
         "     - atomic         → ONE immutable Bronze chunk (verbatim code/table block)",
         "     - splittable     → one Bronze chunk per fact (≤600 chars, verbatim or minimal edit)",
