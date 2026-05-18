@@ -16,7 +16,13 @@
 
 ## Reading memory
 
-Gold → Silver → Bronze. Stop as soon as you have enough. `session_start` surfaces Gold; call `read_context` only when Gold is insufficient.
+Gold = routing only (short search tags, not answers). Use Gold to find which namespace to read, then call `read_context` to get Silver. Silver is the answer. Bronze only when you need the original wording or a timestamp Silver didn't preserve.
+
+`session_start` surfaces Gold. Always follow with `read_context` on relevant namespaces before answering questions about stored knowledge.
+
+## Writing during a session
+
+**Write as you go — do not save everything for session_end.** When a decision is made, a feature is built, or a fact is confirmed mid-session: write it immediately (Bronze + Silver update). `session_end` is a final summary, not the only write point.
 
 ## Writing memory
 
