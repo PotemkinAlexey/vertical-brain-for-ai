@@ -35,6 +35,7 @@ from vertical_brain.mcp.ingest_protocol import (
     inventory_probe_requirement,
     load_inventory_items,
     normalize_ingest_mode,
+    normalize_inventory_label,
     split_service_chunks,
     validate_inventory_probes,
     validate_namespace_ready_for_complete,
@@ -1578,16 +1579,26 @@ class VerticalBrainMCP:
         if not probes:
             raise ValueError("probes must be a non-empty list of {item, chunk_ids} objects")
         session = self._require_ingest_session(session_key)
-        session["inventory_probes"] = probes
+        existing: list[dict] = list(session.get("inventory_probes") or [])
+        existing_by_item: dict[str, dict] = {
+            normalize_inventory_label(p["item"]): p for p in existing if p.get("item")
+        }
+        for probe in probes:
+            item = probe.get("item", "")
+            key = normalize_inventory_label(item)
+            if key:
+                existing_by_item[key] = probe
+        session["inventory_probes"] = list(existing_by_item.values())
         self._persist_ingest_session(session)
 
         inventory_items = load_inventory_items(self._store, session["source_namespace"])
         inventory_count = len(inventory_items)
         required = inventory_probe_requirement(inventory_count)
 
+        total_accumulated = len(session["inventory_probes"])
         return json.dumps({
             "status": "ok",
-            "submitted": len(probes),
+            "submitted": total_accumulated,
             "required_for_complete": required,
             "inventory_item_count": inventory_count,
         }, ensure_ascii=False)
