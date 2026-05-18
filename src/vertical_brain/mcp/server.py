@@ -1423,6 +1423,21 @@ class VerticalBrainMCP:
             "content": chunk["content"],
         }, ensure_ascii=False)
 
+    def _ingest_step_hint(self, session: dict[str, Any]) -> str:
+        """Return a short step label + progress string for the current ingest phase."""
+        total = len(session.get("chunks") or [])
+        processed = sum(1 for c in (session.get("chunks") or []) if c["status"] != "pending")
+        pending = total - processed
+        state = session.get("state", "")
+        ns = session.get("source_namespace", "")
+        if state == "BRONZE_COMPLETE":
+            return "STEP 5 ✓ — Bronze complete. Next: STEP 6 — write Silver per sub-namespace, then submit_inventory_probes, complete_ingest."
+        pct = int(processed / total * 100) if total else 0
+        return (
+            f"STEP 4 — Bronze extraction | {ns} | "
+            f"{processed}/{total} chunks processed ({pct}%) | {pending} pending"
+        )
+
     def _handle_get_service_chunks(self, args: dict[str, Any]) -> str:
         session_key = args.get("session_key", "")
         session = self._require_ingest_session(session_key)
@@ -1445,6 +1460,7 @@ class VerticalBrainMCP:
         return json.dumps(
             {
                 "session_key": session_key,
+                "step": self._ingest_step_hint(session),
                 "chunks": [
                     {
                         "chunk_id": c["id"],
@@ -1513,7 +1529,13 @@ class VerticalBrainMCP:
         self._persist_ingest_session(session)
         pending = sum(1 for c in session["chunks"] if c["status"] == "pending")
         return json.dumps(
-            {"ok": True, "marked": len(results), "remaining_pending": pending, "results": results},
+            {
+                "ok": True,
+                "marked": len(results),
+                "remaining_pending": pending,
+                "step": self._ingest_step_hint(session),
+                "results": results,
+            },
             ensure_ascii=False,
         )
 
@@ -1535,12 +1557,14 @@ class VerticalBrainMCP:
         self._persist_ingest_session(session)
         return json.dumps({
             "status": "ok",
+            "step": "STEP 5 ✓ — finish_bronze_extraction passed.",
             "extracted": extracted,
             "skipped": skipped,
             "total": len(session["chunks"]),
             "next_action": (
-                f"list_chunks(path='{session['source_namespace']}', layer='bronze') "
-                "then update_silver, submit_inventory_probes, complete_ingest."
+                "STEP 6 — write Silver per sub-namespace as [chunk_id] one-liner index, "
+                f"then root Silver at {session['source_namespace']}. "
+                "STEP 6b — submit_inventory_probes. STEP 7 — complete_ingest."
             ),
         }, ensure_ascii=False)
 
