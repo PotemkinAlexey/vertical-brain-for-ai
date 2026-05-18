@@ -112,7 +112,9 @@ Canonical facts. The optimizer compacts multiple Bronze chunks at a node into a 
 
 ### Compaction (Bronze → Silver)
 
-`SimpleOptimizer.optimize_branch(path)` performs a bounded snapshot read (branch chunks, branch node version, and links when decay is enabled), then runs three passes over that snapshot with no further I/O:
+`SimpleOptimizer.optimize_branch(path)` performs a bounded snapshot read (branch chunks, branch node version, and links when decay is enabled), then runs three passes over that snapshot with no further I/O.
+
+`optimize_all()` walks namespaces via `list_nodes()` + `get_chunks_by_path(path, include_children=False)` — it does **not** call `list_chunks()`. `discover_links()` compares one representative active Silver per namespace (newest `created_at`), so cost is **O(P²)** in namespace count P, not O(P² × chunks²). A dedicated vector index (ANN) is the next step if P grows into the thousands.
 
 1. **Exact dedup** — mark stale any active chunk whose `(node_path, content_hash)` already exists
 2. **Namespace compaction** — for each node with 2+ active non-Gold chunks lacking lineage, create one Silver summary and supersede the originals

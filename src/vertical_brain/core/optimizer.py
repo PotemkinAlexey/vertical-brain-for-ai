@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterator
 
 from vertical_brain.core.models import (
     Chunk,
@@ -76,33 +76,41 @@ class SimpleOptimizer:
     def optimize_all(self) -> str:
         """Run full optimization across every namespace, then discover cross-namespace links.
 
-        Unlike optimize_branch, this reads all chunks in one pass and applies a single
-        transactional batch. OCC is not applied — this is intended as a periodic maintenance
-        sweep, not a targeted branch update.
+        Chunks are loaded per node path (``get_chunks_by_path`` with ``include_children=False``),
+        not via ``list_chunks()``, so memory scales with the largest namespace rather than the
+        whole lake. OCC is not applied — intended as a periodic maintenance sweep.
         """
-        all_chunks = self.store.list_chunks()
         linked_paths = self._linked_paths_if_decay_enabled()
-        batch = self._build_plan(all_chunks, "", linked_paths=linked_paths)
+        operations: list[StorageOperation] = []
+        for path, chunks in self._iter_direct_node_chunks():
+            operations.extend(
+                self._build_plan(chunks, path, linked_paths=linked_paths).operations
+            )
+        batch = StorageOperationBatch(
+            operations=operations,
+            reasoning_summary="Full optimize sweep across all namespaces.",
+        )
         if batch.operations:
             StorageOperationExecutor(self.store).apply_batch(batch)
-        branch_report = self._build_report("(all namespaces)", all_chunks, batch)
+        branch_report = self._build_report("(all namespaces)", [], batch)
         link_report = self.discover_links()
         return branch_report + "\n\n" + link_report
 
     def discover_links(self, root_path: str | None = None) -> str:
-        """Find and create links between semantically similar Silver chunks from different namespaces.
+        """Find and create links between semantically similar namespaces.
 
-        Requires an embedding_provider to be set at construction time.
-        Reads storage once, embeds Silver chunks, then runs pure pairwise similarity.
-        Creates at most one link per namespace pair, skipping pairs that are already linked.
+        Requires an embedding_provider. Uses one **representative** active Silver chunk per
+        namespace (newest by ``created_at``), then compares namespace pairs — O(P²) cosine
+        operations for P namespaces, not O(P² × chunks²). Creates at most one link per pair.
         """
         if self._embedding_provider is None:
             return "Link discovery skipped: no embedding provider configured."
-        silver_chunks, existing_pairs = self._snapshot_for_links(root_path)
-        if len(silver_chunks) < 2:
-            return "Link discovery: fewer than 2 Silver chunks found, nothing to link."
-        vectors = self._embed_chunks(silver_chunks)
-        operations = self._build_link_plan(silver_chunks, vectors, existing_pairs)
+        representatives, existing_pairs = self._snapshot_for_links(root_path)
+        if len(representatives) < 2:
+            return "Link discovery: fewer than 2 Silver namespaces found, nothing to link."
+        rep_chunks = list(representatives.values())
+        vectors = self._embed_chunks(rep_chunks)
+        operations = self._build_link_plan(representatives, vectors, existing_pairs)
         if operations:
             batch = StorageOperationBatch(
                 operations=operations,
@@ -112,21 +120,27 @@ class SimpleOptimizer:
         return self._build_link_report(operations)
 
     def _snapshot_for_links(
-        self, root_path: str | None
-    ) -> tuple[list[Chunk], set[tuple[str, str]]]:
+        self, root_path: str | None,
+    ) -> tuple[dict[str, Chunk], set[tuple[str, str]]]:
         if root_path:
-            all_chunks = self.store.get_chunks_by_path(root_path, include_children=True)
+            paths = [
+                n.path
+                for n in self.store.list_nodes()
+                if n.path == root_path or n.path.startswith(root_path + "/")
+            ]
         else:
-            all_chunks = self.store.list_chunks()
-        silver_chunks = [
-            c for c in all_chunks
-            if c.status == "active" and c.layer == "silver"
-        ]
+            paths = [n.path for n in self.store.list_nodes()]
+        representatives: dict[str, Chunk] = {}
+        for path in sorted(paths):
+            chunks = self.store.get_chunks_by_path(path, include_children=False)
+            rep = self._representative_silver(chunks)
+            if rep is not None:
+                representatives[path] = rep
         existing_pairs: set[tuple[str, str]] = set()
         for lnk in self.store.list_links():
             existing_pairs.add((lnk.source_path, lnk.target_path))
             existing_pairs.add((lnk.target_path, lnk.source_path))
-        return silver_chunks, existing_pairs
+        return representatives, existing_pairs
 
     def _embed_chunks(self, chunks: list[Chunk]) -> dict[str, list[float]]:
         assert self._embedding_provider is not None
@@ -153,44 +167,40 @@ class SimpleOptimizer:
 
     def _build_link_plan(
         self,
-        chunks: list[Chunk],
+        representatives: dict[str, Chunk],
         vectors: dict[str, list[float]],
         existing_pairs: set[tuple[str, str]],
     ) -> list[StorageOperation]:
-        by_node: dict[str, list[Chunk]] = defaultdict(list)
-        for c in chunks:
-            by_node[c.node_path].append(c)
-
-        paths = sorted(by_node.keys())
+        paths = sorted(representatives.keys())
         operations: list[StorageOperation] = []
 
         for i, path_a in enumerate(paths):
+            chunk_a = representatives[path_a]
+            vec_a = vectors.get(chunk_a.id)
+            if vec_a is None:
+                continue
             for path_b in paths[i + 1:]:
                 if (path_a, path_b) in existing_pairs:
                     continue
-                best_score = 0.0
-                for chunk_a in by_node[path_a]:
-                    vec_a = vectors.get(chunk_a.id)
-                    if vec_a is None:
-                        continue
-                    for chunk_b in by_node[path_b]:
-                        vec_b = vectors.get(chunk_b.id)
-                        if vec_b is None:
-                            continue
-                        score = cosine_similarity(vec_a, vec_b)
-                        if score > best_score:
-                            best_score = score
-                if best_score >= self._link_similarity_threshold:
+                chunk_b = representatives[path_b]
+                vec_b = vectors.get(chunk_b.id)
+                if vec_b is None:
+                    continue
+                score = cosine_similarity(vec_a, vec_b)
+                if score >= self._link_similarity_threshold:
                     operations.append(StorageOperation(
                         operation="create_link",
                         target_path=path_a,
                         links=[LinkInput(
                             target_path=path_b,
                             link_type="related",
-                            reason=f"Silver similarity {best_score:.2f} ({LINK_DISCOVERY_SOURCE})",
+                            reason=(
+                                f"Silver representative similarity {score:.2f} "
+                                f"({LINK_DISCOVERY_SOURCE})"
+                            ),
                         )],
                         reasoning_summary=(
-                            f"Cross-namespace Silver similarity {best_score:.2f} "
+                            f"Cross-namespace Silver similarity {score:.2f} "
                             f"between {path_a} and {path_b}."
                         ),
                     ))
@@ -355,18 +365,23 @@ class SimpleOptimizer:
         if no_op_line:
             lines.append(no_op_line)
         else:
-            lines.append("  observed before optimization:")
-            for node_path, node_chunks in sorted(self._group_by_node(initial_chunks).items()):
-                active = sum(1 for c in node_chunks if c.status == "active")
-                stale = sum(1 for c in node_chunks if c.status == "stale")
-                superseded = sum(1 for c in node_chunks if c.status == "superseded")
-                lines.append(
-                    f"  - {node_path}: {len(node_chunks)} chunks "
-                    f"({active} active, {stale} stale, {superseded} superseded)"
-                )
-            lines.append("")
+            if initial_chunks:
+                lines.append("  observed before optimization:")
+                for node_path, node_chunks in sorted(self._group_by_node(initial_chunks).items()):
+                    active = sum(1 for c in node_chunks if c.status == "active")
+                    stale = sum(1 for c in node_chunks if c.status == "stale")
+                    superseded = sum(1 for c in node_chunks if c.status == "superseded")
+                    lines.append(
+                        f"  - {node_path}: {len(node_chunks)} chunks "
+                        f"({active} active, {stale} stale, {superseded} superseded)"
+                    )
+                lines.append("")
             lines.append("  changes applied:")
-            for node_path, node_chunks in sorted(self._group_by_node(initial_chunks).items()):
+            change_paths = sorted(
+                set(duplicates_by_node) | set(compactions_by_node) | set(decayed_by_node)
+                | set(self._group_by_node(initial_chunks))
+            )
+            for node_path in change_paths:
                 dups = duplicates_by_node[node_path]
                 comp = compactions_by_node[node_path]
                 decay = decayed_by_node[node_path]
@@ -429,3 +444,18 @@ class SimpleOptimizer:
         for c in chunks:
             grouped[c.node_path].append(c)
         return grouped
+
+    def _iter_direct_node_chunks(self) -> Iterator[tuple[str, list[Chunk]]]:
+        """Yield (node_path, chunks at that path only) for every node with chunks."""
+        for node in sorted(self.store.list_nodes(), key=lambda n: n.path):
+            chunks = self.store.get_chunks_by_path(node.path, include_children=False)
+            if chunks:
+                yield node.path, chunks
+
+    @staticmethod
+    def _representative_silver(chunks: list[Chunk]) -> Chunk | None:
+        """Newest active Silver at a namespace, or None."""
+        silver = [c for c in chunks if c.status == "active" and c.layer == "silver"]
+        if not silver:
+            return None
+        return max(silver, key=lambda c: c.created_at)

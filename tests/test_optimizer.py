@@ -331,6 +331,51 @@ def test_optimize_all_deduplicates_across_namespaces(tmp_path):
     assert "1 exact duplicates marked stale" in report
 
 
+def test_optimize_all_does_not_load_all_chunks_at_once(tmp_path):
+    store = SQLiteStore(root=tmp_path)
+    store.save_chunk(Chunk(node_path="PROJECTS/alpha", content="fact a"))
+    store.save_chunk(Chunk(node_path="PROJECTS/beta", content="fact b"))
+
+    with patch.object(store, "list_chunks", wraps=store.list_chunks) as mock_list:
+        SimpleOptimizer(store, min_compaction_path_parts=MIN_COMPACTION_PATH_PARTS).optimize_all()
+        mock_list.assert_not_called()
+
+
+def test_discover_links_uses_newest_silver_representative(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    store = JsonStore(tmp_path)
+    old_text = "machine learning model training pipeline gradient descent"
+    new_text = "cookie recipe butter flour sugar bake oven temperature"
+    old = Chunk(node_path="PROJECTS/alpha", content=old_text, layer="silver")
+    old.created_at = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    new = Chunk(node_path="PROJECTS/alpha", content=new_text, layer="silver")
+    store.save_chunk(old)
+    store.save_chunk(new)
+    store.save_chunk(
+        Chunk(node_path="PROJECTS/beta", content=new_text, layer="silver")
+    )
+
+    embed_calls: list[str] = []
+
+    class CountingProvider(MockEmbeddingProvider):
+        def embed(self, text: str):
+            embed_calls.append(text)
+            return super().embed(text)
+
+    optimizer = SimpleOptimizer(
+        store,
+        min_compaction_path_parts=MIN_COMPACTION_PATH_PARTS,
+        embedding_provider=CountingProvider(),
+        link_similarity_threshold=0.5,
+    )
+    optimizer.discover_links()
+
+    assert new_text in embed_calls
+    assert old_text not in embed_calls
+    assert store.list_links()
+
+
 def test_optimize_all_includes_link_discovery(tmp_path):
     store = JsonStore(tmp_path)
     text = "machine learning model training pipeline gradient descent"
