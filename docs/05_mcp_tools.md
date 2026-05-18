@@ -296,6 +296,8 @@ Registers a document for guided ingestion. Creates an ingest session, splits the
 
 The primary goal is durable knowledge extraction, not merely reaching `complete_ingest`. Substantive chunks must be extracted into Bronze facts. Use immutable Bronze for source metadata, tables, schemas, account/routing rows, legal/normative text, and other reference data that downstream answers may need to cite exactly.
 
+Source documents are stored under `SOURCES/{slug}` so one file maps to one document branch. `authority` is retained as metadata inside the source artifact, not as a namespace level.
+
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `source_path` | string | Local path to the original file; required for PDFs |
@@ -303,7 +305,7 @@ The primary goal is durable knowledge extraction, not merely reaching `complete_
 | `file_name` | string | Original file name, e.g. `MT103.txt`; defaults to `source_path` basename |
 | `expected_sha256` | string | Optional SHA-256 expected for the text payload; mismatches are rejected |
 | `expected_size_bytes` | integer | Optional UTF-8 byte count expected for the text payload; mismatches are rejected |
-| `authority` | string | Issuing authority (e.g. `SWIFT`, `ISO`). Inferred from content if omitted |
+| `authority` | string | Issuing authority (e.g. `SWIFT`, `ISO`), stored as metadata |
 | `doc_slug` | string | Short namespace identifier. Defaults to filename without extension |
 
 ---
@@ -361,7 +363,7 @@ Fetches a URL and registers its content as a source document. Supports plain tex
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `url` | string (required) | `http` or `https` URL to fetch |
-| `authority` | string | Issuing authority. Defaults to the URL hostname |
+| `authority` | string | Issuing authority metadata. Defaults to the URL hostname |
 | `doc_slug` | string | Short namespace identifier. Defaults to the last URL path segment |
 
 The returned text contains the URL, SHA-256 of the fetched content, size, suggested `SOURCES` namespace, and the extracted text. The agent then applies the file ingestion steps: register source → extract Bronze → write Silver.

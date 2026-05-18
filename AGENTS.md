@@ -67,5 +67,5 @@ Answer field and schema questions only from an immutable Bronze chunk (cited via
 
 - `PROJECTS/*` — projects and technical details
 - `META/*` — Vertical Brain itself
-- `SOURCES/*` — ingested documents
+- `SOURCES/{slug}` — ingested source documents; authority belongs in source metadata, not the path
 - New topics: `WORK/Name`, `LEARNING/Topic`, `DECISIONS/Area`

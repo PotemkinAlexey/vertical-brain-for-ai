@@ -916,7 +916,7 @@ def test_ingest_file_returns_metadata_header(tmp_path):
     text = _text(resp)
 
     assert "MT103.txt" in text
-    assert "SOURCES/SWIFT/MT103" in text
+    assert "SOURCES/MT103" in text
     assert "content_sha256" in text
     assert "session_key:" in text
     assert "Service chunks" in text
@@ -994,7 +994,7 @@ def test_ingest_file_can_read_source_path(tmp_path):
 
     assert "session_key:" in text
     assert expected_hash in text
-    assert "SOURCES/Internal/spec" in text
+    assert "SOURCES/spec" in text
 
 
 def test_ingest_file_rejects_pdf_content_without_source_path(tmp_path):
@@ -1143,7 +1143,7 @@ def test_ingest_url_fetches_and_returns_header(tmp_path):
     text = _text(resp)
     expected_hash = hashlib.sha256(body).hexdigest()
 
-    assert "SOURCES/SWIFT/MT103" in text
+    assert "SOURCES/MT103" in text
     assert expected_hash in text
     assert "Field 32A" in text            # content embedded
     assert "AGENTS.md" in text
@@ -1190,7 +1190,7 @@ def test_ingest_url_rejects_non_http_scheme(tmp_path):
     assert resp.get("error") or resp.get("result", {}).get("isError")
 
 
-def test_ingest_url_derives_authority_from_hostname(tmp_path):
+def test_ingest_url_derives_slug_from_path_segment(tmp_path):
     from http.server import BaseHTTPRequestHandler, HTTPServer
     import threading
 
@@ -1216,7 +1216,7 @@ def test_ingest_url_derives_authority_from_hostname(tmp_path):
         server.shutdown()
 
     text = _text(resp)
-    assert "SOURCES/127" in text          # hostname used as authority
+    assert "SOURCES/my-doc" in text
     assert "my-doc" in text              # last path segment used as slug
 
 

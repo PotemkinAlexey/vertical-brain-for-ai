@@ -41,6 +41,10 @@ _INVALID_SKIP_REASON_FRAGMENTS = (
     "clean re-ingest verification",
 )
 
+
+def _source_namespace(doc_slug: str) -> str:
+    return f"SOURCES/{doc_slug}"
+
 _TOOLS: list[dict[str, Any]] = [
     # ── Read / orientation ──────────────────────────────────────────────
     {
@@ -457,8 +461,7 @@ _TOOLS: list[dict[str, Any]] = [
                     "description": (
                         "Issuing authority or origin of the document "
                         "(e.g. 'SWIFT', 'ISO', 'Internal', 'Vendor'). "
-                        "Used to construct the SOURCES/{authority}/{slug} namespace. "
-                        "If omitted, infer from content."
+                        "Stored as source metadata; the namespace is SOURCES/{slug}."
                     ),
                 },
                 "doc_slug": {
@@ -559,8 +562,7 @@ _TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": (
                         "Issuing authority or origin (e.g. 'SWIFT', 'ISO', 'stripe.com'). "
-                        "Used to construct SOURCES/{authority}/{slug}. "
-                        "If omitted, derived from the URL hostname."
+                        "Stored as source metadata. If omitted, derived from the URL hostname."
                     ),
                 },
                 "doc_slug": {
@@ -599,7 +601,7 @@ def _build_ingest_header(
     For ingest_file the content is already in the conversation context.
     """
     size_kb = file_size / 1024
-    source_ns = f"SOURCES/{authority}/{doc_slug}" if authority else f"SOURCES/{doc_slug}"
+    source_ns = _source_namespace(doc_slug)
     if url:
         origin_line = f"url: {url}"
     elif source_path:
@@ -1249,7 +1251,7 @@ class VerticalBrainMCP:
         authority: str = (args.get("authority") or "").strip().replace(" ", "_")
         raw_slug = args.get("doc_slug") or os.path.splitext(file_name)[0]
         doc_slug = raw_slug.strip().replace(" ", "_").replace(".", "_")
-        source_ns = f"SOURCES/{authority}/{doc_slug}" if authority else f"SOURCES/{doc_slug}"
+        source_ns = _source_namespace(doc_slug)
 
         # Duplicate detection via ingest_registry
         force = bool(args.get("force", False))
