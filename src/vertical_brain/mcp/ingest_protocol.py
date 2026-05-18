@@ -88,6 +88,21 @@ def validate_skip_reason(skip_reason: str, *, mode: str) -> None:
         )
 
 
+_HEADING_RE = re.compile(
+    r"#{1,4}\s+\S"              # markdown: # Title
+    r"|\d+(\.\d+)*\.?\s+[A-Z]"  # numbered: 1.2 Title
+    r"|[A-Z][A-Z\s\-&/()\d]{4,}[A-Z]$"  # ALL CAPS: SECTION TITLE
+)
+
+
+def _is_section_header(text: str) -> bool:
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines or len(lines) > 3:
+        return False
+    first = lines[0].strip()
+    return len(first) <= 120 and bool(_HEADING_RE.match(first))
+
+
 def split_service_chunks(content: str, session_key: str) -> list[dict[str, Any]]:
     """Split extracted text into service chunks for guided ingest."""
     segments: list[tuple[str, str]] = []
@@ -131,7 +146,8 @@ def _paragraph_segments(text: str) -> list[tuple[str, str]]:
                 if line_group.strip():
                     segments.append((line_group.strip(), "splittable"))
         else:
-            segments.append((stripped, "splittable"))
+            chunk_type = "section_header" if _is_section_header(stripped) else "splittable"
+            segments.append((stripped, chunk_type))
     return segments
 
 
@@ -345,6 +361,11 @@ def load_inventory_items(store: StorageProvider, path: str) -> list[str]:
 _find_inventory = find_inventory_chunk  # internal alias
 
 
+def _silver_has_references(content: str, source_ns: str) -> bool:
+    """Silver is valid if it cites chunk_ids or sub-namespace paths."""
+    return "chunk_id" in content or (source_ns + "/") in content
+
+
 def _find_artifact(chunks: list[Chunk]) -> Chunk | None:
     for chunk in chunks:
         if chunk.layer != "bronze" or chunk.status != "active":
@@ -418,9 +439,10 @@ def validate_namespace_ready_for_complete(
         )
     if silver is None:
         errors.append(f"missing active Silver at {path} (required before complete_ingest).")
-    elif INVENTORY_PREFIX not in silver.content and "chunk_id" not in silver.content:
+    elif not _silver_has_references(silver.content, path):
         errors.append(
-            f"Silver at {path} must cite key immutable Bronze chunk_id(s) and map topics to inventory items."
+            f"Silver at {path} must cite Bronze chunk_id(s) or sub-namespace paths "
+            f"(e.g. '{path}/SectionName')."
         )
 
     if errors:
@@ -447,7 +469,8 @@ def build_protocol_lines(session: dict[str, Any]) -> list[str]:
     chunks = session["chunks"]
     size_kb = session["content_size"] / 1024
     atomic_count = sum(1 for c in chunks if c["chunk_type"] == "atomic")
-    splittable_count = len(chunks) - atomic_count
+    section_count = sum(1 for c in chunks if c["chunk_type"] == "section_header")
+    splittable_count = len(chunks) - atomic_count - section_count
 
     lines = [
         f"# ingest session — {file_name}",
@@ -467,15 +490,16 @@ def build_protocol_lines(session: dict[str, Any]) -> list[str]:
         "3. Process EVERY service chunk below — no bulk skip, no «I'll do the rest later».",
         "4. skipped is ONLY for true boilerplate (headers, footers, blank pages, legal disclaimers).",
         "5. Normative data (amounts, codes, IBAN/SWIFT, field defs) → immutable Bronze, verbatim.",
-        "6. Silver cites chunk_id(s); never copy verbatim norms into Silver only.",
+        "6. Silver = index of Bronze chunks: one line per chunk — \"[chunk_id] one-line summary\".",
         "7. If you cannot finish, STOP and report blockers — do not call complete_ingest.",
         "",
-        f"## Service chunks ({len(chunks)} total: {splittable_count} splittable, {atomic_count} atomic)",
+        f"## Service chunks ({len(chunks)} total: {splittable_count} splittable, "
+        f"{atomic_count} atomic, {section_count} section_header)",
         "",
     ]
     for chunk in chunks:
         preview = chunk["content"][:80].replace("\n", " ")
-        lines.append(f"[{chunk['id']}] {chunk['chunk_type']:12s} — {preview!r}")
+        lines.append(f"[{chunk['id']}] {chunk['chunk_type']:14s} — {preview!r}")
 
     lines += [
         "",
@@ -489,28 +513,43 @@ def build_protocol_lines(session: dict[str, Any]) -> list[str]:
         f"  content MUST start with {INVENTORY_PREFIX!r}",
         "  List every answer-critical entity: countries, fields, payment methods, codes, constraints.",
         "",
-        "STEP 3 — Process EVERY service chunk:",
-        "  a. get_service_chunk(session_key, chunk_id) OR get_service_chunks(session_key, chunk_ids=[...])",
-        "  b. atomic     → ONE immutable Bronze chunk (verbatim block)",
-        "     splittable → extract ALL answer-critical facts (≤600 chars each; batch_append max 10)",
-        "     reference  → immutable Bronze for tables, schemas, routing numbers, legal norms",
-        "     boilerplate only → mark_service_chunk(..., status='skipped', skip_reason='12+ chars')",
-        "  c. After Bronze written → mark_service_chunk(..., status='extracted')",
+        "STEP 3 — Plan sub-namespace structure",
+        "  a. Scan chunk list for section_header chunks — these mark document section boundaries.",
+        "  b. Map each section to a sub-namespace slug: {source_ns}/SectionSlug/",
+        "     Rules: lowercase, hyphens, ASCII only. E.g. 'SEPA Payments' → sepa-payments.",
+        "  c. Write plan as Bronze note (content_type=note) at {source_ns}:",
+        "     \"Sub-namespace map: Section1 → {source_ns}/section1, Section2 → {source_ns}/section2, ...\"",
+        "     This note satisfies the root Bronze fact requirement.",
         "",
-        "STEP 4 — finish_bronze_extraction(session_key)",
+        "STEP 4 — Process EVERY service chunk (grouped by section):",
+        "  a. get_service_chunks(session_key, chunk_ids=[...]) — fetch all chunks in section at once",
+        "  b. Write Bronze VERBATIM into the section sub-namespace (batch_append, max 10 per call):",
+        "     - section_header → mark_service_chunk(extracted); no Bronze write needed",
+        "     - atomic         → ONE immutable Bronze chunk (verbatim code/table block)",
+        "     - splittable     → one Bronze chunk per fact (≤600 chars, verbatim or minimal edit)",
+        "     - boilerplate    → mark_service_chunk(skipped, skip_reason='12+ chars')",
+        "  c. batch_mark_service_chunks(session_key, marks=[{chunk_id, status}, ...])",
+        "",
+        "STEP 5 — finish_bronze_extraction(session_key)",
         "  Server rejects if: pending chunks, >25% skipped, <50% extracted, zero extracted.",
         "",
-        f"STEP 5 — list_chunks(path='{source_ns}', layer='bronze'); write Silver from Bronze ONLY",
-        "  Silver maps topics → chunk_id(s). Required before complete_ingest.",
+        "STEP 6 — Write Silver per sub-namespace (index format)",
+        "  For each sub-namespace that received Bronze chunks:",
+        "    a. list_chunks(path=sub_namespace, layer='bronze')",
+        "    b. update_silver(path=sub_namespace, content=index)",
+        "       Index format — one line per Bronze chunk:",
+        "       \"[chunk_id] one-line summary of what this chunk contains\"",
+        f"  Then write root Silver at {source_ns} as section index:",
+        f"    \"[{source_ns}/section1] description\\n[{source_ns}/section2] description\\n...\"",
         "",
-        "STEP 5b — submit_inventory_probes(session_key, probes=[{item, chunk_ids}, ...])",
+        "STEP 6b — submit_inventory_probes(session_key, probes=[{item, chunk_ids}, ...])",
         "  Spot-check ≥30% of inventory items (min 3): each probe names an inventory line and cites",
         "  active Bronze chunk_id(s) that contain the answer. Server blocks complete_ingest without this.",
         "",
-        "STEP 6 — complete_ingest(session_key)",
+        "STEP 7 — complete_ingest(session_key)",
         "  Server verifies: artifact + inventory + facts + Silver + inventory probes in storage.",
         "",
-        "Do NOT respond to the user until step 6 succeeds.",
+        "Do NOT respond to the user until step 7 succeeds.",
     ]
     if mode == INGEST_MODE_ROUTING:
         lines.insert(

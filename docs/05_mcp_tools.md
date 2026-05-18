@@ -362,6 +362,19 @@ Marks a service chunk as processed. Call with `status='extracted'` after writing
 
 ---
 
+### `batch_mark_service_chunks`
+
+Marks multiple service chunks as extracted or skipped in a single call. Use after writing Bronze for an entire document section to avoid per-chunk round-trips. Max 50 marks per call.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `session_key` | string (required) | Session key |
+| `marks` | array (required) | Array of `{chunk_id, status, skip_reason?}` objects (max 50) |
+
+Each mark object follows the same rules as `mark_service_chunk`: `status` must be `"extracted"` or `"skipped"`, and `skip_reason` is required when skipping.
+
+---
+
 ### `finish_bronze_extraction`
 
 Validates that all service chunks have been marked extracted or skipped. Returns an error listing pending chunk IDs if any remain. Transitions the session to `BRONZE_COMPLETE`. Call this before writing Silver, then `submit_inventory_probes`, then `complete_ingest`.

@@ -82,6 +82,7 @@ def test_tools_list_contains_expected_tools(tmp_path):
         "mark_stale", "batch_append", "session_end", "update_silver", "optimize",
         "operations", "doctor", "vacuum", "ingest_file", "ingest_url",
         "get_service_chunk", "get_service_chunks", "mark_service_chunk",
+        "batch_mark_service_chunks",
         "finish_bronze_extraction", "submit_inventory_probes", "complete_ingest",
     }
 
@@ -1013,6 +1014,52 @@ def test_ingest_file_rejects_missing_required_args(tmp_path):
     mcp, _ = _mcp(tmp_path)
     resp = _call(mcp, "ingest_file", {"file_name": "doc.txt"})  # missing content
     assert resp.get("error") or (resp.get("result", {}).get("isError"))
+
+
+def test_batch_mark_service_chunks_marks_all(tmp_path):
+    mcp, _ = _mcp(tmp_path)
+    resp = _call(mcp, "ingest_file", {
+        "content": "Field 32A: Value Date.\n\nField 50K: Ordering Customer.\n\nField 59: Beneficiary.",
+        "file_name": "MT103.txt",
+        "authority": "SWIFT",
+        "doc_slug": "MT103",
+    })
+    session_key = _parse_session_key(_text(resp))
+    chunks = mcp._ingest_sessions[session_key]["chunks"]
+    marks = [{"chunk_id": c["id"], "status": "extracted"} for c in chunks]
+    result = _call(mcp, "batch_mark_service_chunks", {"session_key": session_key, "marks": marks})
+    assert "error" not in result
+    data = json.loads(result["result"]["content"][0]["text"])
+    assert data["ok"] is True
+    assert data["marked"] == len(chunks)
+    assert data["remaining_pending"] == 0
+
+
+def test_batch_mark_service_chunks_rejects_bad_skip(tmp_path):
+    mcp, _ = _mcp(tmp_path)
+    resp = _call(mcp, "ingest_file", {
+        "content": "Some payment field data here.",
+        "file_name": "spec.txt",
+    })
+    session_key = _parse_session_key(_text(resp))
+    chunk_id = mcp._ingest_sessions[session_key]["chunks"][0]["id"]
+    result = _call(mcp, "batch_mark_service_chunks", {
+        "session_key": session_key,
+        "marks": [{"chunk_id": chunk_id, "status": "skipped"}],  # missing skip_reason
+    })
+    assert result.get("error") or result.get("result", {}).get("isError")
+
+
+def test_batch_mark_service_chunks_rejects_over_limit(tmp_path):
+    mcp, _ = _mcp(tmp_path)
+    resp = _call(mcp, "ingest_file", {
+        "content": "Some content.",
+        "file_name": "spec.txt",
+    })
+    session_key = _parse_session_key(_text(resp))
+    marks = [{"chunk_id": f"fake_{i}", "status": "extracted"} for i in range(51)]
+    result = _call(mcp, "batch_mark_service_chunks", {"session_key": session_key, "marks": marks})
+    assert result.get("error") or result.get("result", {}).get("isError")
 
 
 def test_ingest_file_hash_is_sha256(tmp_path):
