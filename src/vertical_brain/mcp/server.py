@@ -465,6 +465,66 @@ _TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "get_service_chunk",
+        "description": "Read the full content of one service chunk from an active ingest session.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_key": {"type": "string", "description": "Session key returned by ingest_file."},
+                "chunk_id": {"type": "string", "description": "Chunk ID from the ingest_file chunk list."},
+            },
+            "required": ["session_key", "chunk_id"],
+        },
+    },
+    {
+        "name": "mark_service_chunk",
+        "description": (
+            "Mark a service chunk as processed. "
+            "Call with status='extracted' after writing Bronze facts, "
+            "or status='skipped' with a reason for boilerplate/irrelevant content."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_key": {"type": "string"},
+                "chunk_id": {"type": "string"},
+                "status": {"type": "string", "enum": ["extracted", "skipped"]},
+                "skip_reason": {"type": "string", "description": "Required when status='skipped'."},
+            },
+            "required": ["session_key", "chunk_id", "status"],
+        },
+    },
+    {
+        "name": "finish_bronze_extraction",
+        "description": (
+            "Validate that all service chunks have been processed (extracted or skipped). "
+            "Returns an error listing pending chunk IDs if any remain. "
+            "Call this before writing Silver."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_key": {"type": "string"},
+            },
+            "required": ["session_key"],
+        },
+    },
+    {
+        "name": "complete_ingest",
+        "description": (
+            "Complete the ingest session after Silver has been written. "
+            "Validates that finish_bronze_extraction was called. "
+            "Cleans up service chunks from memory."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_key": {"type": "string"},
+            },
+            "required": ["session_key"],
+        },
+    },
+    {
         "name": "ingest_url",
         "description": (
             "Fetch a URL and register its content as a source document. "
@@ -594,6 +654,47 @@ def _strip_html(raw: str) -> str:
     return extractor.get_text()
 
 
+def _split_service_chunks(content: str, session_key: str) -> list[dict[str, Any]]:
+    """Split content into service chunks for guided ingest.
+
+    Code fences (```...```) are marked atomic — the agent writes them as one immutable
+    Bronze chunk with no size limit. Everything else is split by blank lines into
+    splittable paragraphs — the agent extracts 0-N Bronze facts from each.
+    """
+    import re
+
+    segments: list[tuple[str, str]] = []  # (content, chunk_type)
+    fence_re = re.compile(r"(```[\s\S]*?```)", re.MULTILINE)
+    last_end = 0
+
+    for match in fence_re.finditer(content):
+        before = content[last_end:match.start()]
+        if before.strip():
+            for para in re.split(r"\n[ \t]*\n", before):
+                if para.strip():
+                    segments.append((para.strip(), "splittable"))
+        segments.append((match.group(0).strip(), "atomic"))
+        last_end = match.end()
+
+    remaining = content[last_end:]
+    if remaining.strip():
+        for para in re.split(r"\n[ \t]*\n", remaining):
+            if para.strip():
+                segments.append((para.strip(), "splittable"))
+
+    return [
+        {
+            "id": f"{session_key}_{i:04d}",
+            "index": i,
+            "content": chunk_content,
+            "chunk_type": chunk_type,
+            "status": "pending",
+            "skip_reason": None,
+        }
+        for i, (chunk_content, chunk_type) in enumerate(segments)
+    ]
+
+
 def _extract_source_text(source_path: str) -> tuple[str, str, int]:
     """Read source_path and return extracted text plus raw-file integrity data."""
     if not os.path.isfile(source_path):
@@ -651,6 +752,7 @@ class VerticalBrainMCP:
         self._session = ContextSession(store)
         self._executor = StorageOperationExecutor(store)
         self._client_source: str = "model:mcp"  # updated on initialize
+        self._ingest_sessions: dict[str, dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
     # Protocol dispatch
@@ -1059,12 +1161,26 @@ class VerticalBrainMCP:
         if name == "ingest_file":
             return self._handle_ingest_file(args)
 
+        if name == "get_service_chunk":
+            return self._handle_get_service_chunk(args)
+
+        if name == "mark_service_chunk":
+            return self._handle_mark_service_chunk(args)
+
+        if name == "finish_bronze_extraction":
+            return self._handle_finish_bronze_extraction(args)
+
+        if name == "complete_ingest":
+            return self._handle_complete_ingest(args)
+
         if name == "ingest_url":
             return self._handle_ingest_url(args)
 
         raise KeyError(name)
 
     def _handle_ingest_file(self, args: dict[str, Any]) -> str:
+        import secrets
+
         source_path = (args.get("source_path") or "").strip()
         source_hash: str | None = None
         source_size: int | None = None
@@ -1104,17 +1220,159 @@ class VerticalBrainMCP:
         authority: str = (args.get("authority") or "").strip().replace(" ", "_")
         raw_slug = args.get("doc_slug") or os.path.splitext(file_name)[0]
         doc_slug = raw_slug.strip().replace(" ", "_").replace(".", "_")
+        source_ns = f"SOURCES/{authority}/{doc_slug}" if authority else f"SOURCES/{doc_slug}"
 
-        return _build_ingest_header(
-            label=file_name,
-            file_hash=file_hash,
-            file_size=file_size,
-            authority=authority,
-            doc_slug=doc_slug,
-            source_path=source_path or None,
-            source_hash=source_hash,
-            source_size=source_size,
+        session_key = secrets.token_hex(8)
+        service_chunks = _split_service_chunks(content, session_key)
+        self._ingest_sessions[session_key] = {
+            "session_key": session_key,
+            "file_name": file_name,
+            "authority": authority,
+            "doc_slug": doc_slug,
+            "source_namespace": source_ns,
+            "content_hash": file_hash,
+            "content_size": file_size,
+            "source_hash": source_hash,
+            "source_size": source_size,
+            "state": "EXTRACTING_BRONZE",
+            "chunks": service_chunks,
+        }
+
+        size_kb = file_size / 1024
+        atomic_count = sum(1 for c in service_chunks if c["chunk_type"] == "atomic")
+        splittable_count = len(service_chunks) - atomic_count
+
+        lines = [
+            f"# ingest session — {file_name}",
+            "",
+            f"session_key: {session_key}",
+            f"file: {file_name} ({size_kb:.1f} KB)",
+            f"content_sha256: {file_hash}",
+            f"authority: {authority or '(infer from content)'}",
+            f"source_namespace: {source_ns}",
+            f"state: EXTRACTING_BRONZE",
+            "",
+            f"## Service chunks ({len(service_chunks)} total: {splittable_count} splittable, {atomic_count} atomic)",
+            "",
+        ]
+        for chunk in service_chunks:
+            preview = chunk["content"][:80].replace("\n", " ")
+            lines.append(f"[{chunk['id']}] {chunk['chunk_type']:12s} — {preview!r}")
+
+        lines += [
+            "",
+            "## Protocol — execute now, no exceptions",
+            "",
+            "STEP 1 — Register source (immutable=true, content_type=artifact, layer=bronze)",
+            f"  namespace: {source_ns}",
+            "  content: file name, sha256, authority, size, one-sentence description (≤600 chars)",
+            "",
+            "STEP 2 — Process every service chunk in order:",
+            "  a. Call get_service_chunk(session_key, chunk_id) to read full content",
+            "  b. atomic chunk   → write ONE immutable Bronze chunk (no size limit)",
+            "     splittable     → extract 0-N Bronze facts (≤600 chars each, max 10 per batch_append)",
+            "     boilerplate    → call mark_service_chunk(..., status='skipped', skip_reason='...')",
+            "  c. After writing  → call mark_service_chunk(..., status='extracted')",
+            "",
+            "STEP 3 — Call finish_bronze_extraction(session_key)",
+            "  Server verifies all chunks are extracted or skipped. Returns error if any pending.",
+            "",
+            f"STEP 4 — list_chunks(path='{source_ns}', layer='bronze'), then write Silver from Bronze only.",
+            "",
+            "STEP 5 — Call complete_ingest(session_key)",
+            "",
+            "Do NOT respond to the user until step 5 is done.",
+        ]
+        return "\n".join(lines)
+
+    def _handle_get_service_chunk(self, args: dict[str, Any]) -> str:
+        session_key = args.get("session_key", "")
+        chunk_id = args.get("chunk_id", "")
+        session = self._ingest_sessions.get(session_key)
+        if session is None:
+            raise ValueError(f"No active ingest session: {session_key!r}")
+        chunk = next((c for c in session["chunks"] if c["id"] == chunk_id), None)
+        if chunk is None:
+            raise ValueError(f"Chunk {chunk_id!r} not found in session {session_key!r}")
+        return json.dumps({
+            "chunk_id": chunk_id,
+            "index": chunk["index"],
+            "chunk_type": chunk["chunk_type"],
+            "status": chunk["status"],
+            "content": chunk["content"],
+        }, ensure_ascii=False)
+
+    def _handle_mark_service_chunk(self, args: dict[str, Any]) -> str:
+        session_key = args.get("session_key", "")
+        chunk_id = args.get("chunk_id", "")
+        status = args.get("status", "")
+        skip_reason = args.get("skip_reason")
+        if status not in ("extracted", "skipped"):
+            raise ValueError(f"status must be 'extracted' or 'skipped', got {status!r}")
+        if status == "skipped" and not skip_reason:
+            raise ValueError("skip_reason is required when status='skipped'")
+        session = self._ingest_sessions.get(session_key)
+        if session is None:
+            raise ValueError(f"No active ingest session: {session_key!r}")
+        chunk = next((c for c in session["chunks"] if c["id"] == chunk_id), None)
+        if chunk is None:
+            raise ValueError(f"Chunk {chunk_id!r} not found in session {session_key!r}")
+        chunk["status"] = status
+        chunk["skip_reason"] = skip_reason
+        pending = sum(1 for c in session["chunks"] if c["status"] == "pending")
+        return json.dumps(
+            {"ok": True, "chunk_id": chunk_id, "status": status, "remaining_pending": pending},
+            ensure_ascii=False,
         )
+
+    def _handle_finish_bronze_extraction(self, args: dict[str, Any]) -> str:
+        session_key = args.get("session_key", "")
+        session = self._ingest_sessions.get(session_key)
+        if session is None:
+            raise ValueError(f"No active ingest session: {session_key!r}")
+        pending = [c for c in session["chunks"] if c["status"] == "pending"]
+        if pending:
+            ids = [c["id"] for c in pending[:5]]
+            more = f" ... (+{len(pending) - 5} more)" if len(pending) > 5 else ""
+            raise ValueError(
+                f"{len(pending)} chunk(s) still pending — mark them extracted or skipped first. "
+                f"Pending: {ids}{more}"
+            )
+        extracted = sum(1 for c in session["chunks"] if c["status"] == "extracted")
+        skipped = sum(1 for c in session["chunks"] if c["status"] == "skipped")
+        session["state"] = "BRONZE_COMPLETE"
+        return json.dumps({
+            "status": "ok",
+            "extracted": extracted,
+            "skipped": skipped,
+            "total": len(session["chunks"]),
+            "next_action": (
+                f"list_chunks(path='{session['source_namespace']}', layer='bronze') "
+                "then update_silver."
+            ),
+        }, ensure_ascii=False)
+
+    def _handle_complete_ingest(self, args: dict[str, Any]) -> str:
+        session_key = args.get("session_key", "")
+        session = self._ingest_sessions.get(session_key)
+        if session is None:
+            raise ValueError(f"No active ingest session: {session_key!r}")
+        if session["state"] != "BRONZE_COMPLETE":
+            raise ValueError(
+                f"Cannot complete ingest: state is {session['state']!r}. "
+                "Call finish_bronze_extraction first."
+            )
+        extracted = sum(1 for c in session["chunks"] if c["status"] == "extracted")
+        skipped = sum(1 for c in session["chunks"] if c["status"] == "skipped")
+        source_ns = session["source_namespace"]
+        del self._ingest_sessions[session_key]
+        return json.dumps({
+            "status": "completed",
+            "source_namespace": source_ns,
+            "bronze_extracted": extracted,
+            "service_chunks_skipped": skipped,
+            "session_key": session_key,
+        }, ensure_ascii=False)
 
     def _handle_ingest_url(self, args: dict[str, Any]) -> str:
         import urllib.parse

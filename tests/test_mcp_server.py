@@ -51,6 +51,7 @@ def test_tools_list_contains_expected_tools(tmp_path):
         "route", "append_chunk", "append_gold_aspect", "create_link",
         "mark_stale", "batch_append", "session_end", "update_silver", "optimize",
         "operations", "doctor", "vacuum", "ingest_file", "ingest_url",
+        "get_service_chunk", "mark_service_chunk", "finish_bronze_extraction", "complete_ingest",
     }
 
 
@@ -898,7 +899,7 @@ def test_update_silver_returns_valid_chunk_id(tmp_path):
 
 
 def test_ingest_file_returns_metadata_header(tmp_path):
-    """ingest_file returns compact metadata header for content passed directly."""
+    """ingest_file creates an ingest session with service chunks and inline protocol."""
     mcp, _ = _mcp(tmp_path)
     file_content = "Field 32A: Value Date, Currency, Amount. Format: 6!n3!a15d"
 
@@ -912,10 +913,10 @@ def test_ingest_file_returns_metadata_header(tmp_path):
 
     assert "MT103.txt" in text
     assert "SOURCES/SWIFT/MT103" in text
-    assert "sha256" in text.lower()   # hash present
-    assert "AGENTS.md" in text        # references the universal protocol
-    # file content is already in conversation context — not re-embedded
-    assert "Field 32A" not in text
+    assert "content_sha256" in text
+    assert "session_key:" in text
+    assert "Service chunks" in text
+    assert "Protocol" in text
 
 
 def test_ingest_file_defaults_slug_to_filename(tmp_path):
@@ -945,7 +946,7 @@ def test_ingest_file_hash_is_sha256(tmp_path):
     resp = _call(mcp, "ingest_file", {"content": content, "file_name": "doc.txt"})
     text = _text(resp)
 
-    assert expected_hash in text
+    assert expected_hash in text  # full sha256 on content_sha256 line
 
 
 def test_ingest_file_can_read_source_path(tmp_path):
@@ -959,8 +960,7 @@ def test_ingest_file_can_read_source_path(tmp_path):
     resp = _call(mcp, "ingest_file", {"source_path": str(source), "authority": "Internal"})
     text = _text(resp)
 
-    assert "source_path:" in text
-    assert "integrity: server_extracted_source" in text
+    assert "session_key:" in text
     assert expected_hash in text
     assert "SOURCES/Internal/spec" in text
 

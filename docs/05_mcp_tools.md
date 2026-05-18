@@ -292,7 +292,7 @@ deletion.
 
 ### `ingest_file`
 
-Registers a document that was attached to the conversation via the chat UI. Prefer `source_path` when a local file path is available so the server reads or extracts the complete source itself. For plain text, callers may pass `content` with optional integrity checks. PDF ingestion rejects caller-supplied `content` and requires `source_path` to prevent summarized payloads. The tool computes SHA-256 fingerprints, derives the suggested `SOURCES` namespace, and returns a compact metadata header. The full ingestion protocol is loaded from `AGENTS.md` at session start — the agent follows it without further instruction.
+Registers a document for guided ingestion. Creates an ingest session, splits the content into service chunks, and returns a `session_key` with a numbered chunk list and the full ingestion protocol inline. For PDFs, use `source_path` — the server runs `pdftotext`. For all other formats, the agent reads the file and passes `content`. The agent must follow the inline protocol to completion before responding to the user.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -306,6 +306,50 @@ Registers a document that was attached to the conversation via the chat UI. Pref
 
 ---
 
+### `get_service_chunk`
+
+Reads the full content of one service chunk from an active ingest session. Call this for each chunk ID returned by `ingest_file` before writing Bronze facts.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `session_key` | string (required) | Session key returned by `ingest_file` |
+| `chunk_id` | string (required) | Chunk ID from the `ingest_file` chunk list |
+
+---
+
+### `mark_service_chunk`
+
+Marks a service chunk as processed. Call with `status='extracted'` after writing Bronze facts, or `status='skipped'` with a reason for boilerplate or irrelevant content. All chunks must be marked before `finish_bronze_extraction` will succeed.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `session_key` | string (required) | Session key |
+| `chunk_id` | string (required) | Chunk ID |
+| `status` | string (required) | `"extracted"` or `"skipped"` |
+| `skip_reason` | string | Required when `status='skipped'` |
+
+---
+
+### `finish_bronze_extraction`
+
+Validates that all service chunks have been marked extracted or skipped. Returns an error listing pending chunk IDs if any remain. Transitions the session to `BRONZE_COMPLETE`. Call this before writing Silver.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `session_key` | string (required) | Session key |
+
+---
+
+### `complete_ingest`
+
+Completes the ingest session after Silver has been written. Validates that `finish_bronze_extraction` was called first. Cleans up service chunks from memory.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `session_key` | string (required) | Session key |
+
+---
+
 ### `ingest_url`
 
 Fetches a URL and registers its content as a source document. Supports plain text, Markdown, JSON, YAML, and HTML (tags are stripped with stdlib `html.parser`). No external dependencies.
@@ -316,7 +360,7 @@ Fetches a URL and registers its content as a source document. Supports plain tex
 | `authority` | string | Issuing authority. Defaults to the URL hostname |
 | `doc_slug` | string | Short namespace identifier. Defaults to the last URL path segment |
 
-The returned text contains the URL, SHA-256 of the fetched content, size, suggested `SOURCES` namespace, and the extracted text. The agent then applies the File Ingestion Protocol from `AGENTS.md`.
+The returned text contains the URL, SHA-256 of the fetched content, size, suggested `SOURCES` namespace, and the extracted text. The agent then applies the file ingestion steps: register source → extract Bronze → write Silver.
 
 ---
 
