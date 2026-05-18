@@ -221,7 +221,8 @@ vertical_brain/
 │   └── mock_llm.py           — MockLLM: canned responses for testing
 │
 ├── mcp/
-│   └── server.py             — MCP stdio server (JSON-RPC 2.0, LSP framing)
+│   ├── server.py             — MCP stdio server (JSON-RPC 2.0, NDJSON over stdio)
+│   └── ingest_protocol.py    — Ingest session rules, splitting, answer_complete gates
 │
 └── cli/
     └── main.py               — `vb` CLI entry point

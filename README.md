@@ -180,28 +180,17 @@ Silver is a living document: the agent creates the first summary, then keeps it 
 
 ### MCP tools
 
-The MCP server exposes these tools to Claude:
+The MCP server exposes **27 tools** to agents. Call `session_start` first, then use the groups below. Full parameters: [docs/05_mcp_tools.md](docs/05_mcp_tools.md).
 
-| Tool | Purpose |
-|------|---------|
-| `session_start` | Orientation prompt at session start — **call first** |
-| `read_context` | Open a locked context capsule for a namespace |
-| `search` | Lexical FTS search |
-| `search_semantic` | Semantic embedding search |
-| `context_search` | Search + locked context |
-| `route` | Find best namespaces by embedding similarity |
-| `append_chunk` | Write a Bronze chunk (or first Silver with `layer=silver`) |
-| `update_silver` | Atomically replace the active Silver summary (OCC-protected) |
-| `append_gold_aspect` | Add/refresh a short Gold routing tag (requires active Silver) |
-| `create_link` | Create a horizontal link between namespaces |
-| `mark_stale` | Retire a chunk |
-| `batch_append` | Write multiple chunks atomically |
-| `session_end` | Persist session notes + Silver summary + optional Gold aspect |
-| `optimize` | Run dedup + compaction on a namespace subtree |
-| `vacuum` | Preview/apply cleanup of inactive chunks |
-| `doctor` | Storage integrity checks |
+| Group | Tools |
+|-------|--------|
+| **Orientation** | `session_start`, `namespace_map`, `list_chunks`, `read_context` |
+| **Search** | `search`, `search_semantic`, `context_search`, `context_search_semantic`, `route` |
+| **Write** | `append_chunk`, `update_silver`, `append_gold_aspect`, `batch_append`, `create_link`, `mark_stale`, `session_end` |
+| **Ingest** | `ingest_file`, `ingest_url`, `get_service_chunk`, `get_service_chunks`, `mark_service_chunk`, `finish_bronze_extraction`, `submit_inventory_probes`, `complete_ingest` |
+| **Maintenance** | `optimize`, `vacuum`, `doctor`, `operations` |
 
-See [docs/05_mcp_tools.md](docs/05_mcp_tools.md) for full parameter reference.
+File ingest uses stateful sessions with server-enforced **IRON RULES** (`mode=answer_complete` by default). See [AGENTS.md](AGENTS.md).
 
 ---
 
@@ -229,7 +218,7 @@ vb --data-dir ./brain --storage-backend json ...
 
 ```bash
 pip install -e .
-pytest                              # full suite (~469 tests)
+pytest                              # full suite (494 tests)
 pytest tests/test_operations.py -v  # single file
 ```
 

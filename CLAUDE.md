@@ -37,8 +37,12 @@ src/vertical_brain/
 │   ├── embedding.py          — EmbeddingProvider Protocol, Mock, HttpEmbeddingProvider
 │   └── mock_llm.py           — MockLLM for testing
 │
-├── mcp/server.py             — MCP stdio server (JSON-RPC 2.0 over stdio)
-└── cli/main.py               — `vb` CLI entry point
+├── mcp/
+│   ├── server.py             — MCP stdio server (JSON-RPC 2.0, NDJSON over stdio)
+│   └── ingest_protocol.py    — Ingest IRON RULES, splitting, answer_complete gates
+│
+└── cli/
+    └── main.py               — `vb` CLI entry point
 ```
 
 Test files mirror `src/` — there is one test file per module, plus cross-cutting tests (`test_occ.py`, `test_version_propagation.py`, etc.).
@@ -48,7 +52,7 @@ Test files mirror `src/` — there is one test file per module, plus cross-cutti
 ## Running Tests
 
 ```bash
-pytest                                    # full suite (~500+ tests)
+pytest                                    # full suite (494 tests)
 pytest tests/test_operations.py -v       # single file
 pytest -k "occ or version" -v            # keyword filter
 pytest --tb=short 2>&1 | tail -20        # summary view
@@ -110,9 +114,9 @@ Gold content is stored as Gold-layer chunks attached to a node. The canonical fo
 {"aspects": [{"id": "...", "text": "...", "updated_at": "..."}]}
 ```
 
-**Always use `append_gold_aspect` (MCP) or the `append_gold_aspect` operation (StorageOperationBatch) to write Gold.** Never mutate Gold chunks directly or construct the JSON by hand.
+**Always use `append_gold_aspect` (MCP) or the `append_gold_aspect` operation (StorageOperationBatch) to write Gold.** Never mutate Gold chunks directly or construct the JSON by hand. `GoldBuilder` / `LlmGoldBuilder` were removed — batch distillation is not wired.
 
-Use `parse_gold_aspects(content)` → `list[GoldAspect]` to read, and `serialize_gold_aspects(aspects)` → `str` to write internally. `parse_gold_content(content)` → `list[str]` extracts just the text strings (backward compatible with plain text and v1 JSON formats).
+Use `parse_gold_aspects(content)` → `list[GoldAspect]` to read, and `serialize_gold_aspects(aspects)` → `str` to write internally. `parse_gold_content(content)` → `list[str]` extracts just the text strings (backward compatible with plain text, v1 JSON, and legacy `GoldDocument` JSON with a `facts` array).
 
 ---
 

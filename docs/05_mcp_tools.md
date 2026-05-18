@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-The Vertical Brain MCP server speaks JSON-RPC 2.0 over stdio with Content-Length framing (LSP-style). It exposes the following tools to Claude and other MCP clients.
+The Vertical Brain MCP server speaks JSON-RPC 2.0 over stdio with newline-delimited JSON (one JSON object per line). It exposes the following tools to Claude and other MCP clients.
 
 All parameters are optional unless marked **required**.
 
@@ -360,7 +360,7 @@ Marks a service chunk as processed. Call with `status='extracted'` after writing
 
 ### `finish_bronze_extraction`
 
-Validates that all service chunks have been marked extracted or skipped. Returns an error listing pending chunk IDs if any remain. Transitions the session to `BRONZE_COMPLETE`. Call this before writing Silver.
+Validates that all service chunks have been marked extracted or skipped. Returns an error listing pending chunk IDs if any remain. Transitions the session to `BRONZE_COMPLETE`. Call this before writing Silver, then `submit_inventory_probes`, then `complete_ingest`.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -370,7 +370,7 @@ Validates that all service chunks have been marked extracted or skipped. Returns
 
 ### `complete_ingest`
 
-Completes the ingest session after Silver has been written. Validates that `finish_bronze_extraction` was called first. Cleans up service chunks from memory.
+Completes the ingest session after Silver has been written and `submit_inventory_probes` satisfied (in `answer_complete` mode). Requires `finish_bronze_extraction` first. Removes the session from memory and the `ingest_sessions` SQLite table.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -390,7 +390,7 @@ Fetches a URL and starts the **same stateful ingest session** as `ingest_file` (
 | `authority` | string | Issuing authority metadata. Defaults to the URL hostname |
 | `doc_slug` | string | Short namespace identifier. Defaults to the last URL path segment |
 
-The returned text contains the URL, SHA-256 of the fetched content, size, suggested `SOURCES` namespace, and the extracted text. The agent then applies the file ingestion steps: register source → extract Bronze → write Silver.
+Returns the same stateful session payload as `ingest_file`: `session_key`, numbered service chunks, and inline IRON RULES. Content is not embedded in the response — read chunks via `get_service_chunk` / `get_service_chunks`.
 
 ---
 
