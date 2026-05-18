@@ -26,7 +26,9 @@ def test_lsh_finds_similar_pair_among_many_namespaces():
     provider = MockEmbeddingProvider()
     path_vectors: dict[str, list[float]] = {}
     for i in range(400):
-        text = f"random namespace topic number {i} alpha beta gamma"
+        # Unique words only — no shared boilerplate — so cosine similarity between
+        # different texts is near zero, letting LSH prune the candidate set.
+        text = f"uniquetopic{i} distinctsubject{i} specialterm{i}"
         path_vectors[f"PROJECTS/ns{i:04d}"] = provider.embed(text)
     path_vectors["PROJECTS/anchor_a"] = provider.embed(SIMILAR_TEXT)
     path_vectors["PROJECTS/anchor_b"] = provider.embed(SIMILAR_TEXT)
@@ -51,7 +53,9 @@ def test_discover_links_report_includes_lsh_stats(tmp_path):
         store.save_chunk(
             Chunk(
                 node_path=f"PROJECTS/ns{i:03d}",
-                content=f"topic filler text number {i}",
+                # Unique words only — no shared boilerplate — keeps vectors orthogonal
+                # so LSH prunes all pairs except the anchor_a/anchor_b match.
+                content=f"uniquesilver{i} distinctcontent{i} specificterm{i}",
                 layer="silver",
             )
         )

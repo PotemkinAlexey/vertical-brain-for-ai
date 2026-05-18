@@ -35,9 +35,11 @@ class MockEmbeddingProvider:
         return self.DIM
 
     def embed(self, text: str) -> list[float]:
+        import hashlib
         vec = [0.0] * self.DIM
         for word in text.lower().split():
-            vec[hash(word) % self.DIM] += 1.0
+            idx = int(hashlib.md5(word.encode()).hexdigest(), 16) % self.DIM
+            vec[idx] += 1.0
         mag = math.sqrt(sum(v * v for v in vec))
         return [v / mag for v in vec] if mag > 0 else vec
 
