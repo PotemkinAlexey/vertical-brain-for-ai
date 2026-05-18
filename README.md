@@ -218,7 +218,7 @@ vb --data-dir ./brain --storage-backend json ...
 
 ```bash
 pip install -e .
-pytest                              # full suite (494 tests)
+pytest                              # full suite (496 tests)
 pytest tests/test_operations.py -v  # single file
 ```
 

@@ -254,11 +254,13 @@ See [04_operations_reference.md](04_operations_reference.md) for the full batch 
 
 ### `optimize`
 
-Run the compaction optimizer on a namespace branch. Detects exact duplicates, compacts multiple Bronze/Silver chunks into canonical Silver summaries, and decays old unlinked content.
+Run the compaction optimizer. With `path`: snapshot one branch (`optimize_branch`), then `discover_links` under that root. **Without `path`**: full-lake sweep (`optimize_all`) — walks each namespace via `get_chunks_by_path` (not `list_chunks()`), then cross-namespace link discovery using one representative Silver per namespace (O(P²) in namespace count).
+
+Detects exact duplicates, compacts Bronze/Silver variants into canonical Silver, and decays old unlinked content when decay is configured.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `path` | string | **required** Namespace prefix to optimize |
+| `path` | string | Namespace prefix to optimize; omit for global `optimize_all` |
 
 ---
 
