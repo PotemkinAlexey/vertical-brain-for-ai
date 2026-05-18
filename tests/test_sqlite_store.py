@@ -342,3 +342,22 @@ def test_vacuum_can_include_immutable_chunks_with_force(tmp_path):
     assert result["include_immutable"] is True
     assert result["deleted_chunks"] == 1
     assert store.get_chunks_by_path("WORK/A", include_children=False) == []
+
+
+def test_ingest_registry_register_and_find(tmp_path):
+    store = SQLiteStore(root=tmp_path)
+    assert store.find_ingest_by_hash("abc") is None
+    store.register_ingest("abc", "SOURCES/test/doc", "doc.txt")
+    entry = store.find_ingest_by_hash("abc")
+    assert entry is not None
+    assert entry["source_namespace"] == "SOURCES/test/doc"
+    assert entry["file_name"] == "doc.txt"
+    assert "ingested_at" in entry
+
+
+def test_ingest_registry_upsert(tmp_path):
+    store = SQLiteStore(root=tmp_path)
+    store.register_ingest("abc", "SOURCES/old", "old.txt")
+    store.register_ingest("abc", "SOURCES/new", "new.txt")
+    entry = store.find_ingest_by_hash("abc")
+    assert entry["source_namespace"] == "SOURCES/new"

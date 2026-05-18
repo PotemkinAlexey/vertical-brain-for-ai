@@ -15,6 +15,10 @@ def _mcp(tmp_path):
     return VerticalBrainMCP(store), store
 
 
+def _mcp_from_store(store):
+    return VerticalBrainMCP(store)
+
+
 def _call(mcp: VerticalBrainMCP, name: str, args: Optional[dict] = None) -> dict:
     return mcp.handle({
         "jsonrpc": "2.0",
@@ -990,6 +994,92 @@ def test_ingest_file_rejects_integrity_mismatch(tmp_path):
     assert resp.get("error") or (resp.get("result", {}).get("isError"))
     text = json.dumps(resp)
     assert "integrity check failed" in text
+
+
+def test_ingest_file_duplicate_rejected(tmp_path):
+    """Second ingest of same content is rejected unless force=true."""
+    mcp = _mcp_from_store(SQLiteStore(root=tmp_path))
+    content = "Field 32A: value date, currency, amount."
+
+    # First ingest — create and complete the session
+    resp = _call(mcp, "ingest_file", {"content": content, "file_name": "MT103.txt"})
+    session_key = None
+    for line in _text(resp).splitlines():
+        if line.startswith("session_key:"):
+            session_key = line.split(":", 1)[1].strip()
+    assert session_key
+
+    # Skip all chunks and complete
+    for chunk in mcp._ingest_sessions[session_key]["chunks"]:
+        _call(mcp, "mark_service_chunk", {
+            "session_key": session_key, "chunk_id": chunk["id"],
+            "status": "skipped", "skip_reason": "test",
+        })
+    _call(mcp, "finish_bronze_extraction", {"session_key": session_key})
+    _call(mcp, "complete_ingest", {"session_key": session_key})
+
+    # Second ingest — same content, should be rejected
+    resp2 = _call(mcp, "ingest_file", {"content": content, "file_name": "MT103.txt"})
+    assert resp2.get("error") or resp2.get("result", {}).get("isError")
+    text = json.dumps(resp2)
+    assert "already ingested" in text
+    assert "force=true" in text
+
+
+def test_ingest_file_force_bypasses_duplicate_check(tmp_path):
+    """force=true allows re-ingesting the same content."""
+    mcp = _mcp_from_store(SQLiteStore(root=tmp_path))
+    content = "Field 32A: value date, currency, amount."
+
+    # First ingest — complete it
+    resp = _call(mcp, "ingest_file", {"content": content, "file_name": "MT103.txt"})
+    session_key = None
+    for line in _text(resp).splitlines():
+        if line.startswith("session_key:"):
+            session_key = line.split(":", 1)[1].strip()
+    for chunk in mcp._ingest_sessions[session_key]["chunks"]:
+        _call(mcp, "mark_service_chunk", {
+            "session_key": session_key, "chunk_id": chunk["id"],
+            "status": "skipped", "skip_reason": "test",
+        })
+    _call(mcp, "finish_bronze_extraction", {"session_key": session_key})
+    _call(mcp, "complete_ingest", {"session_key": session_key})
+
+    # Second ingest with force=true — should succeed
+    resp2 = _call(mcp, "ingest_file", {
+        "content": content, "file_name": "MT103.txt", "force": True,
+    })
+    assert "error" not in resp2
+    assert "session_key:" in _text(resp2)
+
+
+def test_ingest_registry_persists_across_instances(tmp_path):
+    """Registry survives MCP restart — new instance sees previous ingest."""
+    from vertical_brain.storage.sqlite_store import SQLiteStore
+    content = "Field 32A: value date, currency, amount."
+
+    # First instance — ingest and complete
+    store1 = SQLiteStore(root=tmp_path)
+    mcp1 = _mcp_from_store(store1)
+    resp = _call(mcp1, "ingest_file", {"content": content, "file_name": "spec.txt"})
+    session_key = None
+    for line in _text(resp).splitlines():
+        if line.startswith("session_key:"):
+            session_key = line.split(":", 1)[1].strip()
+    for chunk in mcp1._ingest_sessions[session_key]["chunks"]:
+        _call(mcp1, "mark_service_chunk", {
+            "session_key": session_key, "chunk_id": chunk["id"],
+            "status": "skipped", "skip_reason": "test",
+        })
+    _call(mcp1, "finish_bronze_extraction", {"session_key": session_key})
+    _call(mcp1, "complete_ingest", {"session_key": session_key})
+
+    # Second instance — same DB, should see the registry entry
+    store2 = SQLiteStore(root=tmp_path)
+    mcp2 = _mcp_from_store(store2)
+    resp2 = _call(mcp2, "ingest_file", {"content": content, "file_name": "spec.txt"})
+    assert resp2.get("error") or resp2.get("result", {}).get("isError")
+    assert "already ingested" in json.dumps(resp2)
 
 
 def test_ingest_url_fetches_and_returns_header(tmp_path):

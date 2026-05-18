@@ -461,6 +461,13 @@ _TOOLS: list[dict[str, Any]] = [
                         "Defaults to the file name without extension."
                     ),
                 },
+                "force": {
+                    "type": "boolean",
+                    "description": (
+                        "Set to true to re-ingest a file that was already ingested "
+                        "(same sha256 found in registry). Default false — duplicate is rejected."
+                    ),
+                },
             },
         },
     },
@@ -1222,6 +1229,21 @@ class VerticalBrainMCP:
         doc_slug = raw_slug.strip().replace(" ", "_").replace(".", "_")
         source_ns = f"SOURCES/{authority}/{doc_slug}" if authority else f"SOURCES/{doc_slug}"
 
+        # Duplicate detection via ingest_registry
+        force = bool(args.get("force", False))
+        find_ingest = getattr(self._store, "find_ingest_by_hash", None)
+        if callable(find_ingest) and not force:
+            existing = find_ingest(file_hash)
+            if existing:
+                raise ValueError(
+                    f"This file was already ingested.\n"
+                    f"  file: {existing['file_name']}\n"
+                    f"  namespace: {existing['source_namespace']}\n"
+                    f"  ingested_at: {existing['ingested_at']}\n"
+                    f"  sha256: {file_hash}\n\n"
+                    f"Pass force=true to ingest_file to overwrite."
+                )
+
         session_key = secrets.token_hex(8)
         service_chunks = _split_service_chunks(content, session_key)
         self._ingest_sessions[session_key] = {
@@ -1365,6 +1387,15 @@ class VerticalBrainMCP:
         extracted = sum(1 for c in session["chunks"] if c["status"] == "extracted")
         skipped = sum(1 for c in session["chunks"] if c["status"] == "skipped")
         source_ns = session["source_namespace"]
+
+        register_ingest = getattr(self._store, "register_ingest", None)
+        if callable(register_ingest):
+            register_ingest(
+                session["content_hash"],
+                source_ns,
+                session["file_name"],
+            )
+
         del self._ingest_sessions[session_key]
         return json.dumps({
             "status": "completed",
