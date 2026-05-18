@@ -1598,6 +1598,12 @@ class VerticalBrainMCP:
             "storage_check": storage_check,
             "inventory_probes": probe_check,
             "session_key": session_key,
+            "next_steps": (
+                "MANDATORY: call append_gold_aspect for the source namespace AND each "
+                "sub-namespace to add short routing tags (30-100 chars each). "
+                "Gold is how future agents discover this content via session_start. "
+                "Without Gold, the document is invisible to routing."
+            ),
         }, ensure_ascii=False)
 
     def _handle_ingest_url(self, args: dict[str, Any]) -> str:

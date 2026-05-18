@@ -227,11 +227,15 @@ def validate_service_chunk_coverage(session: dict[str, Any], *, phase: str) -> N
         )
 
 
-def _active_chunks(store: StorageProvider, path: str) -> list[Chunk]:
+def _active_chunks(store: StorageProvider, path: str, include_children: bool = False) -> list[Chunk]:
     get_chunks = getattr(store, "get_chunks_by_path", None)
     if not callable(get_chunks):
         return []
-    return [c for c in get_chunks(path) if c.status == "active"]
+    try:
+        raw = get_chunks(path, include_children=include_children)
+    except TypeError:
+        raw = get_chunks(path)
+    return [c for c in raw if c.status == "active"]
 
 
 def normalize_inventory_label(label: str) -> str:
@@ -281,7 +285,8 @@ def validate_inventory_probes(
         return {"required": 0, "submitted": 0}
 
     path = session["source_namespace"]
-    chunks = _active_chunks(store, path)
+    # Include sub-namespace chunks so probes can cite Bronze facts written per-section.
+    chunks = _active_chunks(store, path, include_children=True)
     inventory = find_inventory_chunk(chunks)
     if inventory is None:
         raise ValueError(
