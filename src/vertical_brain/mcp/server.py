@@ -550,6 +550,35 @@ _TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "batch_mark_service_chunks",
+        "description": (
+            "Mark multiple service chunks as extracted or skipped in a single call. "
+            "Use after writing Bronze for a whole section to avoid per-chunk round-trips. "
+            "Max 50 marks per call."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_key": {"type": "string"},
+                "marks": {
+                    "type": "array",
+                    "description": "Array of {chunk_id, status, skip_reason?} objects.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "chunk_id": {"type": "string"},
+                            "status": {"type": "string", "enum": ["extracted", "skipped"]},
+                            "skip_reason": {"type": "string"},
+                        },
+                        "required": ["chunk_id", "status"],
+                    },
+                    "maxItems": 50,
+                },
+            },
+            "required": ["session_key", "marks"],
+        },
+    },
+    {
         "name": "finish_bronze_extraction",
         "description": (
             "Validate that all service chunks have been processed (extracted or skipped). "
@@ -1246,6 +1275,8 @@ class VerticalBrainMCP:
 
         if name == "mark_service_chunk":
             return self._handle_mark_service_chunk(args)
+        if name == "batch_mark_service_chunks":
+            return self._handle_batch_mark_service_chunks(args)
 
         if name == "finish_bronze_extraction":
             return self._handle_finish_bronze_extraction(args)
@@ -1449,6 +1480,40 @@ class VerticalBrainMCP:
         pending = sum(1 for c in session["chunks"] if c["status"] == "pending")
         return json.dumps(
             {"ok": True, "chunk_id": chunk_id, "status": status, "remaining_pending": pending},
+            ensure_ascii=False,
+        )
+
+    def _handle_batch_mark_service_chunks(self, args: dict[str, Any]) -> str:
+        session_key = args.get("session_key", "")
+        marks = args.get("marks") or []
+        if not marks:
+            raise ValueError("marks must be a non-empty array")
+        if len(marks) > 50:
+            raise ValueError(f"batch_mark_service_chunks: max 50 marks per call, got {len(marks)}")
+        session = self._require_ingest_session(session_key)
+        ingest_mode = session.get("ingest_mode", DEFAULT_INGEST_MODE)
+        chunk_index = {c["id"]: c for c in session["chunks"]}
+        results = []
+        for mark in marks:
+            chunk_id = mark.get("chunk_id", "")
+            status = mark.get("status", "")
+            skip_reason = mark.get("skip_reason")
+            if status not in ("extracted", "skipped"):
+                raise ValueError(f"status must be 'extracted' or 'skipped', got {status!r} for chunk {chunk_id!r}")
+            if status == "skipped" and not skip_reason:
+                raise ValueError(f"skip_reason is required when status='skipped' (chunk {chunk_id!r})")
+            if status == "skipped":
+                validate_skip_reason(str(skip_reason), mode=ingest_mode)
+            chunk = chunk_index.get(chunk_id)
+            if chunk is None:
+                raise ValueError(f"Chunk {chunk_id!r} not found in session {session_key!r}")
+            chunk["status"] = status
+            chunk["skip_reason"] = skip_reason
+            results.append({"chunk_id": chunk_id, "status": status})
+        self._persist_ingest_session(session)
+        pending = sum(1 for c in session["chunks"] if c["status"] == "pending")
+        return json.dumps(
+            {"ok": True, "marked": len(results), "remaining_pending": pending, "results": results},
             ensure_ascii=False,
         )
 

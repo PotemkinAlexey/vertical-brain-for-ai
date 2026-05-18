@@ -8,6 +8,8 @@ from vertical_brain.core.models import Chunk
 from vertical_brain.mcp.ingest_protocol import (
     INGEST_MODE_ANSWER_COMPLETE,
     INVENTORY_PREFIX,
+    _is_section_header,
+    _silver_has_references,
     build_protocol_lines,
     inventory_probe_requirement,
     parse_inventory_items,
@@ -164,3 +166,90 @@ def test_build_protocol_lines_includes_iron_rules():
     assert "IRON RULES" in text
     assert INVENTORY_PREFIX in text
     assert "complete_ingest" in text
+
+
+# --- section_header detection ---
+
+@pytest.mark.parametrize("text", [
+    "# Introduction",
+    "## SEPA Payments",
+    "### 3.1 Wire Transfer Rules",
+    "1. Overview",
+    "1.2 Payment Methods",
+    "2.3.1 SWIFT Codes",
+    "PAYMENT METHODS",
+    "SEPA AND SWIFT OVERVIEW",
+])
+def test_is_section_header_detects_headings(text):
+    assert _is_section_header(text), f"Expected section_header for: {text!r}"
+
+
+@pytest.mark.parametrize("text", [
+    "Field 32A: Value Date, Currency, Amount. Format: 6!n3!a15d.",
+    "The beneficiary bank must be a SWIFT member.",
+    "a",
+    "",
+    "Line one\nLine two\nLine three\nLine four\nLine five",  # too many lines
+])
+def test_is_section_header_rejects_prose(text):
+    assert not _is_section_header(text), f"Expected NOT section_header for: {text!r}"
+
+
+def test_split_service_chunks_tags_section_headers():
+    content = "# Introduction\n\nSome prose here.\n\n## SEPA Payments\n\nMore prose."
+    chunks = split_service_chunks(content, "sess")
+    types = [c["chunk_type"] for c in chunks]
+    assert "section_header" in types
+    headers = [c for c in chunks if c["chunk_type"] == "section_header"]
+    assert any("Introduction" in h["content"] for h in headers)
+    assert any("SEPA" in h["content"] for h in headers)
+
+
+def test_split_service_chunks_counts_section_headers_in_protocol():
+    content = "# Section One\n\nFact one.\n\n# Section Two\n\nFact two."
+    chunks = split_service_chunks(content, "sess")
+    section_count = sum(1 for c in chunks if c["chunk_type"] == "section_header")
+    assert section_count == 2
+
+
+# --- _silver_has_references ---
+
+def test_silver_has_references_accepts_chunk_id():
+    assert _silver_has_references("maps topic to chunk_id abc123", "SOURCES/doc")
+
+
+def test_silver_has_references_accepts_subnamespace_path():
+    assert _silver_has_references("[SOURCES/doc/sepa] SEPA rules", "SOURCES/doc")
+
+
+def test_silver_has_references_rejects_empty():
+    assert not _silver_has_references("Summary of payment rules.", "SOURCES/doc")
+
+
+# --- validate_namespace_ready_for_complete accepts sub-namespace Silver ---
+
+def test_validate_namespace_ready_accepts_subnamespace_silver(tmp_path):
+    store = SQLiteStore(root=tmp_path)
+    path = "SOURCES/doc"
+
+    store.save_chunk(Chunk(
+        node_path=path, layer="bronze", content_type="artifact", immutable=True,
+        content=f"file: doc.pdf\ncontent_sha256: abc\nauthority: test\nsize: 100",
+    ))
+    store.save_chunk(Chunk(
+        node_path=path, layer="bronze", content_type="note",
+        content=f"{INVENTORY_PREFIX}\n- item1\n- item2\n- item3",
+    ))
+    store.save_chunk(Chunk(
+        node_path=path, layer="bronze", content_type="note",
+        content="Sub-namespace map: Section1 → SOURCES/doc/section1",
+    ))
+    store.save_chunk(Chunk(
+        node_path=path, layer="silver",
+        content="[SOURCES/doc/section1] payment rules\n[SOURCES/doc/section2] fee tables",
+    ))
+
+    session = {"ingest_mode": INGEST_MODE_ANSWER_COMPLETE, "source_namespace": path}
+    result = validate_namespace_ready_for_complete(store, session)
+    assert result["silver_id"] is not None
+    assert result["bronze_fact_count"] >= 1
