@@ -1,7 +1,6 @@
 """Tests for ingest protocol enforcement."""
 from __future__ import annotations
 
-import json
 import pytest
 
 from vertical_brain.core.models import Chunk
@@ -13,7 +12,6 @@ from vertical_brain.mcp.ingest_protocol import (
     build_protocol_lines,
     inventory_probe_requirement,
     parse_inventory_items,
-    session_chunk_stats,
     split_service_chunks,
     validate_inventory_probes,
     validate_namespace_ready_for_complete,
@@ -111,7 +109,7 @@ def test_complete_ingest_requires_inventory_and_facts(tmp_path):
             node_path=path,
             layer="silver",
             content_type="note",
-            content=f"US wire (sources: chunk_id=abc)",
+            content="US wire (sources: chunk_id=abc)",
         )
     )
     result = validate_namespace_ready_for_complete(store, session)
@@ -234,7 +232,7 @@ def test_validate_namespace_ready_accepts_subnamespace_silver(tmp_path):
 
     store.save_chunk(Chunk(
         node_path=path, layer="bronze", content_type="artifact", immutable=True,
-        content=f"file: doc.pdf\ncontent_sha256: abc\nauthority: test\nsize: 100",
+        content="file: doc.pdf\ncontent_sha256: abc\nauthority: test\nsize: 100",
     ))
     store.save_chunk(Chunk(
         node_path=path, layer="bronze", content_type="note",
