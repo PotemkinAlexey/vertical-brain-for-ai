@@ -131,6 +131,13 @@ class SQLiteStore:
                 created_at TEXT NOT NULL,
                 PRIMARY KEY (content_hash, model_name)
             );
+
+            CREATE TABLE IF NOT EXISTS ingest_registry (
+                content_hash TEXT PRIMARY KEY,
+                source_namespace TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                ingested_at TEXT NOT NULL
+            );
             """
         )
         self.conn.commit()
@@ -925,6 +932,40 @@ class SQLiteStore:
             ),
         )
         self._commit_if_needed()
+
+    # ------------------------------------------------------------------
+    # Ingest registry
+    # ------------------------------------------------------------------
+
+    def register_ingest(self, content_hash: str, source_namespace: str, file_name: str) -> None:
+        """Record a completed ingest so duplicate attempts can be detected."""
+        now = utc_now()
+        self.conn.execute(
+            """
+            INSERT INTO ingest_registry (content_hash, source_namespace, file_name, ingested_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(content_hash) DO UPDATE SET
+                source_namespace=excluded.source_namespace,
+                file_name=excluded.file_name,
+                ingested_at=excluded.ingested_at
+            """,
+            (content_hash, source_namespace, file_name, now),
+        )
+        self.conn.commit()
+
+    def find_ingest_by_hash(self, content_hash: str) -> dict[str, str] | None:
+        """Return registry entry for content_hash, or None if not found."""
+        row = self.conn.execute(
+            "SELECT source_namespace, file_name, ingested_at FROM ingest_registry WHERE content_hash = ?",
+            (content_hash,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "source_namespace": row["source_namespace"],
+            "file_name": row["file_name"],
+            "ingested_at": row["ingested_at"],
+        }
 
     def list_audit(self) -> list[dict[str, Any]]:
         rows = self.conn.execute(
