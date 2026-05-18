@@ -654,63 +654,6 @@ _TOOLS: list[dict[str, Any]] = [
 _TOOLS_BY_NAME: dict[str, dict[str, Any]] = {tool["name"]: tool for tool in _TOOLS}
 
 
-def _build_ingest_header(
-    *,
-    label: str,
-    file_hash: str,
-    file_size: int,
-    authority: str,
-    doc_slug: str,
-    content: str | None = None,
-    url: str | None = None,
-    source_path: str | None = None,
-    source_hash: str | None = None,
-    source_size: int | None = None,
-) -> str:
-    """Return a compact metadata header for ingest_file / ingest_url.
-
-    The full ingestion protocol lives in AGENTS.md and is loaded by session_start.
-    When *content* is provided it is appended (ingest_url fetches remotely).
-    For ingest_file the content is already in the conversation context.
-    """
-    size_kb = file_size / 1024
-    source_ns = _source_namespace(doc_slug)
-    if url:
-        origin_line = f"url: {url}"
-    elif source_path:
-        origin_line = f"source_path: {source_path}"
-    else:
-        origin_line = "source: chat attachment"
-
-    header = f"""# ingest — {label}
-
-{origin_line}
-content_sha256: {file_hash}
-content_size: {size_kb:.1f} KB
-authority: {authority or "(infer from content)"}
-source_namespace: {source_ns}
-integrity: {"server_extracted_source" if source_path else "caller_supplied_text"}"""
-
-    if source_hash is not None and source_size is not None:
-        source_size_kb = source_size / 1024
-        header += f"""
-source_sha256: {source_hash}
-source_size: {source_size_kb:.1f} KB"""
-
-    header += """
-
-⚡ Execute the File Ingestion Protocol from AGENTS.md now.
-Do NOT respond to the user until all steps are complete.
-Start with Step 1 (register source chunk) immediately."""
-
-    if content is not None:
-        header += f"\n\n---\n\n{content}"
-    else:
-        header += "\n\nThe file content is already in the conversation context above."
-
-    return header
-
-
 class _HTMLTextExtractor(html.parser.HTMLParser):
     """Strip HTML tags and return visible text."""
 

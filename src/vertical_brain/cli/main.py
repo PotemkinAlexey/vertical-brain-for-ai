@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -33,7 +34,11 @@ DEFAULT_MODEL_FILE = Path(__file__).resolve().parents[3] / "data" / "namespaces"
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vb", description="Vertical Brain MVP CLI")
-    parser.add_argument("--data-dir", default="data", help="Directory for local storage")
+    parser.add_argument(
+        "--data-dir",
+        default=os.environ.get("VB_DATA_DIR", "data"),
+        help="Directory for local storage (default: data, or VB_DATA_DIR env)",
+    )
     parser.add_argument(
         "--storage-backend",
         choices=["json", "sqlite"],

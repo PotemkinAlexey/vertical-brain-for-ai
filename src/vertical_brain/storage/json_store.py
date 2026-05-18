@@ -22,8 +22,6 @@ class JsonStore:
         self.chunks_file = self.root / "chunks.json"
         self.links_file = self.root / "links.json"
         self.namespace_roots_file = self.root / "namespaces" / "root.json"
-        self.gold_dir = self.root / "gold"
-        self.gold_dir.mkdir(parents=True, exist_ok=True)
         self.audit_file = self.root / "operation_audit.jsonl"
         self._transaction_depth = 0
 
@@ -166,10 +164,6 @@ class JsonStore:
                 self._write(self.chunks_file, chunks)
                 return chunk
         raise ValueError(f"Chunk not found: {chunk.id}")
-
-    def gold_summary_path(self, path: str) -> Path:
-        parts = path.split("/")
-        return self.gold_dir.joinpath(*parts).with_suffix(".md")
 
     def get_node(self, path: str) -> Node | None:
         existing = next((row for row in self._read(self.nodes_file) if row["path"] == path), None)

@@ -91,10 +91,7 @@ Gold aspects are stored as the content of an active Gold-layer chunk at the node
 - `id` is stable across rewrites — updating the same aspect refreshes `updated_at` but keeps the UUID
 - Max 20 aspects per node; overflow creates a sibling namespace `{path}_2`, `{path}_3`, etc.
 
-There are two distinct Gold mechanisms in the codebase:
-
-- **`append_gold_aspect` / `GoldAspect`** — the lightweight incremental path. Adds or refreshes a single semantic label. Used by the model and MCP tools to annotate a namespace during normal operation.
-- **`GoldDocument` / `GoldBuilder` / `LlmGoldBuilder`** — the structured distillation path. Builds a full Gold document from a set of Silver chunks, with typed `facts`, `entities`, and `rules`. Each `GoldFact` carries `source_silver_ids` that must map to real Silver chunks (hallucinated IDs are rejected). Use this path for batch Gold rebuilds driven by an LLM.
+Gold is written incrementally via **`append_gold_aspect` / `GoldAspect` v2** (MCP, CLI, optimizer). Legacy **`GoldDocument`** JSON (`facts` / `entities` / `rules`) is still parsed when reading older Gold chunks; there is no separate filesystem Gold path.
 
 ---
 
@@ -202,7 +199,7 @@ vertical_brain/
 │   ├── models.py             — Data classes: Chunk, Node, Link, StorageOperation, …
 │   ├── operations.py         — StorageOperationExecutor: validate + apply
 │   ├── optimizer.py          — SimpleOptimizer: dedup + compaction + decay
-│   ├── gold.py               — GoldAspect, parse/serialize, LlmGoldBuilder
+│   ├── gold.py               — GoldAspect v2, parse/serialize, legacy GoldDocument
 │   ├── search.py             — BrainSearch: lexical FTS + path ranking
 │   ├── embedding_search.py   — EmbeddingSearch: cosine similarity + vector cache
 │   ├── embedding_router.py   — EmbeddingRouter: namespace routing by embedding

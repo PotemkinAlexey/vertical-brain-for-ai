@@ -16,7 +16,7 @@ src/vertical_brain/
 │   ├── models.py             — All data classes (Chunk, Node, Link, StorageOperation, …)
 │   ├── operations.py         — StorageOperationExecutor: validate + apply + audit + Bronze dedup guard
 │   ├── optimizer.py          — SimpleOptimizer: dedup + Silver compaction + decay + cross-namespace link discovery
-│   ├── gold.py               — GoldAspect v2, parse/serialize, LlmGoldBuilder
+│   ├── gold.py               — GoldAspect v2, parse/serialize, legacy GoldDocument
 │   ├── search.py             — BrainSearch: lexical FTS + path ranking
 │   ├── embedding_search.py   — EmbeddingSearch: cosine + persistent vector cache
 │   ├── embedding_router.py   — EmbeddingRouter: route by embedding similarity
@@ -48,7 +48,7 @@ Test files mirror `src/` — there is one test file per module, plus cross-cutti
 ## Running Tests
 
 ```bash
-pytest                                    # full suite (~454 tests)
+pytest                                    # full suite (~500+ tests)
 pytest tests/test_operations.py -v       # single file
 pytest -k "occ or version" -v            # keyword filter
 pytest --tb=short 2>&1 | tail -20        # summary view

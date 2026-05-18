@@ -288,7 +288,7 @@ def test_cli_uses_configured_data_dir(monkeypatch, capsys, tmp_path):
     assert not (tmp_path / "data" / "chunks.json").exists()
 
 
-def test_cli_optimize_marks_duplicates_and_reports_gold_file(monkeypatch, capsys, tmp_path):
+def test_cli_optimize_marks_duplicate_bronze_stale(monkeypatch, capsys, tmp_path):
     first_response_file = write_llm_response(tmp_path, "ingest1.json", ingest_response(layer="bronze"))
     run_cli(
         monkeypatch,

@@ -19,7 +19,7 @@ Chat assistants forget between sessions and mix unrelated contexts together. Vec
 
 ## Installation
 
-**Requirements:** Python 3.8+. No external dependencies.
+**Requirements:** Python 3.11+. No external runtime dependencies.
 
 ```bash
 git clone https://github.com/PotemkinAlexey/vertical-brain-for-ai.git
@@ -40,10 +40,11 @@ Your data directory defaults to `./data`. Set a persistent location:
 vb --data-dir ~/.brain doctor
 ```
 
-Or set it once via environment variable:
+Or set it once via environment variable (used as the default for `--data-dir`):
 
 ```bash
 export VB_DATA_DIR=~/.brain
+vb doctor
 ```
 
 ---

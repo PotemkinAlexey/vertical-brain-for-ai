@@ -33,8 +33,6 @@ class SQLiteStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self.db_file = self.root / db_name
         self.namespace_roots_file = self.root / "namespaces" / "root.json"
-        self.gold_dir = self.root / "gold"
-        self.gold_dir.mkdir(parents=True, exist_ok=True)
         self._transaction_depth = 0
 
         self.conn = sqlite3.connect(self.db_file, check_same_thread=False, timeout=30)
@@ -606,10 +604,6 @@ class SQLiteStore:
         self._index_chunk(chunk)
         self._commit_if_needed()
         return chunk
-
-    def gold_summary_path(self, path: str) -> Path:
-        parts = path.split("/")
-        return self.gold_dir.joinpath(*parts).with_suffix(".md")
 
     def get_node(self, path: str) -> Node | None:
         row = self.conn.execute("SELECT * FROM nodes WHERE path = ?", (path,)).fetchone()
