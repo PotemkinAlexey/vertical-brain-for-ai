@@ -1,4 +1,4 @@
-# Vertical Brain — persistent memory across sessions
+# Vertical Brain — agent contract
 
 ## Principles
 
@@ -8,192 +8,55 @@
 - **Changing — leave a trace.**
 - **Deleting — only on explicit order.**
 
-You have an MCP server called `vertical-brain` connected. It is the user's personal knowledge store — facts, decisions, and insights organized in hierarchical namespaces across Bronze/Silver/Gold data layers.
+## Session
 
-## At the start of every session
+**Call `session_start` before responding. No exceptions.** If it fails, tell the user and stop.
 
-**Call `session_start` before responding to the user.** Do not begin the conversation until you have read the memory map. This is not optional — skipping it means you are operating blind.
+**Call `session_end` if the session produced durable knowledge.** If nothing worth persisting happened, tell the user explicitly: "No durable memory was created this session."
 
-If `session_start` fails because the MCP server is unavailable, tell the user explicitly and wait for confirmation before continuing. Do not proceed without memory on your own judgment.
+## Reading memory
 
-It returns a map of all namespaces with active chunk counts and Gold insights. Read the response and briefly tell the user what you see in memory.
+Gold → Silver → Bronze. Stop as soon as you have enough. `session_start` surfaces Gold; call `read_context` only when Gold is insufficient.
 
-## How to read session_start output
+## Writing memory
 
-- Namespaces in `CATEGORY/topic/subtopic` format
-- Active chunk count next to each namespace — how many facts are stored
-- Gold insights — distilled key conclusions
+1. **Search before every Bronze write.** If a matching chunk exists — stop, do not duplicate.
+2. **One fact per chunk.** Each chunk must be independently meaningful and stale-able.
+3. **Bronze → Silver → Gold, always in this order.** After every Bronze write, update Silver. Never write Gold as the first record of a new idea.
+4. **Call `read_context` before every `update_silver`** to get `current_silver_id`.
+5. **For `batch_append`:** call `update_silver` once after the entire batch, not per chunk.
+6. **To correct wrong memory:** write a Bronze chunk with `content_type="correction"`, then update Silver. Do not overwrite Gold directly.
 
-## When to write to memory
+## Responding to tool signals
 
-- **append_chunk** — record a raw Bronze fact, decision, or observation
-- **update_silver** — atomically rewrite the Silver summary for a namespace (requires `current_silver_id` from your last read — OCC protected)
-- **append_gold_aspect** — add a durable insight to Gold
-- **batch_append** — write multiple Bronze chunks at once
-- **session_end** — end-of-session: Bronze notes + Silver summary + optional Gold aspect
+- `append_chunk` rejected (identical content) — do not retry. Fact already recorded, or mark_stale the old one first.
+- `similar_bronze` returned — review. Mark stale only if the older chunk is superseded.
+- `chunk_too_large: true` — split into single-fact chunks, then update Silver once.
+- `aspect_too_long: true` — split into shorter search tags (target 30–100 chars each).
 
-## Storage maintenance
+## Destructive operations
 
-- **optimize** with `path` — preferred form: dedup, Silver compaction, decay, then global link discovery, scoped to one branch.
-- **optimize** (no args) — full sweep across all namespaces. Use only at a natural session boundary or when explicitly asked. Do not call speculatively.
-- **vacuum** — physical purge of stale/superseded chunks past retention. Always dry-run first (default). Never pass `dry_run: false` unless the user explicitly asks to delete. Immutable chunks are physically purged only when `include_immutable: true` is explicitly passed with `force: true`.
-- **mark_stale** — mark chunks stale by ID, or all active non-gold chunks at a path. Parameters:
-  - `recursive: true` — includes all descendant namespaces (e.g. whole subtree).
-  - `include_immutable: true` — also marks immutable chunks stale. Use **only** when wiping a namespace for re-ingestion. Without this flag immutable chunks are silently skipped.
-  - Full wipe before re-ingestion: `mark_stale(path=..., recursive=true, include_immutable=true, reason="re-ingestion")` then `vacuum(dry_run=false, force=true, include_immutable=true)`.
+- **Never `vacuum(dry_run=false)`** unless the user explicitly asked.
+- **Never `rename_namespace`** unless explicitly requested.
+- **Never call global `optimize()` speculatively** — only at session end or on explicit request.
+- **Never mutate storage outside the MCP protocol** (no raw SQL, no direct file edits).
+- If the user says "clean", "wipe", "reset", "delete" — confirm intent before acting.
 
-Call `optimize` with a path after writing many chunks to a namespace. Global `optimize` only at end of session or on explicit request.
+## File ingestion
 
-## How to read memory
+When user writes `ingest_file` or `ingest_url`, call the tool and follow the protocol it returns inline. Do not respond to the user until `complete_ingest` succeeds.
 
-When consuming context, read layers in reverse order — most distilled first. **Stop as soon as you have enough to answer.**
+- PDF: `ingest_file(source_path=<path>, authority=<inferred>)`
+- Other formats: agent reads file → `ingest_file(content=<text>, file_name=<name>, authority=<inferred>)`
+- URL: `ingest_url(url=<url>)`
 
-1. **Gold first** — authoritative conclusions, stable decisions, orientation. If Gold answers the question, stop here.
-2. **Silver second** — working summaries and refined facts. Read only if Gold was too brief or missing. If Silver answers the question, stop here.
-3. **Bronze last** — raw source material. Read only when you need the original wording, a timestamp, or a detail that Silver didn't preserve.
+## Schema / normative lookups
 
-`session_start` already surfaces Gold. Call `read_context` only when Gold is insufficient for the task at hand.
+Answer field and schema questions only from an immutable Bronze chunk (cited via Silver `chunk_id`). If no immutable chunk matches — say so. Do not answer from model training data.
 
-## What to write — and what not to
-
-**Write** when you learn something that should survive this session: a decision, a confirmed fact, a project state change, a principle that emerged from discussion.
-
-**Do not write**:
-- Transient conversational exchanges with no lasting value
-- Facts already present in memory (use `search` first — avoid duplicates)
-- Uncertain guesses — if unsure, mark confidence low or wait for confirmation
-- One giant chunk covering multiple unrelated facts — **one fact per chunk**
-
-## Bronze dedup enforcement
-
-The infrastructure enforces two levels of dedup on every `append_chunk` with `layer: bronze`:
-
-1. **Hard block — exact duplicate.** If an active Bronze chunk with byte-for-byte identical content already exists at the same namespace, the write is rejected with a `ValueError`. The error message names the existing chunk ID and tells you to call `mark_stale` first if the fact has changed.
-
-2. **Soft warning — similar content.** If the write succeeds but similar (not identical) active Bronze chunks exist at the same namespace, the response includes a `similar_bronze` field listing up to 3 matching chunks with snippets. Review them — if one is effectively the same fact, mark it stale to keep Silver clean.
-
-```
-result.similar_bronze = [
-  { "chunk_id": "abc...", "snippet": "Databricks uses Delta Lake...", "score": 10 }
-]
-```
-
-**Why this matters:** duplicate Bronze chunks make Silver dirty unnecessarily. If you keep Bronze unique, each `update_silver` synthesizes only genuinely new information.
-
-3. **Soft warning — chunk too large.** If the write succeeds but the Bronze content exceeds 600 characters, the response includes `chunk_too_large: true`. This means the chunk likely bundles multiple facts and its embedding will be diluted across unrelated topics, degrading search and routing quality.
-
-```
-result.chunk_too_large = true
-```
-
-**What to do:** split the content into smaller single-fact chunks. Each chunk should express one idea, decision, or observation — independently meaningful and stale-able on its own.
-
-## Correcting wrong memory
-
-Never delete or overwrite Gold directly. Instead:
-1. Write a Bronze chunk with the correction and `content_type: "correction"`
-2. Write a Silver summary that supersedes the old view
-3. Only promote to Gold once the correction is confirmed stable
-
-The old Gold aspect will remain until explicitly replaced by a new `append_gold_aspect` call with updated content — the optimizer does not modify Gold.
-
-## At the end of every session
-
-**Call `session_end` before closing** if the session produced any facts, decisions, or insights. An unsaved session is a lost session.
-
-If the session produced no durable knowledge (e.g. a quick lookup, a clarifying question, or a read-only task), you may skip `session_end` — but tell the user explicitly: "No durable memory was created this session."
-
-`session_end` takes:
-- `notes` — raw Bronze capture: bullet list of what was done, decided, or learned this session
-- `summary` — refined Silver summary: one concise paragraph distilling the key outcome (you must write this — the optimizer cannot)
-- `gold_aspect` — optional: only if a durable insight emerged that should orient future sessions
-
-Then call `optimize` with the most-written namespace path.
-
-## Mandatory write layering
-
-Bronze is an append-only log. Silver is a living document you keep current. Gold is stable and rarely changes.
-
-**The pattern for every new fact:**
-
-1. **Bronze** — `append_chunk` the raw fact as-is. Never edit Bronze.
-2. **Silver** — if no active Silver exists yet, create it with `append_chunk(layer="silver")`. For all subsequent updates: call `read_context` to get the current Silver and its ID, synthesize new Silver (current Silver + new Bronze fact), then call `update_silver(path, new_content, current_silver_id)`. Silver is always one complete up-to-date distillation per namespace.
-3. **Gold** — only when a conclusion is stable enough to orient future sessions, call `append_gold_aspect`.
-
-`update_silver` enforces OCC: it rejects the write if Silver changed since you read it, forcing a re-read and re-synthesis. This makes it impossible to overwrite someone else's update accidentally.
-
-This keeps cost low: each Silver update only needs the current Silver + one new Bronze chunk, not the full Bronze history.
-
-Never write directly to Gold as the first record of a new idea.
-Never rely on the optimizer to produce Silver — it only does mechanical text compaction.
-If writing multiple Bronze chunks at once, use `batch_append`, then call `update_silver` once with all new facts incorporated.
-
-## Gold aspect guidance
-
-Gold is a search index, not a knowledge summary. Silver holds the content; Gold holds short semantic anchors that help route future queries to the right namespace.
-
-A Gold aspect should answer: **"Which query should find this namespace?"** Prefer many short, precise aspects over one long overview. Target ~30–100 characters per aspect. Avoid broad paragraphs like "what I know about X"; write tags like "Delta Lake Z-ordering lookup" or "AutoLoader schema drift handling".
-
-`append_gold_aspect` returns a soft warning when an aspect is too long:
-
-```
-result.aspect_too_long = true
-```
-
-**What to do:** split the long aspect into smaller, semantically distinct search tags and append them separately.
-
-## File ingestion protocol
-
-When the user writes `ingest_file` or `ingest_url`:
-
-- For PDFs: call `ingest_file(source_path=<absolute path>, authority=<inferred>)`.
-- For all other formats: the agent reads the file, then calls `ingest_file(content=<text>, file_name=<name>, authority=<inferred>)`.
-- For URLs: call `ingest_url(url=<url>)`.
-
-The tool returns a `session_key` and a numbered list of service chunks with the full protocol inline. **Follow the protocol exactly as returned by the tool.** Do not respond to the user until `complete_ingest` succeeds.
-
-For `ingest_url`, continue using the metadata header the tool returns and follow the file ingestion steps: register source → extract Bronze → write Silver.
-
----
-
-## User's namespace conventions
+## Namespace conventions
 
 - `PROJECTS/*` — projects and technical details
-- `META/*` — information about Vertical Brain itself
-- Create new namespaces by topic: `WORK/ProjectName`, `LEARNING/Topic`, `DECISIONS/Area`
-
-## Rules
-
-### Write discipline
-
-1. **Call `session_start` first.** Do not respond to the user until it returns. No exceptions.
-2. **Call `session_end` last** if the session produced durable knowledge. If nothing worth persisting happened, skip it — but tell the user explicitly that no memory was created.
-3. **Search before every Bronze write.** Use `search` to check for existing chunks before calling `append_chunk`. If a matching chunk is found — stop. Do not write a duplicate.
-4. **One fact per chunk.** Do not bundle multiple unrelated facts into one chunk. Each chunk must be independently meaningful and stale-able.
-5. **After every Bronze write, update Silver.**
-   - If no active Silver exists yet at this namespace, create the first one with `append_chunk(layer="silver")`.
-   - If an active Silver already exists, call `read_context` to get its ID, synthesize new Silver (old Silver + new fact), then call `update_silver`. Never leave Bronze orphaned without a Silver update.
-   - For `batch_append`: update Silver **once** after the entire batch succeeds, incorporating all new Bronze facts together. Do not call `update_silver` separately for each chunk.
-6. **Call `read_context` before every `update_silver`.** You must pass `current_silver_id` — the ID of the Silver chunk you are replacing. Never call `update_silver` without having read the current Silver first.
-7. **Never write Gold before Silver.** The infrastructure will reject it. If `append_gold_aspect` fails with "no active Silver found", call `update_silver` first, then retry.
-8. **Never write Gold as the first record of a new idea.** Bronze → Silver → Gold, always in that order.
-
-### Response to dedup signals
-
-9. **If `append_chunk` is rejected with "identical content already exists"** — do not retry with the same content. Either the fact is already recorded (do nothing) or it changed (call `mark_stale` on the old chunk first, then write the corrected version).
-10. **If `append_chunk` returns `similar_bronze`** — you must review and decide. Do not ignore the warning. Mark stale only if the older chunk is actually superseded or contradicted by the new fact. If both chunks are still valid (different aspects of the same topic), keep both and mention this in the Silver update.
-11. **If `append_chunk` returns `chunk_too_large: true`** — split the content into smaller single-fact chunks. Write each fact as a separate `append_chunk` call, then call `update_silver` once with all of them incorporated. A chunk that embeds poorly is invisible to routing and search.
-12. **If `append_gold_aspect` returns `aspect_too_long: true`** — split it into shorter search tags. Gold aspects should be routing anchors, not summaries.
-
-### Destructive operations
-
-13. **Never run `vacuum` with `dry_run: false`** unless the user explicitly asks to delete data.
-14. **Never run `rename_namespace`** unless the user explicitly requests it — it is irreversible without manual intervention.
-15. **Never mutate the memory database outside the storage protocol.** Do not use raw SQL, direct file edits, ad hoc scripts, or manual table deletes/inserts/updates against the Vertical Brain storage for normal memory operations. Use MCP/CLI tools (`append_chunk`, `batch_append`, `update_silver`, `append_gold_aspect`, `mark_stale`, `vacuum`, `optimize`, etc.) so validation, immutability, FTS/vector cleanup, and audit semantics are preserved. Direct storage mutation is allowed only for emergency repair after the user explicitly authorizes bypassing the protocol.
-16. **Ask before choosing a destructive mechanism.** If the user says "clean", "wipe", "reset", "delete", or similar, confirm whether to use the standard protocol (`mark_stale`/`vacuum`) or an explicitly authorized emergency bypass. Do not infer permission for raw storage mutation from a general cleanup request.
-17. **Never call global `optimize` (no path) speculatively** — only at session end or on explicit request.
-
-### Definition lookup (schema / normative)
-
-18. **Field and schema questions require immutable Bronze.** If the user asks for a definition, code meaning, or constraint, answer only from an immutable chunk (via Silver `chunk_id` citation) or state that memory has no definition. Do not answer from general model knowledge.
-19. **Silver is not a definition store.** Never treat SOURCES Silver alone as authoritative for normative wording — follow the chain Silver → cited `chunk_id` → immutable Bronze.
+- `META/*` — Vertical Brain itself
+- `SOURCES/*` — ingested documents
+- New topics: `WORK/Name`, `LEARNING/Topic`, `DECISIONS/Area`
