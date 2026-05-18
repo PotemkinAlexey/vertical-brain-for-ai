@@ -52,7 +52,7 @@ Test files mirror `src/` — there is one test file per module, plus cross-cutti
 ## Running Tests
 
 ```bash
-pytest                                    # full suite (496 tests)
+pytest                                    # full suite (499 tests)
 pytest tests/test_operations.py -v       # single file
 pytest -k "occ or version" -v            # keyword filter
 pytest --tb=short 2>&1 | tail -20        # summary view

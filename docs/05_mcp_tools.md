@@ -254,7 +254,9 @@ See [04_operations_reference.md](04_operations_reference.md) for the full batch 
 
 ### `optimize`
 
-Run the compaction optimizer. With `path`: snapshot one branch (`optimize_branch`), then `discover_links` under that root. **Without `path`**: full-lake sweep (`optimize_all`) — walks each namespace via `get_chunks_by_path` (not `list_chunks()`), then cross-namespace link discovery using one representative Silver per namespace (O(P²) in namespace count).
+Run the compaction optimizer. With `path`: snapshot one branch (`optimize_branch`), then `discover_links` under that root. **Without `path`**: full-lake sweep (`optimize_all`) — walks each namespace via `get_chunks_by_path` (not `list_chunks()`), then cross-namespace link discovery using one representative Silver per namespace.
+
+**Link discovery scale:** For P namespaces, embeddings are compared pairwise only when P ≤ 256 (brute force). Above that, random-hyperplane LSH (`vector_lsh.py`, stdlib-only) proposes candidate pairs, then exact cosine verification against the similarity threshold. Report lines include `[lsh: …]` or `[brute_force: …]` stats (namespace count, candidates, matches).
 
 Detects exact duplicates, compacts Bronze/Silver variants into canonical Silver, and decays old unlinked content when decay is configured.
 

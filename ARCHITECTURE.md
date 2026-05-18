@@ -114,7 +114,7 @@ Canonical facts. The optimizer compacts multiple Bronze chunks at a node into a 
 
 `SimpleOptimizer.optimize_branch(path)` performs a bounded snapshot read (branch chunks, branch node version, and links when decay is enabled), then runs three passes over that snapshot with no further I/O.
 
-`optimize_all()` walks namespaces via `list_nodes()` + `get_chunks_by_path(path, include_children=False)` — it does **not** call `list_chunks()`. `discover_links()` compares one representative active Silver per namespace (newest `created_at`), so cost is **O(P²)** in namespace count P, not O(P² × chunks²). A dedicated vector index (ANN) is the next step if P grows into the thousands.
+`optimize_all()` walks namespaces via `list_nodes()` + `get_chunks_by_path(path, include_children=False)` — it does **not** call `list_chunks()`. `discover_links()` uses one representative active Silver per namespace (newest `created_at`). For P ≤ 256 it brute-forces namespace pairs; for larger P it uses **random-hyperplane LSH** (stdlib only) to propose candidates, then exact cosine verification against `link_similarity_threshold`.
 
 1. **Exact dedup** — mark stale any active chunk whose `(node_path, content_hash)` already exists
 2. **Namespace compaction** — for each node with 2+ active non-Gold chunks lacking lineage, create one Silver summary and supersede the originals
@@ -200,7 +200,8 @@ vertical_brain/
 ├── core/
 │   ├── models.py             — Data classes: Chunk, Node, Link, StorageOperation, …
 │   ├── operations.py         — StorageOperationExecutor: validate + apply
-│   ├── optimizer.py          — SimpleOptimizer: dedup + compaction + decay
+│   ├── optimizer.py          — SimpleOptimizer: dedup + compaction + decay + link discovery
+│   ├── vector_lsh.py         — LSH candidate generation for discover_links at scale
 │   ├── gold.py               — GoldAspect v2, parse/serialize, legacy GoldDocument
 │   ├── search.py             — BrainSearch: lexical FTS + path ranking
 │   ├── embedding_search.py   — EmbeddingSearch: cosine similarity + vector cache

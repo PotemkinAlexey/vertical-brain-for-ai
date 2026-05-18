@@ -13,7 +13,8 @@ from vertical_brain.core.models import (
     StorageOperationBatch,
 )
 from vertical_brain.core.operations import StorageOperationExecutor
-from vertical_brain.llm.embedding import EmbeddingProvider, cosine_similarity
+from vertical_brain.core.vector_lsh import SimilaritySearchStats, find_similar_pairs
+from vertical_brain.llm.embedding import EmbeddingProvider
 
 if TYPE_CHECKING:
     from vertical_brain.storage.protocol import StorageProvider
@@ -43,6 +44,9 @@ class SimpleOptimizer:
         stale_threshold: float = 0.2,
         embedding_provider: EmbeddingProvider | None = None,
         link_similarity_threshold: float = 0.80,
+        link_discovery_brute_force_max: int = 256,
+        link_discovery_lsh_planes: int = 16,
+        link_discovery_lsh_bands: int = 4,
     ) -> None:
         self.store = store
         self.min_compaction_path_parts = min_compaction_path_parts
@@ -51,6 +55,10 @@ class SimpleOptimizer:
         self.stale_threshold = stale_threshold
         self._embedding_provider = embedding_provider
         self._link_similarity_threshold = link_similarity_threshold
+        self._link_discovery_brute_force_max = link_discovery_brute_force_max
+        self._link_discovery_lsh_planes = link_discovery_lsh_planes
+        self._link_discovery_lsh_bands = link_discovery_lsh_bands
+        self._last_link_search_stats: SimilaritySearchStats | None = None
 
     # ── public interface ──────────────────────────────────────────────────────
 
@@ -100,8 +108,9 @@ class SimpleOptimizer:
         """Find and create links between semantically similar namespaces.
 
         Requires an embedding_provider. Uses one **representative** active Silver chunk per
-        namespace (newest by ``created_at``), then compares namespace pairs — O(P²) cosine
-        operations for P namespaces, not O(P² × chunks²). Creates at most one link per pair.
+        namespace (newest by ``created_at``). For P > ``link_discovery_brute_force_max`` (default
+        256) uses random-hyperplane LSH to propose candidate pairs, then exact cosine verify.
+        At most one link per namespace pair.
         """
         if self._embedding_provider is None:
             return "Link discovery skipped: no embedding provider configured."
@@ -171,45 +180,58 @@ class SimpleOptimizer:
         vectors: dict[str, list[float]],
         existing_pairs: set[tuple[str, str]],
     ) -> list[StorageOperation]:
-        paths = sorted(representatives.keys())
-        operations: list[StorageOperation] = []
+        path_vectors: dict[str, list[float]] = {}
+        for path, chunk in representatives.items():
+            vec = vectors.get(chunk.id)
+            if vec is not None:
+                path_vectors[path] = vec
 
-        for i, path_a in enumerate(paths):
-            chunk_a = representatives[path_a]
-            vec_a = vectors.get(chunk_a.id)
-            if vec_a is None:
+        similar_pairs, stats = find_similar_pairs(
+            path_vectors,
+            threshold=self._link_similarity_threshold,
+            brute_force_max=self._link_discovery_brute_force_max,
+            num_planes=self._link_discovery_lsh_planes,
+            num_bands=self._link_discovery_lsh_bands,
+        )
+        self._last_link_search_stats = stats
+
+        operations: list[StorageOperation] = []
+        for path_a, path_b, score in similar_pairs:
+            if (path_a, path_b) in existing_pairs or (path_b, path_a) in existing_pairs:
                 continue
-            for path_b in paths[i + 1:]:
-                if (path_a, path_b) in existing_pairs:
-                    continue
-                chunk_b = representatives[path_b]
-                vec_b = vectors.get(chunk_b.id)
-                if vec_b is None:
-                    continue
-                score = cosine_similarity(vec_a, vec_b)
-                if score >= self._link_similarity_threshold:
-                    operations.append(StorageOperation(
-                        operation="create_link",
-                        target_path=path_a,
-                        links=[LinkInput(
-                            target_path=path_b,
-                            link_type="related",
-                            reason=(
-                                f"Silver representative similarity {score:.2f} "
-                                f"({LINK_DISCOVERY_SOURCE})"
-                            ),
-                        )],
-                        reasoning_summary=(
-                            f"Cross-namespace Silver similarity {score:.2f} "
-                            f"between {path_a} and {path_b}."
-                        ),
-                    ))
+            operations.append(StorageOperation(
+                operation="create_link",
+                target_path=path_a,
+                links=[LinkInput(
+                    target_path=path_b,
+                    link_type="related",
+                    reason=(
+                        f"Silver representative similarity {score:.2f} "
+                        f"({LINK_DISCOVERY_SOURCE})"
+                    ),
+                )],
+                reasoning_summary=(
+                    f"Cross-namespace Silver similarity {score:.2f} "
+                    f"between {path_a} and {path_b}."
+                ),
+            ))
         return operations
 
     def _build_link_report(self, operations: list[StorageOperation]) -> str:
+        stats = self._last_link_search_stats
+        stats_suffix = ""
+        if stats is not None and stats.namespace_count >= 2:
+            stats_suffix = (
+                f" [{stats.method}: {stats.namespace_count} namespaces, "
+                f"{stats.candidate_pairs} candidate pair(s), "
+                f"{stats.matched_pairs} above threshold]"
+            )
         if not operations:
-            return "Link discovery: no cross-namespace Silver links found above threshold."
-        lines = [f"Link discovery: {len(operations)} link(s) created."]
+            return (
+                "Link discovery: no cross-namespace Silver links found above threshold."
+                + stats_suffix
+            )
+        lines = [f"Link discovery: {len(operations)} link(s) created.{stats_suffix}"]
         for op in operations:
             for lnk in op.links:
                 lines.append(f"  {op.target_path} → {lnk.target_path}  ({lnk.reason})")
