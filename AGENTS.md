@@ -51,13 +51,25 @@ Gold = routing only (short search tags, not answers). Use Gold to find which nam
 
 ## File ingestion
 
-When user writes `ingest_file` or `ingest_url`, call the tool and follow the protocol it returns inline. Do not respond to the user until `complete_ingest` succeeds.
+When user writes `ingest_file` or `ingest_url`, call the tool and follow the **IRON RULES** protocol it returns inline. Do not respond to the user until `complete_ingest` succeeds.
 
-- PDF: `ingest_file(source_path=<path>, authority=<inferred>)`
+- PDF: `ingest_file(source_path=<path>, authority=<inferred>)` — default `mode=answer_complete`
 - Other formats: agent reads file → `ingest_file(content=<text>, file_name=<name>, authority=<inferred>)`
-- URL: `ingest_url(url=<url>)`
+- URL: `ingest_url(url=<url>)` — same stateful session as `ingest_file`
 
-The goal of ingest is durable knowledge extraction, not merely reaching `complete_ingest`. Use `skipped` only for boilerplate, empty/formatting noise, irrelevant text, or duplicates. Never bulk-skip substantive source chunks to finish the session.
+**Success criterion:** the source file will not exist later. Any question the document should answer must be answerable from brain alone (Bronze → Silver, cite `chunk_id`).
+
+**Mandatory steps (server-enforced in `answer_complete` mode):**
+1. Artifact Bronze (immutable registration)
+2. `[INVENTORY]` Bronze listing every answer-critical entity
+3. Process **every** service chunk (`get_service_chunk` or `get_service_chunks` batch)
+4. `finish_bronze_extraction` — max 25% skipped, min 50% extracted, zero extracted forbidden
+5. Silver from Bronze only (with `chunk_id` citations)
+6. `complete_ingest` — verifies artifact + inventory + facts + Silver in storage
+
+Use `mode=routing` only when the user explicitly wants discoverability-only ingest (lighter rules).
+
+`skipped` is only for true boilerplate (headers, footers, blank pages, disclaimers). If you cannot finish, report blockers — do not call `complete_ingest`.
 
 ## Schema / normative lookups
 

@@ -292,14 +292,19 @@ deletion.
 
 ### `ingest_file`
 
-Registers a document for guided ingestion. Creates an ingest session, splits the content into service chunks, and returns a `session_key` with a numbered chunk list and the full ingestion protocol inline. For PDFs, use `source_path` — the server runs `pdftotext`. For all other formats, the agent reads the file and passes `content`. The agent must follow the inline protocol to completion before responding to the user.
+Starts a **stateful ingest session** with inline **IRON RULES** (server-enforced). Default `mode=answer_complete`: the document must be answerable from brain alone after ingest — the source file will not exist later.
 
-The primary goal is durable knowledge extraction, not merely reaching `complete_ingest`. Substantive chunks must be extracted into Bronze facts. Use immutable Bronze for source metadata, tables, schemas, account/routing rows, legal/normative text, and other reference data that downstream answers may need to cite exactly.
+For PDFs, use `source_path` — the server runs `pdftotext`. For other formats, the agent reads the file and passes `content`. Do not respond to the user until `complete_ingest` succeeds.
 
-Source documents are stored under `SOURCES/{slug}` so one file maps to one document branch. `authority` is retained as metadata inside the source artifact, not as a namespace level.
+**answer_complete gates:** `[INVENTORY]` Bronze, Bronze facts, Silver with `chunk_id` citations, max 25% service chunks skipped, min 50% extracted, `complete_ingest` verifies storage.
+
+Use `mode=routing` only for discoverability-only ingests (lighter rules).
+
+Source documents are stored under `SOURCES/{slug}`. `authority` is metadata in the artifact, not in the path.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
+| `mode` | string | `answer_complete` (default) or `routing` |
 | `source_path` | string | Local path to the original file; required for PDFs |
 | `content` | string | Full text content of the attached non-PDF file |
 | `file_name` | string | Original file name, e.g. `MT103.txt`; defaults to `source_path` basename |
@@ -310,9 +315,13 @@ Source documents are stored under `SOURCES/{slug}` so one file maps to one docum
 
 ---
 
+### `get_service_chunks`
+
+Reads up to 10 service chunks in one call (by `chunk_ids` or `start_index` + `count`). Prefer batching to reduce round-trips.
+
 ### `get_service_chunk`
 
-Reads the full content of one service chunk from an active ingest session. Call this for each chunk ID returned by `ingest_file` before writing Bronze facts.
+Reads one service chunk from an active ingest session.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -358,11 +367,13 @@ Completes the ingest session after Silver has been written. Validates that `fini
 
 ### `ingest_url`
 
-Fetches a URL and registers its content as a source document. Supports plain text, Markdown, JSON, YAML, and HTML (tags are stripped with stdlib `html.parser`). No external dependencies.
+Fetches a URL and starts the **same stateful ingest session** as `ingest_file` (not a static header dump). Follow IRON RULES until `complete_ingest`.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `url` | string (required) | `http` or `https` URL to fetch |
+| `mode` | string | `answer_complete` (default) or `routing` |
+| `force` | boolean | Bypass duplicate `content_hash` check |
 | `authority` | string | Issuing authority metadata. Defaults to the URL hostname |
 | `doc_slug` | string | Short namespace identifier. Defaults to the last URL path segment |
 

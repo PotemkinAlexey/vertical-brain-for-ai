@@ -27,19 +27,18 @@ from vertical_brain.core.models import ChunkInput, LinkInput, StorageOperation, 
 from vertical_brain.core.operations import StorageOperationExecutor
 from vertical_brain.core.search import BrainSearch
 from vertical_brain.llm.embedding import EmbeddingProvider, MockEmbeddingProvider
+from vertical_brain.mcp.ingest_protocol import (
+    DEFAULT_INGEST_MODE,
+    build_protocol_lines,
+    normalize_ingest_mode,
+    split_service_chunks,
+    validate_namespace_ready_for_complete,
+    validate_service_chunk_coverage,
+    validate_skip_reason,
+)
 
 _PROTOCOL_VERSION = "2025-03-26"
 _SERVER_VERSION = "0.1.0"
-_INVALID_SKIP_REASON_FRAGMENTS = (
-    "bulk skip",
-    "mass skip",
-    "skip all",
-    "complete_ingest",
-    "finish_bronze_extraction",
-    "close ingest",
-    "close the ingest",
-    "clean re-ingest verification",
-)
 
 
 def _source_namespace(doc_slug: str) -> str:
@@ -420,16 +419,23 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "ingest_file",
         "description": (
-            "Register a document that was attached to the conversation. "
-            "Prefer source_path so the server reads/extracts the complete file itself. "
-            "For plain text, content may be passed with integrity checks. "
-            "The tool computes SHA-256 fingerprints, "
-            "derives the suggested SOURCES namespace, and returns a compact metadata header. "
-            "Then apply the File Ingestion Protocol from AGENTS.md to complete the ingestion."
+            "Start a stateful ingest session. Prefer source_path for PDFs (server runs pdftotext). "
+            "Returns session_key, numbered service chunks, and an inline IRON RULES protocol. "
+            "Default mode answer_complete: server blocks complete_ingest unless the namespace can "
+            "answer questions without the source file. Follow every step until complete_ingest succeeds."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["answer_complete", "routing"],
+                    "description": (
+                        "answer_complete (default): enforce inventory, Bronze facts, Silver, "
+                        "and coverage limits — source file will not be available later. "
+                        "routing: lighter checklist for discoverability-only ingests."
+                    ),
+                },
                 "source_path": {
                     "type": "string",
                     "description": (
@@ -495,6 +501,33 @@ _TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "get_service_chunks",
+        "description": (
+            "Read up to 10 service chunks in one call (batch). "
+            "Pass chunk_ids from the ingest_file list, or start_index/count for a range."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_key": {"type": "string"},
+                "chunk_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Specific chunk IDs to fetch (max 10).",
+                },
+                "start_index": {
+                    "type": "integer",
+                    "description": "0-based index into the session chunk list (use with count).",
+                },
+                "count": {
+                    "type": "integer",
+                    "description": "Number of chunks from start_index (default 5, max 10).",
+                },
+            },
+            "required": ["session_key"],
+        },
+    },
+    {
         "name": "mark_service_chunk",
         "description": (
             "Mark a service chunk as processed. "
@@ -532,8 +565,8 @@ _TOOLS: list[dict[str, Any]] = [
         "name": "complete_ingest",
         "description": (
             "Complete the ingest session after Silver has been written. "
-            "Validates that finish_bronze_extraction was called. "
-            "Cleans up service chunks from memory."
+            "Requires finish_bronze_extraction and (answer_complete mode) artifact, inventory, "
+            "Bronze facts, and Silver in storage. Cleans up service chunks from memory."
         ),
         "inputSchema": {
             "type": "object",
@@ -546,10 +579,9 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "ingest_url",
         "description": (
-            "Fetch a URL and register its content as a source document. "
-            "Supports plain text, Markdown, JSON, YAML, and HTML (tags are stripped). "
-            "Computes SHA-256, derives the SOURCES namespace, and returns a metadata header. "
-            "Then apply the File Ingestion Protocol from AGENTS.md to complete the ingestion."
+            "Fetch a URL and start the same stateful ingest session as ingest_file. "
+            "Supports plain text, Markdown, JSON, YAML, and HTML (tags stripped). "
+            "Follow the inline IRON RULES protocol until complete_ingest succeeds."
         ),
         "inputSchema": {
             "type": "object",
@@ -557,6 +589,11 @@ _TOOLS: list[dict[str, Any]] = [
                 "url": {
                     "type": "string",
                     "description": "URL to fetch (http or https).",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["answer_complete", "routing"],
+                    "description": "Default answer_complete. Same semantics as ingest_file.",
                 },
                 "authority": {
                     "type": "string",
@@ -571,6 +608,10 @@ _TOOLS: list[dict[str, Any]] = [
                         "Short identifier for the document (e.g. 'payment-intents-api'). "
                         "Defaults to the last path segment of the URL."
                     ),
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": "Bypass duplicate content_hash check in ingest_registry.",
                 },
             },
             "required": ["url"],
@@ -670,47 +711,6 @@ def _strip_html(raw: str) -> str:
     extractor = _HTMLTextExtractor()
     extractor.feed(raw)
     return extractor.get_text()
-
-
-def _split_service_chunks(content: str, session_key: str) -> list[dict[str, Any]]:
-    """Split content into service chunks for guided ingest.
-
-    Code fences (```...```) are marked atomic — the agent writes them as one immutable
-    Bronze chunk with no size limit. Everything else is split by blank lines into
-    splittable paragraphs — the agent extracts 0-N Bronze facts from each.
-    """
-    import re
-
-    segments: list[tuple[str, str]] = []  # (content, chunk_type)
-    fence_re = re.compile(r"(```[\s\S]*?```)", re.MULTILINE)
-    last_end = 0
-
-    for match in fence_re.finditer(content):
-        before = content[last_end:match.start()]
-        if before.strip():
-            for para in re.split(r"\n[ \t]*\n", before):
-                if para.strip():
-                    segments.append((para.strip(), "splittable"))
-        segments.append((match.group(0).strip(), "atomic"))
-        last_end = match.end()
-
-    remaining = content[last_end:]
-    if remaining.strip():
-        for para in re.split(r"\n[ \t]*\n", remaining):
-            if para.strip():
-                segments.append((para.strip(), "splittable"))
-
-    return [
-        {
-            "id": f"{session_key}_{i:04d}",
-            "index": i,
-            "content": chunk_content,
-            "chunk_type": chunk_type,
-            "status": "pending",
-            "skip_reason": None,
-        }
-        for i, (chunk_content, chunk_type) in enumerate(segments)
-    ]
 
 
 def _extract_source_text(source_path: str) -> tuple[str, str, int]:
@@ -1195,6 +1195,9 @@ class VerticalBrainMCP:
         if name == "get_service_chunk":
             return self._handle_get_service_chunk(args)
 
+        if name == "get_service_chunks":
+            return self._handle_get_service_chunks(args)
+
         if name == "mark_service_chunk":
             return self._handle_mark_service_chunk(args)
 
@@ -1209,9 +1212,57 @@ class VerticalBrainMCP:
 
         raise KeyError(name)
 
-    def _handle_ingest_file(self, args: dict[str, Any]) -> str:
+    def _start_ingest_session(
+        self,
+        *,
+        content: str,
+        file_name: str,
+        authority: str,
+        doc_slug: str,
+        ingest_mode: str,
+        force: bool,
+        source_hash: str | None = None,
+        source_size: int | None = None,
+    ) -> str:
         import secrets
 
+        file_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        file_size = len(content.encode("utf-8"))
+        source_ns = _source_namespace(doc_slug)
+
+        find_ingest = getattr(self._store, "find_ingest_by_hash", None)
+        if callable(find_ingest) and not force:
+            existing = find_ingest(file_hash)
+            if existing:
+                raise ValueError(
+                    f"This file was already ingested.\n"
+                    f"  file: {existing['file_name']}\n"
+                    f"  namespace: {existing['source_namespace']}\n"
+                    f"  ingested_at: {existing['ingested_at']}\n"
+                    f"  sha256: {file_hash}\n\n"
+                    f"Pass force=true to re-ingest (wipe namespace first if replacing content)."
+                )
+
+        session_key = secrets.token_hex(8)
+        service_chunks = split_service_chunks(content, session_key)
+        session = {
+            "session_key": session_key,
+            "file_name": file_name,
+            "authority": authority,
+            "doc_slug": doc_slug,
+            "source_namespace": source_ns,
+            "content_hash": file_hash,
+            "content_size": file_size,
+            "source_hash": source_hash,
+            "source_size": source_size,
+            "ingest_mode": ingest_mode,
+            "state": "EXTRACTING_BRONZE",
+            "chunks": service_chunks,
+        }
+        self._ingest_sessions[session_key] = session
+        return "\n".join(build_protocol_lines(session))
+
+    def _handle_ingest_file(self, args: dict[str, Any]) -> str:
         source_path = (args.get("source_path") or "").strip()
         source_hash: str | None = None
         source_size: int | None = None
@@ -1251,94 +1302,18 @@ class VerticalBrainMCP:
         authority: str = (args.get("authority") or "").strip().replace(" ", "_")
         raw_slug = args.get("doc_slug") or os.path.splitext(file_name)[0]
         doc_slug = raw_slug.strip().replace(" ", "_").replace(".", "_")
-        source_ns = _source_namespace(doc_slug)
+        ingest_mode = normalize_ingest_mode(args.get("mode"))
 
-        # Duplicate detection via ingest_registry
-        force = bool(args.get("force", False))
-        find_ingest = getattr(self._store, "find_ingest_by_hash", None)
-        if callable(find_ingest) and not force:
-            existing = find_ingest(file_hash)
-            if existing:
-                raise ValueError(
-                    f"This file was already ingested.\n"
-                    f"  file: {existing['file_name']}\n"
-                    f"  namespace: {existing['source_namespace']}\n"
-                    f"  ingested_at: {existing['ingested_at']}\n"
-                    f"  sha256: {file_hash}\n\n"
-                    f"Pass force=true to ingest_file to overwrite."
-                )
-
-        session_key = secrets.token_hex(8)
-        service_chunks = _split_service_chunks(content, session_key)
-        self._ingest_sessions[session_key] = {
-            "session_key": session_key,
-            "file_name": file_name,
-            "authority": authority,
-            "doc_slug": doc_slug,
-            "source_namespace": source_ns,
-            "content_hash": file_hash,
-            "content_size": file_size,
-            "source_hash": source_hash,
-            "source_size": source_size,
-            "state": "EXTRACTING_BRONZE",
-            "chunks": service_chunks,
-        }
-
-        size_kb = file_size / 1024
-        atomic_count = sum(1 for c in service_chunks if c["chunk_type"] == "atomic")
-        splittable_count = len(service_chunks) - atomic_count
-
-        lines = [
-            f"# ingest session — {file_name}",
-            "",
-            f"session_key: {session_key}",
-            f"file: {file_name} ({size_kb:.1f} KB)",
-            f"content_sha256: {file_hash}",
-            f"authority: {authority or '(infer from content)'}",
-            f"source_namespace: {source_ns}",
-            "state: EXTRACTING_BRONZE",
-            "",
-            f"## Service chunks ({len(service_chunks)} total: {splittable_count} splittable, {atomic_count} atomic)",
-            "",
-        ]
-        for chunk in service_chunks:
-            preview = chunk["content"][:80].replace("\n", " ")
-            lines.append(f"[{chunk['id']}] {chunk['chunk_type']:12s} — {preview!r}")
-
-        lines += [
-            "",
-            "## Protocol — execute now, no exceptions",
-            "",
-            "PRIMARY GOAL — Extract durable knowledge from the source document.",
-            "  complete_ingest is valid only after meaningful extraction; it is not the goal.",
-            "  Do not bulk-skip substantive chunks to finish the session.",
-            "",
-            "STEP 1 — Register source (immutable=true, content_type=artifact, layer=bronze)",
-            f"  namespace: {source_ns}",
-            "  content: file name, sha256, authority, size, one-sentence description (≤600 chars)",
-            "",
-            "STEP 2 — Process every service chunk in order:",
-            "  a. Call get_service_chunk(session_key, chunk_id) to read full content",
-            "  b. atomic chunk   → write ONE immutable Bronze chunk (no size limit)",
-            "     splittable     → extract 0-N Bronze facts (≤600 chars each, max 10 per batch_append)",
-            "     reference data → use immutable Bronze for tables, schemas, account/routing rows, legal/normative text",
-            "     boilerplate    → call mark_service_chunk(..., status='skipped', skip_reason='...')",
-            "  c. After writing  → call mark_service_chunk(..., status='extracted')",
-            "",
-            "SKIP POLICY — skipped is only for empty/formatting noise, boilerplate, irrelevant text, or duplicates.",
-            "  If a chunk contains source knowledge, extract it. If you cannot finish, report progress instead of skipping.",
-            "",
-            "STEP 3 — Call finish_bronze_extraction(session_key)",
-            "  Server verifies all chunks are extracted or skipped. Returns error if any pending.",
-            "",
-            f"STEP 4 — list_chunks(path='{source_ns}', layer='bronze'), then write Silver from Bronze only.",
-            "  Silver must summarize the source and cite key immutable Bronze chunk_ids when applicable.",
-            "",
-            "STEP 5 — Call complete_ingest(session_key)",
-            "",
-            "Do NOT respond to the user until step 5 is done.",
-        ]
-        return "\n".join(lines)
+        return self._start_ingest_session(
+            content=content,
+            file_name=file_name,
+            authority=authority,
+            doc_slug=doc_slug,
+            ingest_mode=ingest_mode,
+            force=bool(args.get("force", False)),
+            source_hash=source_hash,
+            source_size=source_size,
+        )
 
     def _handle_get_service_chunk(self, args: dict[str, Any]) -> str:
         session_key = args.get("session_key", "")
@@ -1357,6 +1332,44 @@ class VerticalBrainMCP:
             "content": chunk["content"],
         }, ensure_ascii=False)
 
+    def _handle_get_service_chunks(self, args: dict[str, Any]) -> str:
+        session_key = args.get("session_key", "")
+        session = self._ingest_sessions.get(session_key)
+        if session is None:
+            raise ValueError(f"No active ingest session: {session_key!r}")
+
+        chunk_ids = args.get("chunk_ids") or []
+        if chunk_ids:
+            selected = []
+            for chunk_id in chunk_ids[:10]:
+                chunk = next((c for c in session["chunks"] if c["id"] == chunk_id), None)
+                if chunk is None:
+                    raise ValueError(f"Chunk {chunk_id!r} not found in session {session_key!r}")
+                selected.append(chunk)
+        else:
+            start = int(args.get("start_index", 0))
+            count = min(int(args.get("count", 5)), 10)
+            if start < 0:
+                raise ValueError("start_index must be >= 0")
+            selected = session["chunks"][start : start + count]
+
+        return json.dumps(
+            {
+                "session_key": session_key,
+                "chunks": [
+                    {
+                        "chunk_id": c["id"],
+                        "index": c["index"],
+                        "chunk_type": c["chunk_type"],
+                        "status": c["status"],
+                        "content": c["content"],
+                    }
+                    for c in selected
+                ],
+            },
+            ensure_ascii=False,
+        )
+
     def _handle_mark_service_chunk(self, args: dict[str, Any]) -> str:
         session_key = args.get("session_key", "")
         chunk_id = args.get("chunk_id", "")
@@ -1366,16 +1379,11 @@ class VerticalBrainMCP:
             raise ValueError(f"status must be 'extracted' or 'skipped', got {status!r}")
         if status == "skipped" and not skip_reason:
             raise ValueError("skip_reason is required when status='skipped'")
-        if status == "skipped":
-            normalized_reason = str(skip_reason).lower()
-            if any(fragment in normalized_reason for fragment in _INVALID_SKIP_REASON_FRAGMENTS):
-                raise ValueError(
-                    "skip_reason describes completing or bulk-closing ingest, not a content reason. "
-                    "Use skipped only for empty/formatting noise, boilerplate, irrelevant text, or duplicates."
-                )
         session = self._ingest_sessions.get(session_key)
         if session is None:
             raise ValueError(f"No active ingest session: {session_key!r}")
+        if status == "skipped":
+            validate_skip_reason(str(skip_reason), mode=session.get("ingest_mode", DEFAULT_INGEST_MODE))
         chunk = next((c for c in session["chunks"] if c["id"] == chunk_id), None)
         if chunk is None:
             raise ValueError(f"Chunk {chunk_id!r} not found in session {session_key!r}")
@@ -1400,6 +1408,7 @@ class VerticalBrainMCP:
                 f"{len(pending)} chunk(s) still pending — mark them extracted or skipped first. "
                 f"Pending: {ids}{more}"
             )
+        validate_service_chunk_coverage(session, phase="finish_bronze_extraction")
         extracted = sum(1 for c in session["chunks"] if c["status"] == "extracted")
         skipped = sum(1 for c in session["chunks"] if c["status"] == "skipped")
         session["state"] = "BRONZE_COMPLETE"
@@ -1424,6 +1433,8 @@ class VerticalBrainMCP:
                 f"Cannot complete ingest: state is {session['state']!r}. "
                 "Call finish_bronze_extraction first."
             )
+        validate_service_chunk_coverage(session, phase="complete_ingest")
+        storage_check = validate_namespace_ready_for_complete(self._store, session)
         extracted = sum(1 for c in session["chunks"] if c["status"] == "extracted")
         skipped = sum(1 for c in session["chunks"] if c["status"] == "skipped")
         source_ns = session["source_namespace"]
@@ -1440,13 +1451,16 @@ class VerticalBrainMCP:
         return json.dumps({
             "status": "completed",
             "source_namespace": source_ns,
+            "ingest_mode": session.get("ingest_mode", DEFAULT_INGEST_MODE),
             "bronze_extracted": extracted,
             "service_chunks_skipped": skipped,
+            "storage_check": storage_check,
             "session_key": session_key,
         }, ensure_ascii=False)
 
     def _handle_ingest_url(self, args: dict[str, Any]) -> str:
         import urllib.parse
+        import urllib.request
 
         url: str = args["url"]
         if not url.startswith(("http://", "https://")):
@@ -1460,7 +1474,6 @@ class VerticalBrainMCP:
         except urllib.error.URLError as exc:
             raise ValueError(f"Failed to fetch URL: {exc}") from exc
 
-        # Decode bytes
         charset = "utf-8"
         if hasattr(resp.headers, "get_content_charset"):
             charset = resp.headers.get_content_charset() or "utf-8"
@@ -1469,33 +1482,27 @@ class VerticalBrainMCP:
         except (LookupError, UnicodeDecodeError):
             raw_text = raw_bytes.decode("utf-8", errors="replace")
 
-        # Strip HTML tags for browser-rendered content
         if "html" in content_type:
             content = _strip_html(raw_text)
         else:
             content = raw_text
 
-        file_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        file_size = len(content.encode("utf-8"))
-
-        # Derive authority from hostname if not provided
         parsed = urllib.parse.urlparse(url)
         authority: str = (args.get("authority") or parsed.hostname or "").strip().replace(" ", "_")
-
-        # Derive slug from last non-empty path segment
         path_parts = [p for p in parsed.path.split("/") if p]
         default_slug = path_parts[-1] if path_parts else parsed.hostname or "doc"
         raw_slug = args.get("doc_slug") or default_slug
         doc_slug = raw_slug.strip().replace(" ", "_").replace(".", "_")
+        file_name = doc_slug or "url_document"
+        ingest_mode = normalize_ingest_mode(args.get("mode"))
 
-        return _build_ingest_header(
-            label=url,
-            file_hash=file_hash,
-            file_size=file_size,
+        return self._start_ingest_session(
+            content=content,
+            file_name=file_name,
             authority=authority,
             doc_slug=doc_slug,
-            content=content,
-            url=url,
+            ingest_mode=ingest_mode,
+            force=bool(args.get("force", False)),
         )
 
     # ------------------------------------------------------------------

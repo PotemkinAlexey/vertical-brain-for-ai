@@ -32,6 +32,32 @@ def _text(response: dict) -> str:
     return response["result"]["content"][0]["text"]
 
 
+_SKIP_OK = "page footer copyright notice only, no operational data"
+
+
+def _parse_session_key(text: str) -> str:
+    for line in text.splitlines():
+        if line.startswith("session_key:"):
+            return line.split(":", 1)[1].strip()
+    raise AssertionError("session_key not found in ingest response")
+
+
+def _complete_routing_session(mcp: VerticalBrainMCP, session_key: str) -> None:
+    for chunk in mcp._ingest_sessions[session_key]["chunks"]:
+        _call(
+            mcp,
+            "mark_service_chunk",
+            {
+                "session_key": session_key,
+                "chunk_id": chunk["id"],
+                "status": "skipped",
+                "skip_reason": _SKIP_OK,
+            },
+        )
+    _call(mcp, "finish_bronze_extraction", {"session_key": session_key})
+    _call(mcp, "complete_ingest", {"session_key": session_key})
+
+
 def test_initialize_returns_protocol_version(tmp_path):
     mcp, _ = _mcp(tmp_path)
     resp = mcp.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
@@ -55,7 +81,8 @@ def test_tools_list_contains_expected_tools(tmp_path):
         "route", "append_chunk", "append_gold_aspect", "create_link",
         "mark_stale", "batch_append", "session_end", "update_silver", "optimize",
         "operations", "doctor", "vacuum", "ingest_file", "ingest_url",
-        "get_service_chunk", "mark_service_chunk", "finish_bronze_extraction", "complete_ingest",
+        "get_service_chunk", "get_service_chunks", "mark_service_chunk",
+        "finish_bronze_extraction", "complete_ingest",
     }
 
 
@@ -920,9 +947,32 @@ def test_ingest_file_returns_metadata_header(tmp_path):
     assert "content_sha256" in text
     assert "session_key:" in text
     assert "Service chunks" in text
-    assert "Protocol" in text
-    assert "Extract durable knowledge" in text
-    assert "Do not bulk-skip substantive chunks" in text
+    assert "IRON RULES" in text
+    assert "ingest_mode: answer_complete" in text
+    assert "[INVENTORY]" in text
+
+
+def test_answer_complete_rejects_all_skipped_finish(tmp_path):
+    mcp, _ = _mcp(tmp_path)
+    resp = _call(mcp, "ingest_file", {
+        "content": "Field 32A: Value Date, Currency, Amount.\n\nField 59: Beneficiary.",
+        "file_name": "MT103.txt",
+    })
+    session_key = _parse_session_key(_text(resp))
+    for chunk in mcp._ingest_sessions[session_key]["chunks"]:
+        _call(
+            mcp,
+            "mark_service_chunk",
+            {
+                "session_key": session_key,
+                "chunk_id": chunk["id"],
+                "status": "skipped",
+                "skip_reason": _SKIP_OK,
+            },
+        )
+    result = _call(mcp, "finish_bronze_extraction", {"session_key": session_key})
+    assert result.get("error") or result.get("result", {}).get("isError")
+    assert "at least one extracted" in json.dumps(result)
 
 
 def test_mark_service_chunk_rejects_bulk_close_skip_reason(tmp_path):
@@ -933,11 +983,7 @@ def test_mark_service_chunk_rejects_bulk_close_skip_reason(tmp_path):
         "authority": "SWIFT",
         "doc_slug": "MT103",
     })
-    session_key = next(
-        line.split(":", 1)[1].strip()
-        for line in _text(resp).splitlines()
-        if line.startswith("session_key:")
-    )
+    session_key = _parse_session_key(_text(resp))
     chunk_id = mcp._ingest_sessions[session_key]["chunks"][0]["id"]
 
     result = _call(mcp, "mark_service_chunk", {
@@ -1030,21 +1076,13 @@ def test_ingest_file_duplicate_rejected(tmp_path):
     content = "Field 32A: value date, currency, amount."
 
     # First ingest — create and complete the session
-    resp = _call(mcp, "ingest_file", {"content": content, "file_name": "MT103.txt"})
-    session_key = None
-    for line in _text(resp).splitlines():
-        if line.startswith("session_key:"):
-            session_key = line.split(":", 1)[1].strip()
-    assert session_key
-
-    # Skip all chunks and complete
-    for chunk in mcp._ingest_sessions[session_key]["chunks"]:
-        _call(mcp, "mark_service_chunk", {
-            "session_key": session_key, "chunk_id": chunk["id"],
-            "status": "skipped", "skip_reason": "test",
-        })
-    _call(mcp, "finish_bronze_extraction", {"session_key": session_key})
-    _call(mcp, "complete_ingest", {"session_key": session_key})
+    resp = _call(mcp, "ingest_file", {
+        "content": content,
+        "file_name": "MT103.txt",
+        "mode": "routing",
+    })
+    session_key = _parse_session_key(_text(resp))
+    _complete_routing_session(mcp, session_key)
 
     # Second ingest — same content, should be rejected
     resp2 = _call(mcp, "ingest_file", {"content": content, "file_name": "MT103.txt"})
@@ -1060,22 +1098,20 @@ def test_ingest_file_force_bypasses_duplicate_check(tmp_path):
     content = "Field 32A: value date, currency, amount."
 
     # First ingest — complete it
-    resp = _call(mcp, "ingest_file", {"content": content, "file_name": "MT103.txt"})
-    session_key = None
-    for line in _text(resp).splitlines():
-        if line.startswith("session_key:"):
-            session_key = line.split(":", 1)[1].strip()
-    for chunk in mcp._ingest_sessions[session_key]["chunks"]:
-        _call(mcp, "mark_service_chunk", {
-            "session_key": session_key, "chunk_id": chunk["id"],
-            "status": "skipped", "skip_reason": "test",
-        })
-    _call(mcp, "finish_bronze_extraction", {"session_key": session_key})
-    _call(mcp, "complete_ingest", {"session_key": session_key})
+    resp = _call(mcp, "ingest_file", {
+        "content": content,
+        "file_name": "MT103.txt",
+        "mode": "routing",
+    })
+    session_key = _parse_session_key(_text(resp))
+    _complete_routing_session(mcp, session_key)
 
     # Second ingest with force=true — should succeed
     resp2 = _call(mcp, "ingest_file", {
-        "content": content, "file_name": "MT103.txt", "force": True,
+        "content": content,
+        "file_name": "MT103.txt",
+        "force": True,
+        "mode": "routing",
     })
     assert "error" not in resp2
     assert "session_key:" in _text(resp2)
@@ -1089,18 +1125,13 @@ def test_ingest_registry_persists_across_instances(tmp_path):
     # First instance — ingest and complete
     store1 = SQLiteStore(root=tmp_path)
     mcp1 = _mcp_from_store(store1)
-    resp = _call(mcp1, "ingest_file", {"content": content, "file_name": "spec.txt"})
-    session_key = None
-    for line in _text(resp).splitlines():
-        if line.startswith("session_key:"):
-            session_key = line.split(":", 1)[1].strip()
-    for chunk in mcp1._ingest_sessions[session_key]["chunks"]:
-        _call(mcp1, "mark_service_chunk", {
-            "session_key": session_key, "chunk_id": chunk["id"],
-            "status": "skipped", "skip_reason": "test",
-        })
-    _call(mcp1, "finish_bronze_extraction", {"session_key": session_key})
-    _call(mcp1, "complete_ingest", {"session_key": session_key})
+    resp = _call(mcp1, "ingest_file", {
+        "content": content,
+        "file_name": "spec.txt",
+        "mode": "routing",
+    })
+    session_key = _parse_session_key(_text(resp))
+    _complete_routing_session(mcp1, session_key)
 
     # Second instance — same DB, should see the registry entry
     store2 = SQLiteStore(root=tmp_path)
@@ -1145,8 +1176,8 @@ def test_ingest_url_fetches_and_returns_header(tmp_path):
 
     assert "SOURCES/MT103" in text
     assert expected_hash in text
-    assert "Field 32A" in text            # content embedded
-    assert "AGENTS.md" in text
+    assert "session_key:" in text
+    assert "IRON RULES" in text
 
 
 def test_ingest_url_strips_html_tags(tmp_path):
