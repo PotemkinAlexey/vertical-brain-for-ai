@@ -61,8 +61,8 @@ vb --data-dir /path/to/brain vacuum \
 
 Vacuum deletes eligible `stale`, `superseded`, `legacy`, and `contradicted`
 chunks, prunes orphan embedding vectors while preserving active chunk and Gold
-aspect vectors, removes empty namespace nodes,
-rebuilds the FTS index, and checkpoints the WAL. Retention below 168 hours
+aspect vectors, removes empty namespace nodes, drops the deleted chunks from the
+FTS index, and checkpoints the WAL. Retention below 168 hours
 requires `--force`. Use `--reclaim-space` when you also want SQLite to run a
 full `VACUUM` and shrink the database file.
 
@@ -76,4 +76,5 @@ vb --data-dir /path/to/brain doctor
 ```
 
 If semantic search is used with a different embedding model after restore, run
-the reindexing flow before serving semantic queries.
+`vb reindex --embedding-url <endpoint> --embedding-model <model>` before serving
+semantic queries — it rebuilds the vector cache under the new model.

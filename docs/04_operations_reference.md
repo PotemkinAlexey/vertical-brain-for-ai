@@ -2,6 +2,8 @@
 
 A `StorageOperation` is a validated write intent. The executor validates every operation against the storage model JSON Schema before any I/O, then applies the whole batch transactionally.
 
+Executor rejections raise typed errors from `core/errors.py` — `DuplicateBronzeError`, `SilverConflictError`, `SilverUpdateError`, `GoldGroundingError`, `ChunkNotFoundError`, `ImmutableChunkError`, `ValidationError`. All subclass `VerticalBrainError`, which subclasses `ValueError`, so existing `except ValueError` handlers keep working.
+
 ---
 
 ## Batch Format
@@ -64,7 +66,7 @@ Add a new chunk to a namespace. Creates the node chain if nodes do not exist.
 
 **Bronze dedup enforcement (layer `bronze` only):**
 
-- **Hard block — exact duplicate.** If an active Bronze chunk with byte-for-byte identical content already exists at `target_path`, the operation is rejected with a `ValueError` before any I/O. The error names the existing chunk ID and directs you to call `mark_stale` first.
+- **Hard block — exact duplicate.** If an active Bronze chunk with byte-for-byte identical content already exists at `target_path`, the operation is rejected with a `DuplicateBronzeError` before any I/O. The error directs you to `mark_stale` the existing chunk first.
 - **Soft warning — similar content.** If the write succeeds but the FTS search finds lexically similar active Bronze chunks at `target_path` (score ≥ 8), `OperationResult.similar_bronze` is populated with up to 3 matches. Review and `mark_stale` any that are superseded by the new chunk.
 
 ```json
@@ -78,7 +80,7 @@ Add a new chunk to a namespace. Creates the node chain if nodes do not exist.
 }
 ```
 
-**`layer=silver` guard:** if an active Silver chunk already exists at `target_path`, `append_chunk(layer=silver)` is rejected with a `ValueError`. Use `append_chunk(layer=silver)` only to create the **first** Silver summary at a new namespace. All subsequent Silver updates must use `update_silver`.
+**`layer=silver` guard:** if an active Silver chunk already exists at `target_path`, `append_chunk(layer=silver)` is rejected with a `SilverConflictError`. Use `append_chunk(layer=silver)` only to create the **first** Silver summary at a new namespace. All subsequent Silver updates must use `update_silver`.
 
 Gold chunks are exempt from Bronze dedup checks. Silver is exempt from dedup but subject to the first-Silver guard above.
 
@@ -133,7 +135,7 @@ Replace the active Silver summary for a namespace atomically. Supersedes the old
 
 ### `append_gold_aspect`
 
-> **Prerequisite:** An active Silver chunk must exist at `target_path`. If none is found, the operation is rejected with a `ValueError` instructing you to call `update_silver` first.
+> **Prerequisite:** An active Silver chunk must exist at `target_path`. If none is found, the operation is rejected with a `GoldGroundingError` instructing you to call `update_silver` first.
 
 Add or refresh a short semantic routing tag in the Gold index of a namespace.
 
