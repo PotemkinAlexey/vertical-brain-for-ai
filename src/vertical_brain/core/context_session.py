@@ -21,6 +21,7 @@ from vertical_brain.core.search import BrainSearch, rank_paths_from_results
 from vertical_brain.llm.embedding import EmbeddingProvider
 
 if TYPE_CHECKING:
+    from vertical_brain.llm.reranker import RerankerProvider
     from vertical_brain.storage.protocol import StorageProvider
 
 
@@ -196,6 +197,7 @@ class ContextSession:
         include_ancestors: bool = True,
         link_expansion: str = "handles_only",
         threshold: float = 0.0,
+        reranker: "RerankerProvider | None" = None,
     ) -> SearchContextResult:
         from vertical_brain.core.embedding_search import EmbeddingSearch
         results = EmbeddingSearch(self.store, provider).search(
@@ -203,6 +205,7 @@ class ContextSession:
             root_path=root_path,
             limit=search_limit,
             threshold=threshold,
+            reranker=reranker,
         )
         handles = [_handle_from_result(result) for result in results]
         candidate_paths = [rank.path for rank in rank_paths_from_results(results)]

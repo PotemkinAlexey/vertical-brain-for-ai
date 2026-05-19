@@ -10,7 +10,16 @@ from vertical_brain.llm.embedding import EmbeddingProvider, cosine_similarity
 
 if TYPE_CHECKING:
     from vertical_brain.core.models import Chunk
+    from vertical_brain.llm.reranker import RerankerProvider
     from vertical_brain.storage.protocol import StorageProvider
+
+
+# Cosine retrieval pulls this many candidates per `limit` before handing
+# them to the reranker. The pool needs to be wide enough that the
+# cross-encoder has meaningful material to refine; tuned for the Cohere
+# Rerank API guidance (~50 candidates max per call) — at limit=10 the
+# default pool is 30.
+_RERANK_POOL_FACTOR = 3
 
 
 def _chunk_embed_info(chunk: "Chunk") -> tuple[str, str]:
@@ -172,6 +181,7 @@ class EmbeddingSearch:
         limit: int = 10,
         include_stale: bool = False,
         threshold: float = 0.0,
+        reranker: "RerankerProvider | None" = None,
     ) -> list[SearchResult]:
         if not query.strip() or limit <= 0:
             return []
@@ -206,6 +216,10 @@ class EmbeddingSearch:
             )
 
         results.sort(key=lambda r: (-r.score, r.path))
+
+        if reranker is not None:
+            results = _apply_reranker(reranker, query, results, limit=limit)
+
         return results[:limit]
 
     def _resolve_vectors(
@@ -278,3 +292,30 @@ def _coerce_vector(vector: object, *, expected_dimension: int | None = None) -> 
             return None
         coerced.append(float(value))
     return coerced
+
+
+def _apply_reranker(
+    reranker: "RerankerProvider",
+    query: str,
+    results: list[SearchResult],
+    *,
+    limit: int,
+) -> list[SearchResult]:
+    """Apply an optional reranker over the top of the cosine results.
+
+    Defensive: any exception from the reranker is swallowed (read-path
+    must not break on a third-party service failure), and any result the
+    reranker fabricates (returns a SearchResult whose chunk_id was not in
+    the input pool) is filtered out before returning.
+    """
+    if not results:
+        return results
+    pool_size = max(limit * _RERANK_POOL_FACTOR, limit)
+    pool = results[:pool_size]
+    try:
+        reranked = reranker.rerank(query, pool)
+    except Exception:
+        return results
+    valid_ids = {r.chunk_id for r in pool}
+    filtered = [r for r in reranked if r.chunk_id in valid_ids]
+    return filtered

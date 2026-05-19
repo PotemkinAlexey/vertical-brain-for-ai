@@ -12,6 +12,7 @@ import traceback
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from vertical_brain.llm.reranker import RerankerProvider
     from vertical_brain.storage.protocol import StorageProvider
 
 from vertical_brain.core.context_session import ContextSession
@@ -46,9 +47,20 @@ class MessageParseError(ValueError):
 class VerticalBrainMCP(_IngestHandlers):
     """JSON-RPC 2.0 handler. Protocol-agnostic — call handle() with parsed dicts."""
 
-    def __init__(self, store: "StorageProvider", embedding_provider: EmbeddingProvider | None = None) -> None:
+    def __init__(
+        self,
+        store: "StorageProvider",
+        embedding_provider: EmbeddingProvider | None = None,
+        *,
+        reranker: "RerankerProvider | None" = None,
+    ) -> None:
         self._store = store
         self._provider = embedding_provider or MockEmbeddingProvider()
+        # v1.10 optional reranker stage. When None, the read path stays
+        # cosine + layer-bias (provider-agnostic, dependency-free). When set,
+        # `search_semantic` and `context_search_semantic` apply it between
+        # cosine retrieval and layer biasing.
+        self._reranker = reranker
         self._session = ContextSession(store)
         self._executor = StorageOperationExecutor(store)
         self._client_source: str = "model:mcp"  # updated on initialize
@@ -223,6 +235,7 @@ class VerticalBrainMCP(_IngestHandlers):
                 root_path=root_path_from_args(args),
                 limit=args.get("limit", 10),
                 threshold=args.get("threshold", 0.0),
+                reranker=self._reranker,
             )
             biased = apply_layer_bias(raw)
             payload = {
@@ -257,6 +270,7 @@ class VerticalBrainMCP(_IngestHandlers):
                 items_per_context=args.get("items_per_context", 6),
                 include_ancestors=args.get("include_ancestors", True),
                 threshold=args.get("threshold", 0.0),
+                reranker=self._reranker,
             )
             return result.to_json()
 
