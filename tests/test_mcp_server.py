@@ -214,10 +214,14 @@ def test_search_semantic_returns_similarity_scores(tmp_path):
     store.save_chunk(Chunk(node_path="WORK/DataArt", content="Delta Lake streaming ingestion"))
 
     resp = _call(mcp, "search_semantic", {"query": "Delta streaming"})
-    results = json.loads(_text(resp))
+    data = json.loads(_text(resp))
 
+    results = data["results"]
     assert len(results) >= 1
     assert 0 < results[0]["score"] <= 1.0
+    assert isinstance(data["suggested_paths"], list)
+    assert data["suggested_paths"][0] == "WORK/DataArt"
+    assert data["semantic_endpoint"] is False  # default Mock provider
 
 
 def test_context_search_returns_locked_context_json(tmp_path):
@@ -236,11 +240,15 @@ def test_route_returns_namespace_candidates(tmp_path):
     store.save_chunk(Chunk(node_path="WORK/DataArt", content="Databricks Delta Lake streaming", layer="gold"))
 
     resp = _call(mcp, "route", {"text": "Delta Lake autoloader"})
-    candidates = json.loads(_text(resp))
+    data = json.loads(_text(resp))
 
+    candidates = data["candidates"]
     assert len(candidates) >= 1
     assert candidates[0]["path"] == "WORK/DataArt"
     assert "score" in candidates[0]
+    assert data["semantic_endpoint"] is False
+    assert "next_hint" in data
+    assert "WORK/DataArt" in data["next_hint"]
 
 
 def test_unknown_tool_returns_error(tmp_path):

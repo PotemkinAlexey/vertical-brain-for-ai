@@ -66,12 +66,24 @@ _TOOLS: list[dict[str, Any]] = [
         "name": "read_context",
         "description": (
             "Open a locked context capsule for a namespace path. "
-            "Returns full chunk content, ancestor Gold summaries, and link handles."
+            "Returns full chunk content, ancestor Gold summaries, link handles, "
+            "and a `silver_confidence` flag (missing/low/weak/ok). "
+            "When confidence is below `ok`, a `next_hint` suggests "
+            "`search_semantic` for recall assist on Bronze evidence. "
+            "Pass `query` (optional) so the server can detect when the current "
+            "Silver does not address the user's question."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Optional user question. Enables 'weak' Silver detection "
+                        "by checking term overlap with the answer chunk."
+                    ),
+                },
                 "include_ancestors": {"type": "boolean"},
                 "link_expansion": {
                     "type": "string",
@@ -99,7 +111,16 @@ _TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "search_semantic",
-        "description": "Semantic similarity search across active chunks using embeddings.",
+        "description": (
+            "Semantic recall assist across active chunks. "
+            "Returns `{results, suggested_paths, semantic_endpoint}`. "
+            "Results are biased toward Bronze evidence "
+            "(reference > fact > decision > other), then Silver, then Gold; "
+            "score is still respected within each bucket. "
+            "When `semantic_endpoint` is false, recall degrades to bag-of-words "
+            "overlap — still usable, but synonyms won't match until an embedding "
+            "endpoint is configured."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -152,7 +173,14 @@ _TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "route",
-        "description": "Find best-matching namespaces by comparing text embedding against Gold chunks.",
+        "description": (
+            "Find best-matching namespaces by comparing text against Gold summaries. "
+            "Returns `{candidates, semantic_endpoint, next_hint}`. "
+            "Use the hint to chain into `read_context` and, when needed, "
+            "`search_semantic` scoped to the top candidate. "
+            "When `semantic_endpoint` is false, matching is overlap-based; "
+            "behaviour improves automatically once an embedding endpoint is set."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {

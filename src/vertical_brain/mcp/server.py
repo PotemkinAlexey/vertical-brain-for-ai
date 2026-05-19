@@ -23,6 +23,15 @@ from vertical_brain.core.operations import StorageOperationExecutor
 from vertical_brain.core.search import BrainSearch
 from vertical_brain.llm.embedding import EmbeddingProvider, MockEmbeddingProvider
 from vertical_brain.mcp.ingest_handlers import _IngestHandlers
+from vertical_brain.mcp.read_path import (
+    apply_layer_bias,
+    is_semantic_provider,
+    read_context_next_hint,
+    route_next_hint,
+    silver_confidence,
+    silver_item_for_target,
+    suggested_paths,
+)
 from vertical_brain.mcp.tools import _TOOLS, _TOOLS_BY_NAME, root_path_from_args
 
 _PROTOCOL_VERSION = "2025-03-26"
@@ -156,7 +165,17 @@ class VerticalBrainMCP(_IngestHandlers):
             locked = ContextLock(self._store).open_locked_context(  # type: ignore[arg-type]
                 args["path"], policy=policy, budget=budget
             )
-            return locked.to_json()
+            payload = locked.to_dict()
+            query = args.get("query")
+            silver_item = silver_item_for_target(locked.items, args["path"])
+            confidence = silver_confidence(query, silver_item)
+            payload["silver_confidence"] = confidence
+            hint = read_context_next_hint(
+                args["path"], confidence, semantic=is_semantic_provider(self._provider)
+            )
+            if hint:
+                payload["next_hint"] = hint
+            return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
         # ── Search ──────────────────────────────────────────────────────
         if name == "search":
@@ -173,17 +192,23 @@ class VerticalBrainMCP(_IngestHandlers):
             ], ensure_ascii=False, indent=2)
 
         if name == "search_semantic":
-            results = EmbeddingSearch(self._store, self._provider).search(
+            raw = EmbeddingSearch(self._store, self._provider).search(
                 args["query"],
                 root_path=root_path_from_args(args),
                 limit=args.get("limit", 10),
                 threshold=args.get("threshold", 0.0),
             )
-            return json.dumps([
-                {"path": r.path, "score": round(r.score, 4), "layer": r.layer,
-                 "content_type": r.content_type, "snippet": r.snippet}
-                for r in results
-            ], ensure_ascii=False, indent=2)
+            biased = apply_layer_bias(raw)
+            payload = {
+                "results": [
+                    {"path": r.path, "score": round(r.score, 4), "layer": r.layer,
+                     "content_type": r.content_type, "snippet": r.snippet}
+                    for r in biased
+                ],
+                "suggested_paths": suggested_paths(biased),
+                "semantic_endpoint": is_semantic_provider(self._provider),
+            }
+            return json.dumps(payload, ensure_ascii=False, indent=2)
 
         if name == "context_search":
             result = self._session.search_locked_context(
@@ -215,10 +240,16 @@ class VerticalBrainMCP(_IngestHandlers):
                 threshold=args.get("threshold", 0.0),
                 limit=args.get("limit", 5),
             )
-            return json.dumps([
-                {"path": c.path, "score": round(c.score, 4), "gold_summary": c.gold_summary}
-                for c in candidates
-            ], ensure_ascii=False, indent=2)
+            semantic = is_semantic_provider(self._provider)
+            payload = {
+                "candidates": [
+                    {"path": c.path, "score": round(c.score, 4), "gold_summary": c.gold_summary}
+                    for c in candidates
+                ],
+                "semantic_endpoint": semantic,
+                "next_hint": route_next_hint(candidates, semantic),
+            }
+            return json.dumps(payload, ensure_ascii=False, indent=2)
 
         # ── Write ───────────────────────────────────────────────────────
         if name == "append_chunk":
