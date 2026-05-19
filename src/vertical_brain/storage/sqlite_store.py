@@ -71,7 +71,8 @@ class SQLiteStore(StorageDerivationsMixin):
                 is_dirty INTEGER NOT NULL DEFAULT 0,
                 version INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}'
             );
 
             CREATE TABLE IF NOT EXISTS embedding_schema (
@@ -99,7 +100,8 @@ class SQLiteStore(StorageDerivationsMixin):
                 supersedes TEXT NOT NULL DEFAULT '[]',
                 valid_from TEXT NOT NULL DEFAULT '',
                 valid_to TEXT,
-                decay_factor REAL NOT NULL DEFAULT 1.0
+                decay_factor REAL NOT NULL DEFAULT 1.0,
+                metadata_json TEXT NOT NULL DEFAULT '{}'
             );
 
             CREATE TABLE IF NOT EXISTS links (
@@ -227,6 +229,7 @@ class SQLiteStore(StorageDerivationsMixin):
             "gold_summary": "ALTER TABLE nodes ADD COLUMN gold_summary TEXT NOT NULL DEFAULT ''",
             "is_dirty": "ALTER TABLE nodes ADD COLUMN is_dirty INTEGER NOT NULL DEFAULT 0",
             "version": "ALTER TABLE nodes ADD COLUMN version INTEGER NOT NULL DEFAULT 0",
+            "metadata_json": "ALTER TABLE nodes ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'",
         }
         changed = False
         for column, ddl in migrations.items():
@@ -249,6 +252,7 @@ class SQLiteStore(StorageDerivationsMixin):
             "valid_to": "ALTER TABLE chunks ADD COLUMN valid_to TEXT",
             "decay_factor": "ALTER TABLE chunks ADD COLUMN decay_factor REAL NOT NULL DEFAULT 1.0",
             "immutable": "ALTER TABLE chunks ADD COLUMN immutable INTEGER NOT NULL DEFAULT 0",
+            "metadata_json": "ALTER TABLE chunks ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'",
         }
         changed = False
         for column, ddl in migrations.items():
@@ -596,13 +600,17 @@ class SQLiteStore(StorageDerivationsMixin):
             row["gold_summary"] = ""
             row["is_dirty"] = 0
             row["version"] = node.version
+            row["metadata_json"] = json.dumps(node.metadata or {}, ensure_ascii=False)
+            row.pop("metadata", None)
             self.conn.execute(
                 """
                 INSERT INTO nodes (
-                    id, path, name, parent_path, node_type, gold_summary, is_dirty, version, created_at, updated_at
+                    id, path, name, parent_path, node_type, gold_summary, is_dirty, version,
+                    created_at, updated_at, metadata_json
                 )
                 VALUES (
-                    :id, :path, :name, :parent_path, :node_type, :gold_summary, :is_dirty, :version, :created_at, :updated_at
+                    :id, :path, :name, :parent_path, :node_type, :gold_summary, :is_dirty, :version,
+                    :created_at, :updated_at, :metadata_json
                 )
                 """,
                 row,
@@ -625,13 +633,13 @@ class SQLiteStore(StorageDerivationsMixin):
                 id, node_path, content, layer, content_type, status, source,
                 confidence, lineage_json, created_at, updated_at,
                 chunk_key, content_hash, supersedes, valid_from, valid_to, decay_factor,
-                immutable
+                immutable, metadata_json
             )
             VALUES (
                 :id, :node_path, :content, :layer, :content_type, :status, :source,
                 :confidence, :lineage_json, :created_at, :updated_at,
                 :chunk_key, :content_hash, :supersedes, :valid_from, :valid_to, :decay_factor,
-                :immutable
+                :immutable, :metadata_json
             )
             """,
             row,
@@ -684,7 +692,8 @@ class SQLiteStore(StorageDerivationsMixin):
                 valid_from = :valid_from,
                 valid_to = :valid_to,
                 decay_factor = :decay_factor,
-                immutable = :immutable
+                immutable = :immutable,
+                metadata_json = :metadata_json
             WHERE id = :id
             """,
             row,
@@ -710,12 +719,34 @@ class SQLiteStore(StorageDerivationsMixin):
         data.pop("gold_summary", None)
         data["is_dirty"] = bool(data.get("is_dirty", 0))
         data.setdefault("version", 0)
+        metadata_raw = data.pop("metadata_json", None)
+        if isinstance(metadata_raw, str) and metadata_raw:
+            try:
+                parsed = json.loads(metadata_raw)
+            except (TypeError, ValueError):
+                parsed = {}
+            data["metadata"] = parsed if isinstance(parsed, dict) else {}
+        else:
+            data["metadata"] = {}
         return data
 
     def update_node(self, node: Node) -> Node:
         cursor = self.conn.execute(
-            "UPDATE nodes SET is_dirty = ?, version = ?, updated_at = ? WHERE path = ?",
-            (1 if node.is_dirty else 0, node.version, utc_now(), node.path),
+            """
+            UPDATE nodes
+            SET is_dirty = ?,
+                version = ?,
+                updated_at = ?,
+                metadata_json = ?
+            WHERE path = ?
+            """,
+            (
+                1 if node.is_dirty else 0,
+                node.version,
+                utc_now(),
+                json.dumps(node.metadata or {}, ensure_ascii=False),
+                node.path,
+            ),
         )
         if cursor.rowcount == 0:
             raise ValueError(f"Node not found: {node.path}")
@@ -1163,6 +1194,8 @@ class SQLiteStore(StorageDerivationsMixin):
         del row["lineage"]
         row["supersedes"] = json.dumps(chunk.supersedes, ensure_ascii=False)
         row["immutable"] = int(chunk.immutable)
+        row["metadata_json"] = json.dumps(chunk.metadata or {}, ensure_ascii=False)
+        row.pop("metadata", None)
         return row
 
     def _chunk_from_row(self, row: sqlite3.Row) -> Chunk:
@@ -1179,6 +1212,16 @@ class SQLiteStore(StorageDerivationsMixin):
             payload["content_hash"] = ""
         payload.setdefault("decay_factor", 1.0)
         payload["immutable"] = bool(payload.get("immutable", 0))
+        metadata_raw = payload.pop("metadata_json", None)
+        if isinstance(metadata_raw, str) and metadata_raw:
+            try:
+                payload["metadata"] = json.loads(metadata_raw)
+            except (TypeError, ValueError):
+                payload["metadata"] = {}
+        else:
+            payload["metadata"] = {}
+        if not isinstance(payload["metadata"], dict):
+            payload["metadata"] = {}
         return Chunk(**payload)
 
     def _index_chunk(self, chunk: Chunk) -> None:

@@ -79,6 +79,10 @@ class Node:
     version: int = 0
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
+    # v1.12 extension slot. Free-form dict for enterprise data the open core
+    # neither reads nor writes (tenant_id, geo_residency, billing_owner, etc.).
+    # Defaults to `{}`; serialized as JSON by storage backends.
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -101,6 +105,12 @@ class Chunk:
     valid_to: str | None = None
     decay_factor: float = 1.0
     immutable: bool = False
+    # v1.12 extension slot for enterprise (classification, tenant_id, retention
+    # policy id, geo zone, source-system record id, etc.). The open core does
+    # not read or interpret these fields — they survive write/read round-trips
+    # via the storage backends and are intended to be consulted by
+    # `chunk_filter` callbacks (v1.11) and reranker / connector layers.
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.content_hash:
@@ -127,6 +137,8 @@ class ChunkInput:
     confidence: float = 1.0
     lineage: list[str] = field(default_factory=list)
     immutable: bool = False
+    # v1.12 — optional client-supplied metadata forwarded into the saved Chunk.
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

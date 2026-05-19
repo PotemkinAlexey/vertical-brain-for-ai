@@ -176,10 +176,15 @@ class JsonStore(StorageDerivationsMixin):
         return [Node(**self._clean_node_row(row)) for row in self._read(self.nodes_file)]
 
     def _clean_node_row(self, row: dict[str, Any]) -> dict[str, Any]:
-        known = {"id", "path", "name", "parent_path", "node_type", "is_dirty", "version", "created_at", "updated_at"}
+        known = {
+            "id", "path", "name", "parent_path", "node_type",
+            "is_dirty", "version", "created_at", "updated_at", "metadata",
+        }
         data = {k: v for k, v in row.items() if k in known}
         data.setdefault("is_dirty", False)
         data.setdefault("version", 0)
+        metadata = data.get("metadata")
+        data["metadata"] = metadata if isinstance(metadata, dict) else {}
         return data
 
     def update_node(self, node: Node) -> Node:
@@ -219,7 +224,7 @@ class JsonStore(StorageDerivationsMixin):
             "node_path", "content", "layer", "content_type", "status", "source",
             "confidence", "lineage", "id", "created_at", "updated_at",
             "chunk_key", "content_hash", "supersedes", "valid_from", "valid_to",
-            "decay_factor", "immutable",
+            "decay_factor", "immutable", "metadata",
         }
         data = {k: v for k, v in row.items() if k in known}
         data.setdefault("chunk_key", None)
@@ -229,6 +234,8 @@ class JsonStore(StorageDerivationsMixin):
         data.setdefault("valid_to", None)
         data.setdefault("decay_factor", 1.0)
         data.setdefault("immutable", False)
+        metadata = data.get("metadata")
+        data["metadata"] = metadata if isinstance(metadata, dict) else {}
         return Chunk(**data)
 
     def list_links(self) -> list[Link]:

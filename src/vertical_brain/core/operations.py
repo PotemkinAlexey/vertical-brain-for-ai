@@ -463,6 +463,7 @@ class StorageOperationExecutor:
             confidence=chunk_input.confidence,
             lineage=chunk_input.lineage,
             immutable=getattr(chunk_input, "immutable", False),
+            metadata=dict(getattr(chunk_input, "metadata", {}) or {}),
         )
 
     def _find_similar_bronze(
