@@ -242,7 +242,8 @@ vertical_brain/
 │   └── thread_local_store.py — ThreadLocalSQLiteStoreProxy: per-thread instances
 │
 ├── llm/
-│   ├── embedding.py          — EmbeddingProvider Protocol, Mock, HttpEmbeddingProvider
+│   ├── embedding.py          — EmbeddingProvider Protocol (v1.9: embed_batch, is_semantic, BaseEmbeddingProvider), Mock, HttpEmbeddingProvider (native batch)
+│   ├── reranker.py           — RerankerProvider Protocol (v1.10 extension point)
 │   └── mock_llm.py           — MockLLM: canned responses for testing
 │
 ├── mcp/
@@ -256,6 +257,28 @@ vertical_brain/
 └── cli/
     └── main.py               — `vb` CLI entry point
 ```
+
+---
+
+## Open-Core Extension Points (v1.9–v1.13)
+
+The open core ships protocol-first seams that enterprise can plug new
+implementations into without forking. Defaults make everything work
+out of the box; overrides are purely additive.
+
+| Seam | Where | When to override |
+|------|-------|------------------|
+| `EmbeddingProvider` (`embed`, `embed_batch`, `model_name`, `embed_dimension`, `is_semantic`) | `llm/embedding.py` | Real model providers (OpenAI, Cohere, Voyage, in-house). Inherit `BaseEmbeddingProvider` and override `embed`; native batch API → override `embed_batch`. |
+| `RerankerProvider` (`rerank(query, candidates)`) | `llm/reranker.py` | Cross-encoder / Cohere Rerank / Voyage Rerank between cosine retrieval and layer bias. No default impl in the open core. |
+| `chunk_filter` callable | `ContextLock.open_locked_context`, `EmbeddingSearch.search`, `BrainSearch.search`, `EmbeddingRouter.find_candidates*`, `ContextSession.search_locked_context*`, `VerticalBrainMCP._current_chunk_filter()` | Row-level ACL. Returns `True` to keep, `False` to hide. Pairs naturally with `Chunk.metadata`. |
+| `Chunk.metadata` / `Node.metadata` (`dict[str, Any]`) | `core/models.py`, persisted as `metadata_json` in SQLite | Classification, tenant_id, retention policy, geo zone, source-system identifiers. The open core round-trips bytes only. |
+| `_before_tool` / `_after_tool` MCP hooks | `mcp/server.VerticalBrainMCP` | RBAC, rate limiting, tenant scoping, audit decoration, billing, response scrubbing. Raise `ToolAccessDenied` to reject with a custom JSON-RPC error code. |
+| Storage Protocol extensions (`TransactionalStorageProvider`, `AuditableStorageProvider`, `VectorCacheStorageProvider`, `EmbeddingSchemaStorageProvider`) | `storage/protocol.py` | Custom backends (Postgres + pgvector, distributed kv, external audit pipelines). Detected via `getattr`; the executor degrades gracefully without them. |
+
+`CLAUDE.md` § "Open-Core Extension Points" pins the invariants of each
+seam (test references included). `CLAUDE.md` § "Enterprise Tenant-Prefix
+Pattern" documents the recommended composition of these seams into a
+tenant boundary.
 
 ---
 

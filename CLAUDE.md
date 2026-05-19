@@ -36,7 +36,8 @@ src/vertical_brain/
 │   └── thread_local_store.py — ThreadLocalSQLiteStoreProxy
 │
 ├── llm/
-│   ├── embedding.py          — EmbeddingProvider Protocol, Mock, HttpEmbeddingProvider
+│   ├── embedding.py          — EmbeddingProvider Protocol (v1.9: embed_batch, is_semantic, BaseEmbeddingProvider), Mock, HttpEmbeddingProvider (native batch endpoint)
+│   ├── reranker.py           — RerankerProvider Protocol (v1.10 extension point; no default impl)
 │   └── mock_llm.py           — MockLLM for testing
 │
 ├── mcp/
@@ -58,7 +59,7 @@ Test files mirror `src/` — there is one test file per module, plus cross-cutti
 ## Running Tests
 
 ```bash
-pytest                                    # full suite (592 tests)
+pytest                                    # full suite (654 tests)
 pytest tests/test_operations.py -v       # single file
 pytest -k "occ or version" -v            # keyword filter
 pytest --tb=short 2>&1 | tail -20        # summary view
@@ -110,8 +111,14 @@ These are tested explicitly in `test_occ.py`, `test_version_propagation.py`, `te
 Implement `StorageProvider` from `storage/protocol.py` — it is a `runtime_checkable` Protocol, no base class needed. Optionally implement:
 - `VectorCacheStorageProvider` for embedding cache
 - `EmbeddingSchemaStorageProvider` for model name/dimension tracking
+- `TransactionalStorageProvider` for atomic batches with rollback
+- `AuditableStorageProvider` to fan audit rows out to external systems (rows are still written to the operation_audit table — see invariant 22)
 
 `EmbeddingSearch` and `EmbeddingRouter` detect these via `getattr` and degrade gracefully without them.
+
+**Backend MUST round-trip `Chunk.metadata` and `Node.metadata` (v1.12).** Empty default is `{}`. JSON columns are the obvious mapping for SQL backends; document stores can persist as a nested map. Failure to round-trip will silently break `chunk_filter`-based ACL.
+
+**Backend MAY ignore `metadata` semantics.** The open core neither indexes nor queries `metadata` — keys are opaque from the framework's perspective. Enterprise that wants `WHERE metadata->>'tenant_id' = ?` indexing is free to add it without coordinating with the open repository.
 
 ---
 
@@ -158,6 +165,153 @@ Vectors are keyed by `(content_hash, model_name)`. The model name is recorded in
 13. **`route` response carries `match_source` for every candidate** — `"gold"` for Gold/path-token hits, `"content_fallback"` only for v1.7 rescue. Bumping anything else into `content_fallback` would mislead agents.
 14. **`omitted_chunk_ids` only contains real chunk IDs** — Gold-aggregated items have no single `chunk_id`; they go into `omitted_items` only. The list must stay safe to feed into `list_chunks` or chunk-id lookups.
 15. **`similar_bronze` returns `bm25_score`, not `score`** — FTS5/BM25 is unbounded and lower = more similar. The whole rest of the API uses `[0, 1]` cosine, so the v1.8 rename is load-bearing.
+
+---
+
+## Open-Core Extension Points (v1.9–v1.13)
+
+These are the seams enterprise builds on without forking. Every one is
+additive — the open core works with all defaults — and every one is
+tested. Treat the signatures as frozen unless a major version bump.
+
+### v1.9 — EmbeddingProvider Protocol
+
+`vertical_brain/llm/embedding.py`. The `EmbeddingProvider` Protocol
+declares `model_name`, `embed_dimension`, `is_semantic`, `embed(text)`,
+and `embed_batch(texts)`. `BaseEmbeddingProvider` is the recommended
+base class with safe defaults (`is_semantic = True`, `embed_batch =
+N×embed`); only override what you need.
+
+- **Cache key is `(content_hash, model_name)`.** Switching models without
+  reindex returns mismatched vectors → handled by raising
+  `IncompatibleEmbeddingModelError` at `EmbeddingSearch.__init__`.
+- **`is_semantic = False` is the bag-of-words signal.** Read-path uses it
+  via `is_semantic_provider` to gate semantic upgrades and to phrase the
+  agent-facing "endpoint not configured" hint.
+- **`embed_batch` is the collapse point for N×latency.** `EmbeddingSearch._resolve_vectors`
+  issues one batch call per search for all cache-misses; providers without
+  `embed_batch` fall back to N×embed automatically.
+
+### v1.10 — RerankerProvider Protocol
+
+`vertical_brain/llm/reranker.py`. Cross-encoder / re-scoring stage that
+sits between cosine retrieval and layer bias. Pass to
+`VerticalBrainMCP(reranker=...)` or directly to `EmbeddingSearch.search(reranker=...)` /
+`ContextSession.search_locked_context_semantic(reranker=...)`.
+
+- **Reranker MAY drop candidates, MUST NOT invent them.** Fabricated
+  results (chunk_ids not in the input pool) are filtered out
+  defensively in `_apply_reranker`.
+- **Exceptions from the reranker are swallowed.** The read path must
+  not break on a third-party service failure; cosine order is the
+  fallback.
+- **Layer bias runs AFTER the reranker.** Reranker refines scores;
+  layer bias enforces the Bronze>Silver>Gold policy.
+- **Pool size = `limit * 3`.** Wide enough for the cross-encoder to
+  refine, narrow enough to stay under Cohere/Voyage per-call limits.
+
+### v1.11 — chunk_filter callback
+
+Optional `Callable[[Chunk], bool]` accepted by every read-path API:
+`ContextLock.open_locked_context`, `BrainSearch.search`,
+`EmbeddingSearch.search`, `EmbeddingRouter.find_candidates*`,
+`ContextSession.search_locked_context*`. Wired into MCP via
+`VerticalBrainMCP._current_chunk_filter()` (override returns the per-
+request closure).
+
+- **Default `None` = full visibility.** Zero behavioural change.
+- **Filter applies BEFORE the reranker.** Hidden chunks never reach
+  the cross-encoder.
+- **`BrainSearch` resolves Chunk via `store.get_chunk(chunk_id)` post-
+  search** because the FTS index can't evaluate Python callables;
+  oversamples 3× so filtered-out results don't starve the returned set.
+- **The filter is the natural counterpart to `Chunk.metadata` (v1.12)**
+  — typical predicate is `lambda c: c.metadata.get("classification") in allowed`.
+
+### v1.12 — Chunk.metadata / Node.metadata
+
+Both dataclasses carry a `metadata: dict[str, Any] = field(default_factory=dict)`.
+`ChunkInput` forwards a matching field. SQLite serializes via
+`metadata_json TEXT NOT NULL DEFAULT '{}'`; legacy databases migrate
+automatically on open.
+
+- **The open core never reads `metadata`.** It only round-trips bytes —
+  enterprise (and `chunk_filter`) own the semantics.
+- **Defaults to `{}`, never `None`.** Read paths can safely call
+  `.get(...)` without a None-guard.
+- **Round-trip is tested for both backends.** `tests/test_metadata_slot.py`
+  pins the contract including a hand-crafted legacy DB.
+
+### v1.13 — before_tool / after_tool MCP hooks
+
+`VerticalBrainMCP._before_tool(name, args, *, request_id)` and
+`_after_tool(name, args, response, *, request_id)`. Default
+pass-through; override in a subclass.
+
+- **`_before_tool` runs AFTER tool-name existence check and BEFORE schema validation.**
+  This is the order that lets the hook supply missing required args.
+- **`_before_tool` MUST return a dict.** Non-dict return surfaces as -32603.
+- **`ToolAccessDenied(message, *, code=-32004)` is the canonical denial.**
+  Catch happens only in `_dispatch_tool`; the code defaults to the
+  Vertical Brain-reserved -32004 and may be overridden outside the
+  JSON-RPC reserved -32700..-32600 range.
+- **`_after_tool` is SKIPPED on tool-body errors.** Error replies go
+  straight back; non-critical after-hook failures should be swallowed
+  internally by the hook author.
+- **Args passed to `_before_tool` are a shallow copy.** Hook mutations
+  do not leak back into JSON-RPC params on subsequent calls.
+
+**Extension invariants (don't break):**
+
+16. **`EmbeddingProvider.model_name` keys the vector cache.** Two
+    providers with the same `model_name` MUST produce comparable
+    vectors. Rename when you change the model.
+17. **`is_semantic = False` ⇒ no semantic upgrade.** `is_semantic_provider`
+    must continue to return False so `semantic_silver_upgrade` is gated off.
+18. **Reranker output preserves SearchResult identity.** Only `score` is
+    mutable; `chunk_id`/`path`/`layer` MUST come from the input pool.
+19. **`chunk_filter=None` is identical to no kwarg.** Tested across all
+    five read-path API entry points.
+20. **`metadata` defaults to `{}`, not `None`.** All readers can assume
+    a dict. Backend-level migrations enforce this.
+21. **`_before_tool` runs before validation; `_after_tool` runs after
+    success only.** Tested in `test_mcp_hooks.py`.
+22. **The audit log row is written inside the same transaction as the
+    operation.** `StorageOperationExecutor._log_audit` is invoked within
+    the executor's transaction context; an `AuditableStorageProvider` that
+    fans out to external systems must respect this — fire-and-forget
+    external writes are NOT a substitute for the SQL row.
+
+---
+
+## Enterprise Tenant-Prefix Pattern
+
+The open core has no native multi-tenancy. The supported pattern when
+you build a multi-tenant deployment on top is:
+
+1. **Reserve the top-level namespace per tenant.** Path roots like
+   `tenant_acme/WORK/...`, `tenant_globex/PERSONAL/...`. The path is
+   the tenant boundary — `root_path` filtering then becomes the
+   isolation primitive.
+2. **Inject the tenant root in `_before_tool`.** Override the hook to
+   set `args["root_path"] = f"tenant_{claim.tenant_id}"` (or wrap an
+   existing `root_path`) for every read tool. For writes, validate the
+   `target_path` starts with the tenant prefix and raise
+   `ToolAccessDenied` otherwise.
+3. **Stash the tenant id on the request via contextvars**, then
+   consume it in `_current_chunk_filter` to layer a defence-in-depth
+   `chunk.metadata["tenant_id"] == claim.tenant_id` check.
+4. **Set `Chunk.metadata["tenant_id"]` at write time** through a
+   `_before_tool` override that adds it to `args["chunk"]["metadata"]`
+   (or via a custom executor that injects metadata in
+   `_chunk_from_input`).
+5. **Audit log enrichment** — extend the audit row via an
+   `AuditableStorageProvider` to include `tenant_id` and the JWT subject.
+
+The open core enforces none of this; it provides the seams. The
+combination of `root_path` (path-level scope), `_before_tool` (request
+rewrite), `chunk_filter` (row-level ACL), and `metadata` (per-row
+classification) is what enterprise composes into a tenant boundary.
 
 ---
 
