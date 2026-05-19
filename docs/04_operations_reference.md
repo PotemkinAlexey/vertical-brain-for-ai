@@ -129,7 +129,7 @@ Replace the active Silver summary for a namespace atomically. Supersedes the old
 - `current_silver_id` chunk belongs to a different namespace
 - Any `source_chunk_ids` entry is `layer=gold` (Gold cannot be source evidence for Silver)
 
-**Result:** old Silver gets `status=superseded` + `valid_to=now()`. New Silver gets `lineage=[current_silver_id] + source_chunk_ids` and `supersedes=[current_silver_id]`. Exactly one active Silver remains after the operation.
+**Result:** old Silver gets `status=superseded` + `valid_to=now()`. New Silver gets `lineage=[current_silver_id] + source_chunk_ids` and `supersedes=[current_silver_id]`. Exactly one active Silver remains after the operation. The result carries `silver_too_large: true` when the new Silver exceeds the recommended summary size — a namespace-overload signal: decompose the namespace into sub-namespaces.
 
 ---
 
@@ -145,6 +145,7 @@ Add or refresh a short semantic routing tag in the Gold index of a namespace.
 - Aspects are embedded individually by `EmbeddingRouter`; use precise search tags, not summaries
 - Aspect embeddings are derived `vector_cache` rows keyed by normalized aspect text and model name
 - Aspects longer than 150 characters are written but return `aspect_too_long: true`
+- When the node's aspect count nears the 20 cap, the result carries `gold_near_limit: true` — a namespace-overload signal; split the namespace into sub-namespaces
 
 ```json
 {

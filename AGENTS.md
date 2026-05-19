@@ -33,6 +33,7 @@ Gold = routing only (short search tags, not answers). Use Gold to find which nam
 5. **For `batch_append`:** call `update_silver` once after the entire batch, not per chunk.
 6. **To correct wrong memory:** write a Bronze chunk with `content_type="correction"`, then update Silver. Do not overwrite Gold directly.
 7. **Canonical namespace first.** Durable knowledge belongs in its canonical topic namespace. Facts about a current storage, project, source, workstream, or other concrete topic must be written inside that topic's context. `META/agent-contract` is only for general operating rules; `META/sessions/*` is only a trace. `session_end` does not replace Bronze → Silver → Gold updates in the relevant namespace. If placement is unclear, route/read context before writing.
+8. **Silver is a current summary, not a changelog; Gold is a signpost, not a log.** Keep Silver concise and Gold to a few stable routing tags. When a namespace outgrows them, decompose it into sub-namespaces — do not let one Silver or Gold grow without bound. History and detail live in Bronze.
 
 ## Responding to tool signals
 
@@ -40,6 +41,7 @@ Gold = routing only (short search tags, not answers). Use Gold to find which nam
 - `similar_bronze` returned — review. Mark stale only if the older chunk is superseded.
 - `chunk_too_large: true` — split into single-fact chunks, then update Silver once.
 - `aspects_too_long` returned (list of tags) — split each into shorter search tags (target 30–100 chars each).
+- `silver_too_large` / `gold_near_limit` — the namespace is overloaded. Decompose it: move detail into sub-namespaces, each with its own focused Silver, and leave a Silver index of the children here.
 
 ## Destructive operations
 

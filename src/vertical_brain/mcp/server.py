@@ -242,6 +242,8 @@ class VerticalBrainMCP(_IngestHandlers):
                     {"chunk_id": s.chunk_id, "score": s.score, "snippet": s.snippet[:120]}
                     for s in result.similar_bronze
                 ]
+            if result.silver_too_large:
+                out["silver_too_large"] = True
             text = json.dumps(out)
             layer = args.get("layer", "bronze")
             if layer == "bronze":
@@ -284,6 +286,8 @@ class VerticalBrainMCP(_IngestHandlers):
                 out2["overflow_paths"] = overflow_paths
             if too_long:
                 out2["aspects_too_long"] = too_long
+            if any(r.gold_near_limit for r in batch_result.results):
+                out2["gold_near_limit"] = True
             return json.dumps(out2)
 
         if name == "create_link":
@@ -421,6 +425,8 @@ class VerticalBrainMCP(_IngestHandlers):
             batch_result = self._executor.apply_batch(batch)
             chunk_ids = [r.chunk_id for r in batch_result.results if r.chunk_id]
             out3: dict[str, Any] = {"status": batch_result.status, "chunk_ids": chunk_ids}
+            if any(r.silver_too_large for r in batch_result.results):
+                out3["silver_too_large"] = True
             if args.get("gold_aspect"):
                 gold_op = StorageOperation(
                     operation="append_gold_aspect",
@@ -434,6 +440,8 @@ class VerticalBrainMCP(_IngestHandlers):
                     out3["overflow_path"] = gold_result.overflow_path
                 if gold_result.aspect_too_long:
                     out3["aspect_too_long"] = True
+                if gold_result.gold_near_limit:
+                    out3["gold_near_limit"] = True
             return json.dumps(out3)
 
         if name == "update_silver":
@@ -496,7 +504,10 @@ class VerticalBrainMCP(_IngestHandlers):
                 reasoning_summary=args.get("reasoning_summary") or "Updated Silver summary via MCP update_silver.",
             )
             result = self._executor.apply(op)
-            return json.dumps({"status": "applied", "chunk_id": result.chunk_id})
+            out: dict[str, Any] = {"status": "applied", "chunk_id": result.chunk_id}
+            if result.silver_too_large:
+                out["silver_too_large"] = True
+            return json.dumps(out)
 
         if name == "optimize":
             from vertical_brain.core.optimizer import SimpleOptimizer

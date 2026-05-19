@@ -65,6 +65,15 @@ _BRONZE_MAX_CHARS = 600
 # but the warning tells agents to split them into shorter search tags.
 _GOLD_ASPECT_MAX_CHARS = 150
 
+# Silver is a current summary, not a changelog. Past this many characters the
+# namespace is likely overloaded — the soft warning tells agents to decompose it
+# into sub-namespaces rather than letting one Silver grow without bound.
+_SILVER_MAX_CHARS = 2000
+
+# A node's Gold aspect count this close to the MAX_GOLD_ASPECTS cap is the same
+# overload signal as an oversized Silver — the namespace should be split.
+_GOLD_NEAR_LIMIT = MAX_GOLD_ASPECTS - 4
+
 
 def _next_overflow_path(path: str) -> str:
     parent, _, name = path.rpartition("/")
@@ -227,6 +236,7 @@ class StorageOperationExecutor:
             else []
         )
         too_large = is_bronze and not is_immutable and len(candidate.content) > _BRONZE_MAX_CHARS
+        silver_too_large = candidate.layer == "silver" and len(candidate.content) > _SILVER_MAX_CHARS
         return OperationResult(
             operation=operation.operation,
             target_path=operation.target_path,
@@ -235,6 +245,7 @@ class StorageOperationExecutor:
             stale_candidates=operation.stale_candidates,
             similar_bronze=similar,
             chunk_too_large=too_large,
+            silver_too_large=silver_too_large,
         )
 
     def _op_create_link(self, operation: StorageOperation) -> OperationResult:
@@ -263,7 +274,9 @@ class StorageOperationExecutor:
 
     def _op_append_gold_aspect(self, operation: StorageOperation) -> OperationResult:
         assert operation.gold_aspect is not None
-        overflow_path = self._apply_append_gold_aspect(operation.target_path, operation.gold_aspect)
+        overflow_path, aspect_count = self._apply_append_gold_aspect(
+            operation.target_path, operation.gold_aspect
+        )
         aspect_too_long = len(operation.gold_aspect.strip()) > _GOLD_ASPECT_MAX_CHARS
         self._mark_ancestors_dirty(operation.target_path)
         if overflow_path is not None:
@@ -273,6 +286,7 @@ class StorageOperationExecutor:
             target_path=operation.target_path,
             overflow_path=overflow_path,
             aspect_too_long=aspect_too_long,
+            gold_near_limit=aspect_count >= _GOLD_NEAR_LIMIT,
         )
 
     def _op_rename_namespace(self, operation: StorageOperation) -> OperationResult:
@@ -341,6 +355,7 @@ class StorageOperationExecutor:
             operation=operation.operation,
             target_path=operation.target_path,
             chunk_id=new_chunk.id,
+            silver_too_large=len(new_chunk.content) > _SILVER_MAX_CHARS,
         )
 
     _APPLY_DISPATCH = {
@@ -354,8 +369,13 @@ class StorageOperationExecutor:
         "update_silver": _op_update_silver,
     }
 
-    def _apply_append_gold_aspect(self, path: str, aspect: str) -> str | None:
-        """Returns overflow path if a new sibling was created, otherwise None."""
+    def _apply_append_gold_aspect(self, path: str, aspect: str) -> tuple[str | None, int]:
+        """Returns (overflow_path, aspect_count).
+
+        overflow_path is the new sibling namespace if the 20-aspect cap forced
+        one, otherwise None. aspect_count is the number of aspects in the Gold
+        chunk the aspect landed in.
+        """
         # Gold requires Silver to exist — enforce the layering contract.
         all_chunks = self.store.get_chunks_by_path(path, include_children=False)
         active_silver = [c for c in all_chunks if c.layer == "silver" and c.status == "active"]
@@ -377,7 +397,7 @@ class StorageOperationExecutor:
                 Chunk(node_path=tail, content=serialize_gold_aspects([GoldAspect(text=aspect)]),
                       layer="gold", source="model")
             )
-            return None
+            return None, 1
 
         latest = max(gold_chunks, key=lambda c: c.created_at)
         aspects = parse_gold_aspects(latest.content)
@@ -389,7 +409,7 @@ class StorageOperationExecutor:
                 latest.content = serialize_gold_aspects(aspects)
                 latest.updated_at = utc_now()
                 self.store.update_chunk(latest)
-                return None
+                return None, len(aspects)
 
         if len(aspects) < MAX_GOLD_ASPECTS:
             aspects.append(GoldAspect(text=aspect))
@@ -400,7 +420,7 @@ class StorageOperationExecutor:
                 Chunk(node_path=tail, content=serialize_gold_aspects(aspects),
                       layer="gold", source="model", lineage=[latest.id])
             )
-            return None
+            return None, len(aspects)
         else:
             overflow = _next_overflow_path(tail)
             self.store.ensure_node(overflow)
@@ -415,7 +435,7 @@ class StorageOperationExecutor:
                 link_type="gold_overflow",
                 reason="Gold capacity overflow.",
             ))
-            return overflow
+            return overflow, 1
 
     def _gold_tail_path(self, path: str) -> str:
         current = path

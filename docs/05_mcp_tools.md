@@ -157,7 +157,7 @@ Silver and Gold are exempt from both checks.
 
 ### `append_gold_aspect`
 
-Add or refresh one or more short semantic routing tags in the Gold index of a namespace. Exact-text duplicates refresh `updated_at` without creating a new aspect. Returns `aspects_added` (count), `overflow_paths` (sibling namespaces created when the 20-aspect limit is reached), and `aspects_too_long` (tags exceeding 150 characters).
+Add or refresh one or more short semantic routing tags in the Gold index of a namespace. Exact-text duplicates refresh `updated_at` without creating a new aspect. Returns `aspects_added` (count), `overflow_paths` (sibling namespaces created when the 20-aspect limit is reached), `aspects_too_long` (tags exceeding 150 characters), and `gold_near_limit` (true when the node's aspect count is approaching the 20 cap — a namespace-overload signal; split the namespace into sub-namespaces).
 
 > **Prerequisite:** An active Silver chunk must exist at `path`. Call `update_silver` first if it doesn't.
 
@@ -243,7 +243,7 @@ Two ways to supply the new content — pass exactly one:
 | `confidence` | number | Quality signal [0, 1] (default 1.0) |
 | `reasoning_summary` | string | Why this Silver was rewritten (goes to audit log) |
 
-Returns `{"status": "applied", "chunk_id": "<new silver id>"}`.
+Returns `{"status": "applied", "chunk_id": "<new silver id>"}`, plus `silver_too_large: true` when the new Silver exceeds the recommended summary size — a namespace-overload signal: decompose the namespace into sub-namespaces rather than growing one Silver without bound.
 
 ---
 

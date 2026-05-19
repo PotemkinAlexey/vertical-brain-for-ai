@@ -1010,6 +1010,37 @@ def test_update_silver_rejects_neither_patch_nor_new_content(tmp_path):
     assert "error" in resp
 
 
+def test_update_silver_reports_silver_too_large(tmp_path):
+    """An oversized Silver returns silver_too_large — the namespace-overload signal."""
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="PROJECTS/alpha", content="seed", layer="silver"))
+
+    resp = _call(mcp, "update_silver", {
+        "path": "PROJECTS/alpha",
+        "new_content": "x" * 2100,
+        "current_silver_id": store.get_chunks_by_path("PROJECTS/alpha")[0].id,
+    })
+    result = json.loads(_text(resp))
+
+    assert result["status"] == "applied"
+    assert result["silver_too_large"] is True
+
+
+def test_append_gold_aspect_reports_gold_near_limit(tmp_path):
+    """Gold aspect count near the 20 cap returns gold_near_limit."""
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="PROJECTS/alpha", content="silver summary", layer="silver"))
+
+    resp = _call(mcp, "append_gold_aspect", {
+        "path": "PROJECTS/alpha",
+        "aspects": [f"routing tag number {i}" for i in range(16)],
+    })
+    result = json.loads(_text(resp))
+
+    assert result["status"] == "applied"
+    assert result["gold_near_limit"] is True
+
+
 def test_update_silver_audit_record_has_correct_operation_type(tmp_path):
     """MCP update_silver audit record must have operation_type='update_silver', not two records."""
     mcp, store = _mcp(tmp_path)

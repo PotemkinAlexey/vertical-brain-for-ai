@@ -200,6 +200,12 @@ class OperationResult(JsonSerializable):
     # True when a Gold aspect was written but is longer than the recommended size for
     # precise routing. Not an error — Gold aspects are search tags and should stay short.
     aspect_too_long: bool = False
+    # True when the Silver written exceeds the recommended summary size. Not an error —
+    # signals the namespace is overloaded and should be decomposed into sub-namespaces.
+    silver_too_large: bool = False
+    # True when a node's Gold aspect count is approaching the 20-aspect cap. Not an error —
+    # same overload signal: the namespace likely needs splitting into sub-namespaces.
+    gold_near_limit: bool = False
 
 
 @dataclass
