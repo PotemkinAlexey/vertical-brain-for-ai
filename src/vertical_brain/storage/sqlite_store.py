@@ -407,8 +407,8 @@ class SQLiteStore:
             if prune_empty_nodes:
                 result["deleted_empty_nodes"] = self._delete_empty_nodes()
 
-        if self._fts_enabled:
-            self.rebuild_search_index()
+        # search_index was pruned surgically above (DELETE … record_id IN candidates);
+        # no full rebuild needed — node/vector pruning does not touch indexed chunk rows.
         if reclaim_space:
             self.conn.execute("VACUUM")
             result["reclaimed_space"] = True
@@ -645,6 +645,25 @@ class SQLiteStore:
         self._commit_if_needed()
         return node
 
+    def bump_nodes_dirty(self, paths: list[str]) -> None:
+        """Mark each existing node in *paths* dirty and increment its version by one.
+
+        A single UPDATE replaces the per-ancestor read+write loop. Paths that do
+        not correspond to a node are silently ignored (no row matches).
+        """
+        if not paths:
+            return
+        placeholders = ",".join("?" for _ in paths)
+        self.conn.execute(
+            f"""
+            UPDATE nodes
+            SET is_dirty = 1, version = version + 1, updated_at = ?
+            WHERE path IN ({placeholders})
+            """,
+            (utc_now(), *paths),
+        )
+        self._commit_if_needed()
+
     def get_embedding_schema(self) -> dict | None:
         row = self.conn.execute("SELECT * FROM embedding_schema WHERE id = 1").fetchone()
         if row is None:
@@ -674,6 +693,26 @@ class SQLiteStore:
         if row is None:
             return None
         return json.loads(row[0])
+
+    def get_vectors(self, content_hashes: list[str], model_name: str) -> dict[str, list[float]]:
+        """Batch-read cached vectors — one query per ~900 hashes instead of one per hash."""
+        out: dict[str, list[float]] = {}
+        unique = list(dict.fromkeys(h for h in content_hashes if h))
+        batch_size = 900  # stay under SQLite's ~999 bound-parameter limit
+        for start in range(0, len(unique), batch_size):
+            batch = unique[start:start + batch_size]
+            placeholders = ",".join("?" for _ in batch)
+            rows = self.conn.execute(
+                f"""
+                SELECT content_hash, vector_json
+                FROM vector_cache
+                WHERE model_name = ? AND content_hash IN ({placeholders})
+                """,
+                (model_name, *batch),
+            ).fetchall()
+            for row in rows:
+                out[row["content_hash"]] = json.loads(row["vector_json"])
+        return out
 
     def set_vector(self, content_hash: str, model_name: str, vector: list[float]) -> None:
         self.conn.execute(
@@ -754,8 +793,17 @@ class SQLiteStore:
                     "UPDATE nodes SET name = ?, parent_path = ? WHERE path = ?",
                     (name, parent_path, new_path),
                 )
-        if self._fts_enabled:
-            self.rebuild_search_index()
+            # search_index.path is a stored column — rewrite it in place rather
+            # than rebuilding the whole FTS index from scratch.
+            if self._fts_enabled:
+                self.conn.execute(
+                    """
+                    UPDATE search_index
+                    SET path = ? || SUBSTR(path, ?)
+                    WHERE path = ? OR path LIKE ?
+                    """,
+                    (new_prefix, new_len + 1, old_exact, old_like),
+                )
 
     def get_chunk(self, chunk_id: str) -> Chunk | None:
         row = self.conn.execute("SELECT * FROM chunks WHERE id = ?", (chunk_id,)).fetchone()

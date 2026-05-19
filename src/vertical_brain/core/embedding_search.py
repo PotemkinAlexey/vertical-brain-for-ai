@@ -175,18 +175,16 @@ class EmbeddingSearch:
             return []
 
         query_vec = self._embed(query)
-        results: list[SearchResult] = []
+        candidates = self._candidate_chunks(root_path=root_path, include_stale=include_stale)
+        keyed = [(chunk, *_chunk_embed_info(chunk)) for chunk in candidates]
+        vectors = self._resolve_vectors(keyed, expected_dimension=len(query_vec))
 
-        for chunk in self._candidate_chunks(root_path=root_path, include_stale=include_stale):
-            cache_key, embed_text = _chunk_embed_info(chunk)
-            score = cosine_similarity(
-                query_vec,
-                self._get_vector(
-                    cache_key,
-                    embed_text,
-                    expected_dimension=len(query_vec),
-                ),
-            )
+        results: list[SearchResult] = []
+        for chunk, cache_key, _embed_text in keyed:
+            vector = vectors.get(cache_key)
+            if vector is None:
+                continue
+            score = cosine_similarity(query_vec, vector)
             if score <= threshold:
                 continue
 
@@ -207,6 +205,40 @@ class EmbeddingSearch:
 
         results.sort(key=lambda r: (-r.score, r.path))
         return results[:limit]
+
+    def _resolve_vectors(
+        self,
+        keyed: list[tuple["Chunk", str, str]],
+        *,
+        expected_dimension: int,
+    ) -> dict[str, list[float]]:
+        """Return ``{cache_key: vector}`` for every keyed chunk.
+
+        Cached vectors are read in a single batch query; only cache misses are
+        embedded individually and written back. This replaces one DB round-trip
+        per chunk with one round-trip per search.
+        """
+        model_name = getattr(self._provider, "model_name", None)
+        vectors: dict[str, list[float]] = {}
+
+        if model_name:
+            get_vectors = getattr(self._store, "get_vectors", None)
+            if callable(get_vectors):
+                cached = get_vectors([key for _, key, _ in keyed], model_name)
+                for key, raw in cached.items():
+                    coerced = _coerce_vector(raw, expected_dimension=expected_dimension)
+                    if coerced is not None:
+                        vectors[key] = coerced
+
+        set_vector = getattr(self._store, "set_vector", None) if model_name else None
+        for _chunk, cache_key, embed_text in keyed:
+            if cache_key in vectors:
+                continue
+            vector = self._embed(embed_text, expected_dimension=expected_dimension)
+            vectors[cache_key] = vector
+            if callable(set_vector):
+                set_vector(cache_key, model_name, vector)
+        return vectors
 
 
 def _coerce_vector(vector: object, *, expected_dimension: int | None = None) -> list[float] | None:

@@ -191,6 +191,21 @@ class JsonStore:
                 return node
         raise ValueError(f"Node not found: {node.path}")
 
+    def bump_nodes_dirty(self, paths: list[str]) -> None:
+        """Mark each existing node in *paths* dirty and increment its version by one."""
+        if not paths:
+            return
+        target = set(paths)
+        nodes = self._read(self.nodes_file)
+        changed = False
+        for row in nodes:
+            if row["path"] in target:
+                row["is_dirty"] = True
+                row["version"] = row.get("version", 0) + 1
+                changed = True
+        if changed:
+            self._write(self.nodes_file, nodes)
+
     def get_chunk(self, chunk_id: str) -> Chunk | None:
         row = next((r for r in self._read(self.chunks_file) if r["id"] == chunk_id), None)
         return self._chunk_from_row(row) if row is not None else None
@@ -333,6 +348,15 @@ class JsonStore:
     def get_vector(self, content_hash: str, model_name: str) -> list[float] | None:
         entry = self._read_vector_cache().get(content_hash, {})
         return entry.get(model_name)
+
+    def get_vectors(self, content_hashes: list[str], model_name: str) -> dict[str, list[float]]:
+        cache = self._read_vector_cache()
+        out: dict[str, list[float]] = {}
+        for content_hash in content_hashes:
+            entry = cache.get(content_hash)
+            if entry and model_name in entry:
+                out[content_hash] = entry[model_name]
+        return out
 
     def set_vector(self, content_hash: str, model_name: str, vector: list[float]) -> None:
         cache = self._read_vector_cache()

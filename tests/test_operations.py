@@ -113,10 +113,10 @@ def test_json_store_batch_rolls_back_when_apply_fails_mid_write(tmp_path):
         ]
     )
 
-    def failing_update_node(node):
+    def failing_bump_nodes_dirty(paths):
         raise RuntimeError("simulated node update failure")
 
-    store.update_node = failing_update_node  # type: ignore[method-assign]
+    store.bump_nodes_dirty = failing_bump_nodes_dirty  # type: ignore[method-assign]
 
     with pytest.raises(RuntimeError, match="simulated node update failure"):
         StorageOperationExecutor(store).apply_batch(batch)

@@ -494,12 +494,19 @@ class StorageOperationExecutor:
                     save_link(link)
 
     def _mark_ancestors_dirty(self, path: str) -> None:
+        parts = path.split("/")
+        ancestors = ["/".join(parts[:depth]) for depth in range(1, len(parts) + 1)]
+
+        bump = getattr(self.store, "bump_nodes_dirty", None)
+        if callable(bump):
+            bump(ancestors)
+            return
+
+        # Fallback for stores without a batch bump: per-ancestor read + write.
         update_node = getattr(self.store, "update_node", None)
         if not callable(update_node):
             return
-        parts = path.split("/")
-        for depth in range(1, len(parts) + 1):
-            ancestor = "/".join(parts[:depth])
+        for ancestor in ancestors:
             node = self.store.get_node(ancestor)
             if node is not None:
                 node.is_dirty = True
