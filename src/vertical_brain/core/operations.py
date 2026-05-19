@@ -168,168 +168,182 @@ class StorageOperationExecutor:
         return ValidationResult(valid=not issues, issues=issues)
 
     def _apply_validated(self, operation: StorageOperation) -> OperationResult:
-        if operation.operation == "create_node":
-            self.store.ensure_node(operation.target_path)
-            return OperationResult(operation=operation.operation, target_path=operation.target_path)
+        handler = self._APPLY_DISPATCH.get(operation.operation)
+        if handler is None:
+            raise ValueError(f"Unsupported storage operation: {operation.operation}")
+        return handler(self, operation)
 
-        if operation.operation == "append_chunk":
-            assert operation.chunk is not None
-            candidate = self._chunk_from_input(operation.target_path, operation.chunk)
-            is_bronze = candidate.layer == "bronze"
-            is_immutable = getattr(candidate, "immutable", False)
+    def _op_create_node(self, operation: StorageOperation) -> OperationResult:
+        self.store.ensure_node(operation.target_path)
+        return OperationResult(operation=operation.operation, target_path=operation.target_path)
 
-            # Exact-hash dedup: skip for immutable (silently allow duplicate)
-            if is_bronze and not is_immutable and self.store.has_active_chunk_with_hash(
-                operation.target_path, candidate.content_hash
-            ):
-                raise ValueError(
-                    f"Bronze chunk with identical content already exists at '{operation.target_path}'. "
-                    f"Do not write duplicates — Silver stays clean when Bronze is unique. "
-                    f"If the fact changed, mark the old chunk stale first with "
-                    f"mark_stale('{operation.target_path}', [<chunk_id>]), then write the updated content."
-                )
-            if candidate.layer == "silver" and candidate.source != "optimizer:namespace_compaction":
-                existing_silver = [
-                    c for c in self.store.get_chunks_by_path(operation.target_path, include_children=False)
-                    if c.layer == "silver" and c.status == "active"
-                ]
-                if existing_silver:
-                    raise ValueError(
-                        f"append_chunk(layer=silver) rejected at '{operation.target_path}': "
-                        f"an active Silver already exists (id: {existing_silver[0].id}). "
-                        f"Use update_silver with current_silver_id='{existing_silver[0].id}' to replace it. "
-                        f"append_chunk(layer=silver) is only for creating the first Silver summary."
-                    )
-            chunk = self.store.save_chunk(candidate)
-            links = [
-                self.store.save_link(self._link_from_input(operation.target_path, link_input))
-                for link_input in operation.links
+    def _op_append_chunk(self, operation: StorageOperation) -> OperationResult:
+        assert operation.chunk is not None
+        candidate = self._chunk_from_input(operation.target_path, operation.chunk)
+        is_bronze = candidate.layer == "bronze"
+        is_immutable = getattr(candidate, "immutable", False)
+
+        # Exact-hash dedup: skip for immutable (silently allow duplicate)
+        if is_bronze and not is_immutable and self.store.has_active_chunk_with_hash(
+            operation.target_path, candidate.content_hash
+        ):
+            raise ValueError(
+                f"Bronze chunk with identical content already exists at '{operation.target_path}'. "
+                f"Do not write duplicates — Silver stays clean when Bronze is unique. "
+                f"If the fact changed, mark the old chunk stale first with "
+                f"mark_stale('{operation.target_path}', [<chunk_id>]), then write the updated content."
+            )
+        if candidate.layer == "silver" and candidate.source != "optimizer:namespace_compaction":
+            existing_silver = [
+                c for c in self.store.get_chunks_by_path(operation.target_path, include_children=False)
+                if c.layer == "silver" and c.status == "active"
             ]
-            self._mark_ancestors_dirty(operation.target_path)
-            # Similar-bronze and chunk_too_large: skip for immutable chunks
-            similar = (
-                self._find_similar_bronze(operation.target_path, candidate.content, exclude_id=chunk.id)
-                if is_bronze and not is_immutable
-                else []
-            )
-            too_large = is_bronze and not is_immutable and len(candidate.content) > _BRONZE_MAX_CHARS
-            return OperationResult(
-                operation=operation.operation,
-                target_path=operation.target_path,
-                chunk_id=chunk.id,
-                link_ids=[link.id for link in links],
-                stale_candidates=operation.stale_candidates,
-                similar_bronze=similar,
-                chunk_too_large=too_large,
-            )
-
-        if operation.operation == "create_link":
-            links = [
-                self.store.save_link(self._link_from_input(operation.target_path, link_input))
-                for link_input in operation.links
-            ]
-            self._mark_ancestors_dirty(operation.target_path)
-            for link_input in operation.links:
-                self._mark_ancestors_dirty(link_input.target_path)
-            return OperationResult(
-                operation=operation.operation,
-                target_path=operation.target_path,
-                link_ids=[link.id for link in links],
-            )
-
-        if operation.operation == "mark_stale":
-            self._update_chunk_status(operation, "stale")
-            self._mark_ancestors_dirty(operation.target_path)
-            return OperationResult(operation=operation.operation, target_path=operation.target_path)
-
-        if operation.operation == "supersede_chunk":
-            self._update_chunk_status(operation, "superseded")
-            self._mark_ancestors_dirty(operation.target_path)
-            return OperationResult(operation=operation.operation, target_path=operation.target_path)
-
-        if operation.operation == "append_gold_aspect":
-            assert operation.gold_aspect is not None
-            overflow_path = self._apply_append_gold_aspect(operation.target_path, operation.gold_aspect)
-            aspect_too_long = len(operation.gold_aspect.strip()) > _GOLD_ASPECT_MAX_CHARS
-            self._mark_ancestors_dirty(operation.target_path)
-            if overflow_path is not None:
-                self._mark_ancestors_dirty(overflow_path)
-            return OperationResult(
-                operation=operation.operation,
-                target_path=operation.target_path,
-                overflow_path=overflow_path,
-                aspect_too_long=aspect_too_long,
-            )
-
-        if operation.operation == "rename_namespace":
-            assert operation.new_path is not None
-            self._do_rename_namespace(operation.target_path, operation.new_path)
-            self._mark_ancestors_dirty(operation.new_path)
-            return OperationResult(operation=operation.operation, target_path=operation.target_path)
-
-        if operation.operation == "update_silver":
-            assert operation.chunk is not None
-            assert operation.current_silver_id is not None
-
-            # Runtime re-check — storage state may have changed since validation
-            get_chunk = getattr(self.store, "get_chunk", None)
-            old_chunk = get_chunk(operation.current_silver_id) if callable(get_chunk) else next(
-                (c for c in self.store.list_chunks() if c.id == operation.current_silver_id), None
-            )
-            if old_chunk is None:
+            if existing_silver:
                 raise ValueError(
-                    f"update_silver rejected: chunk '{operation.current_silver_id}' not found. "
-                    f"Call read_context('{operation.target_path}') to get the current Silver id."
+                    f"append_chunk(layer=silver) rejected at '{operation.target_path}': "
+                    f"an active Silver already exists (id: {existing_silver[0].id}). "
+                    f"Use update_silver with current_silver_id='{existing_silver[0].id}' to replace it. "
+                    f"append_chunk(layer=silver) is only for creating the first Silver summary."
                 )
-            if old_chunk.status != "active":
-                raise ValueError(
-                    f"update_silver rejected: chunk '{operation.current_silver_id}' is {old_chunk.status}, not active. "
-                    f"Call read_context('{operation.target_path}') to get the current Silver id."
-                )
-            if old_chunk.layer != "silver":
-                raise ValueError(
-                    f"update_silver rejected: chunk '{operation.current_silver_id}' is layer={old_chunk.layer}, not silver."
-                )
-            if old_chunk.node_path != operation.target_path:
-                raise ValueError(
-                    f"update_silver rejected: chunk '{operation.current_silver_id}' belongs to "
-                    f"'{old_chunk.node_path}', not '{operation.target_path}'."
-                )
+        chunk = self.store.save_chunk(candidate)
+        links = [
+            self.store.save_link(self._link_from_input(operation.target_path, link_input))
+            for link_input in operation.links
+        ]
+        self._mark_ancestors_dirty(operation.target_path)
+        # Similar-bronze and chunk_too_large: skip for immutable chunks
+        similar = (
+            self._find_similar_bronze(operation.target_path, candidate.content, exclude_id=chunk.id)
+            if is_bronze and not is_immutable
+            else []
+        )
+        too_large = is_bronze and not is_immutable and len(candidate.content) > _BRONZE_MAX_CHARS
+        return OperationResult(
+            operation=operation.operation,
+            target_path=operation.target_path,
+            chunk_id=chunk.id,
+            link_ids=[link.id for link in links],
+            stale_candidates=operation.stale_candidates,
+            similar_bronze=similar,
+            chunk_too_large=too_large,
+        )
 
-            # Validate source_chunk_ids — storage-level checks
-            for src_id in operation.source_chunk_ids:
-                src = get_chunk(src_id) if callable(get_chunk) else next(
-                    (c for c in self.store.list_chunks() if c.id == src_id), None
-                )
-                if src is None:
-                    raise ValueError(f"update_silver rejected: source chunk '{src_id}' not found.")
-                if src.layer == "gold":
-                    raise ValueError(
-                        f"update_silver rejected: source chunk '{src_id}' is Gold. "
-                        f"Gold cannot be used as source evidence for Silver."
-                    )
+    def _op_create_link(self, operation: StorageOperation) -> OperationResult:
+        links = [
+            self.store.save_link(self._link_from_input(operation.target_path, link_input))
+            for link_input in operation.links
+        ]
+        self._mark_ancestors_dirty(operation.target_path)
+        for link_input in operation.links:
+            self._mark_ancestors_dirty(link_input.target_path)
+        return OperationResult(
+            operation=operation.operation,
+            target_path=operation.target_path,
+            link_ids=[link.id for link in links],
+        )
 
-            # Build new Silver chunk
-            new_chunk = self._chunk_from_input(operation.target_path, operation.chunk)
-            new_chunk.layer = "silver"
-            new_chunk.lineage = [operation.current_silver_id] + list(operation.source_chunk_ids)
-            new_chunk.supersedes = [operation.current_silver_id]
-            new_chunk = self.store.save_chunk(new_chunk)
+    def _op_mark_stale(self, operation: StorageOperation) -> OperationResult:
+        self._update_chunk_status(operation, "stale")
+        self._mark_ancestors_dirty(operation.target_path)
+        return OperationResult(operation=operation.operation, target_path=operation.target_path)
 
-            # Supersede old Silver
-            old_chunk.status = "superseded"
-            old_chunk.valid_to = utc_now()
-            old_chunk.updated_at = utc_now()
-            self.store.update_chunk(old_chunk)
+    def _op_supersede_chunk(self, operation: StorageOperation) -> OperationResult:
+        self._update_chunk_status(operation, "superseded")
+        self._mark_ancestors_dirty(operation.target_path)
+        return OperationResult(operation=operation.operation, target_path=operation.target_path)
 
-            self._mark_ancestors_dirty(operation.target_path)
-            return OperationResult(
-                operation=operation.operation,
-                target_path=operation.target_path,
-                chunk_id=new_chunk.id,
+    def _op_append_gold_aspect(self, operation: StorageOperation) -> OperationResult:
+        assert operation.gold_aspect is not None
+        overflow_path = self._apply_append_gold_aspect(operation.target_path, operation.gold_aspect)
+        aspect_too_long = len(operation.gold_aspect.strip()) > _GOLD_ASPECT_MAX_CHARS
+        self._mark_ancestors_dirty(operation.target_path)
+        if overflow_path is not None:
+            self._mark_ancestors_dirty(overflow_path)
+        return OperationResult(
+            operation=operation.operation,
+            target_path=operation.target_path,
+            overflow_path=overflow_path,
+            aspect_too_long=aspect_too_long,
+        )
+
+    def _op_rename_namespace(self, operation: StorageOperation) -> OperationResult:
+        assert operation.new_path is not None
+        self._do_rename_namespace(operation.target_path, operation.new_path)
+        self._mark_ancestors_dirty(operation.new_path)
+        return OperationResult(operation=operation.operation, target_path=operation.target_path)
+
+    def _op_update_silver(self, operation: StorageOperation) -> OperationResult:
+        assert operation.chunk is not None
+        assert operation.current_silver_id is not None
+
+        # Runtime re-check — storage state may have changed since validation
+        get_chunk = getattr(self.store, "get_chunk", None)
+        old_chunk = get_chunk(operation.current_silver_id) if callable(get_chunk) else next(
+            (c for c in self.store.list_chunks() if c.id == operation.current_silver_id), None
+        )
+        if old_chunk is None:
+            raise ValueError(
+                f"update_silver rejected: chunk '{operation.current_silver_id}' not found. "
+                f"Call read_context('{operation.target_path}') to get the current Silver id."
+            )
+        if old_chunk.status != "active":
+            raise ValueError(
+                f"update_silver rejected: chunk '{operation.current_silver_id}' is {old_chunk.status}, not active. "
+                f"Call read_context('{operation.target_path}') to get the current Silver id."
+            )
+        if old_chunk.layer != "silver":
+            raise ValueError(
+                f"update_silver rejected: chunk '{operation.current_silver_id}' is layer={old_chunk.layer}, not silver."
+            )
+        if old_chunk.node_path != operation.target_path:
+            raise ValueError(
+                f"update_silver rejected: chunk '{operation.current_silver_id}' belongs to "
+                f"'{old_chunk.node_path}', not '{operation.target_path}'."
             )
 
-        raise ValueError(f"Unsupported storage operation: {operation.operation}")
+        # Validate source_chunk_ids — storage-level checks
+        for src_id in operation.source_chunk_ids:
+            src = get_chunk(src_id) if callable(get_chunk) else next(
+                (c for c in self.store.list_chunks() if c.id == src_id), None
+            )
+            if src is None:
+                raise ValueError(f"update_silver rejected: source chunk '{src_id}' not found.")
+            if src.layer == "gold":
+                raise ValueError(
+                    f"update_silver rejected: source chunk '{src_id}' is Gold. "
+                    f"Gold cannot be used as source evidence for Silver."
+                )
+
+        # Build new Silver chunk
+        new_chunk = self._chunk_from_input(operation.target_path, operation.chunk)
+        new_chunk.layer = "silver"
+        new_chunk.lineage = [operation.current_silver_id] + list(operation.source_chunk_ids)
+        new_chunk.supersedes = [operation.current_silver_id]
+        new_chunk = self.store.save_chunk(new_chunk)
+
+        # Supersede old Silver
+        old_chunk.status = "superseded"
+        old_chunk.valid_to = utc_now()
+        old_chunk.updated_at = utc_now()
+        self.store.update_chunk(old_chunk)
+
+        self._mark_ancestors_dirty(operation.target_path)
+        return OperationResult(
+            operation=operation.operation,
+            target_path=operation.target_path,
+            chunk_id=new_chunk.id,
+        )
+
+    _APPLY_DISPATCH = {
+        "create_node": _op_create_node,
+        "append_chunk": _op_append_chunk,
+        "create_link": _op_create_link,
+        "mark_stale": _op_mark_stale,
+        "supersede_chunk": _op_supersede_chunk,
+        "append_gold_aspect": _op_append_gold_aspect,
+        "rename_namespace": _op_rename_namespace,
+        "update_silver": _op_update_silver,
+    }
 
     def _apply_append_gold_aspect(self, path: str, aspect: str) -> str | None:
         """Returns overflow path if a new sibling was created, otherwise None."""

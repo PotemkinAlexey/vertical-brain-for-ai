@@ -13,6 +13,7 @@ from uuid import uuid4
 from vertical_brain.core.gold import gold_aspect_embed_key, parse_gold_content
 from vertical_brain.core.models import Chunk, Link, Node, SearchResult, utc_now
 from vertical_brain.core.namespace_map import normalize_namespace_root_path
+from vertical_brain.storage.derivations import StorageDerivationsMixin
 
 if TYPE_CHECKING:
     from vertical_brain.core.models import OperationResult, StorageOperation
@@ -25,7 +26,7 @@ from vertical_brain.core.search import fts_query, lexical_search, make_snippet, 
 _WAL_INIT_LOCK = threading.Lock()
 
 
-class SQLiteStore:
+class SQLiteStore(StorageDerivationsMixin):
     VACUUM_INACTIVE_STATUSES = ("stale", "superseded", "legacy", "contradicted")
     VACUUM_MIN_RETENTION_HOURS = 168.0
 
@@ -857,14 +858,6 @@ class SQLiteStore:
         ).fetchall()
         return [Link(**dict(row)) for row in rows]
 
-    def get_peer_paths(self, path: str) -> list[str]:
-        peer_paths: list[str] = []
-        for link in self.get_peer_links(path):
-            peer_path = link.target_path if link.source_path == path else link.source_path
-            if peer_path not in peer_paths:
-                peer_paths.append(peer_path)
-        return peer_paths
-
     def get_chunks_by_path(self, path: str, include_children: bool = False) -> list[Chunk]:
         if include_children:
             rows = self.conn.execute(
@@ -966,24 +959,6 @@ class SQLiteStore:
             )
             for row in rows
         ]
-
-    def get_ancestors(self, path: str) -> list[str]:
-        parts = path.split("/")
-        ancestors = []
-        for i in range(1, len(parts)):
-            ancestors.append("/".join(parts[:i]))
-        return ancestors
-
-    def tree_text(self) -> str:
-        paths = sorted(n.path for n in self.list_nodes())
-        if not paths:
-            return "(empty tree)"
-
-        lines = []
-        for path in paths:
-            depth = path.count("/")
-            lines.append("  " * depth + path.split("/")[-1])
-        return "\n".join(lines)
 
     def rebuild_search_index(self) -> None:
         if not self._fts_enabled:

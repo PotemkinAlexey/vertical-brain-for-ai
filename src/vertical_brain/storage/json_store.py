@@ -9,12 +9,13 @@ from uuid import uuid4
 
 from vertical_brain.core.models import Chunk, Link, Node, SearchResult, utc_now
 from vertical_brain.core.search import lexical_search
+from vertical_brain.storage.derivations import StorageDerivationsMixin
 
 if TYPE_CHECKING:
     from vertical_brain.core.models import OperationResult, StorageOperation
 
 
-class JsonStore:
+class JsonStore(StorageDerivationsMixin):
     def __init__(self, root: str | Path = "data"):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -249,14 +250,6 @@ class JsonStore:
             if link.link_type == "peer" and (link.source_path == path or link.target_path == path)
         ]
 
-    def get_peer_paths(self, path: str) -> list[str]:
-        peer_paths: list[str] = []
-        for link in self.get_peer_links(path):
-            peer_path = link.target_path if link.source_path == path else link.source_path
-            if peer_path not in peer_paths:
-                peer_paths.append(peer_path)
-        return peer_paths
-
     def get_chunks_by_path(self, path: str, include_children: bool = False) -> list[Chunk]:
         chunks = self.list_chunks()
         if include_children:
@@ -288,13 +281,6 @@ class JsonStore:
             limit=limit,
             include_stale=include_stale,
         )
-
-    def get_ancestors(self, path: str) -> list[str]:
-        parts = path.split("/")
-        ancestors = []
-        for i in range(1, len(parts)):
-            ancestors.append("/".join(parts[:i]))
-        return ancestors
 
     def log_audit(self, operation: "StorageOperation", result: "OperationResult") -> None:
         record = {
@@ -399,14 +385,3 @@ class JsonStore:
             ):
                 row["parent_path"] = new_prefix + row["parent_path"][len(old_prefix):]
         self._write(self.nodes_file, nodes)
-
-    def tree_text(self) -> str:
-        paths = sorted(n.path for n in self.list_nodes())
-        if not paths:
-            return "(empty tree)"
-
-        lines = []
-        for path in paths:
-            depth = path.count("/")
-            lines.append("  " * depth + path.split("/")[-1])
-        return "\n".join(lines)
