@@ -26,12 +26,14 @@ from vertical_brain.core.operations import StorageOperationExecutor
 from vertical_brain.core.search import BrainSearch
 from vertical_brain.llm.embedding import EmbeddingProvider, MockEmbeddingProvider
 from vertical_brain.mcp.ingest_protocol import (
+    DEFAULT_INGEST_DEPTH,
     DEFAULT_INGEST_MODE,
     INGEST_MODE_ROUTING,
     build_protocol_lines,
     calculate_coverage_score,
     inventory_probe_requirement,
     load_inventory_items,
+    normalize_ingest_depth,
     normalize_ingest_mode,
     normalize_inventory_label,
     split_service_chunks,
@@ -497,6 +499,16 @@ _TOOLS: list[dict[str, Any]] = [
                         "Short identifier for the document used in the namespace path "
                         "(e.g. 'MT103', 'openapi-v2'). "
                         "Defaults to the file name without extension."
+                    ),
+                },
+                "depth": {
+                    "type": "string",
+                    "enum": ["quick", "standard", "thorough"],
+                    "description": (
+                        "Extraction thoroughness. quick: 50% max skip, 60% coverage (fast scan). "
+                        "standard (default): 25% max skip, 90% coverage. "
+                        "thorough: 10% max skip, 95% coverage, min 5 inventory probes. "
+                        "If not specified, ask the user before starting."
                     ),
                 },
                 "force": {
@@ -1272,6 +1284,7 @@ class VerticalBrainMCP:
         authority: str,
         doc_slug: str,
         ingest_mode: str,
+        ingest_depth: str,
         force: bool,
         source_hash: str | None = None,
         source_size: int | None = None,
@@ -1314,6 +1327,7 @@ class VerticalBrainMCP:
             "source_hash": source_hash,
             "source_size": source_size,
             "ingest_mode": ingest_mode,
+            "ingest_depth": ingest_depth,
             "state": "EXTRACTING_BRONZE",
             "chunks": service_chunks,
             "inventory_probes": [],
@@ -1375,6 +1389,7 @@ class VerticalBrainMCP:
         raw_slug = args.get("doc_slug") or os.path.splitext(file_name)[0]
         doc_slug = raw_slug.strip().replace(" ", "_").replace(".", "_")
         ingest_mode = normalize_ingest_mode(args.get("mode"))
+        ingest_depth = normalize_ingest_depth(args.get("depth"))
 
         return self._start_ingest_session(
             content=content,
@@ -1382,6 +1397,7 @@ class VerticalBrainMCP:
             authority=authority,
             doc_slug=doc_slug,
             ingest_mode=ingest_mode,
+            ingest_depth=ingest_depth,
             force=bool(args.get("force", False)),
             source_hash=source_hash,
             source_size=source_size,
@@ -1672,6 +1688,7 @@ class VerticalBrainMCP:
         doc_slug = raw_slug.strip().replace(" ", "_").replace(".", "_")
         file_name = doc_slug or "url_document"
         ingest_mode = normalize_ingest_mode(args.get("mode"))
+        ingest_depth = normalize_ingest_depth(args.get("depth"))
 
         return self._start_ingest_session(
             content=content,
@@ -1679,6 +1696,7 @@ class VerticalBrainMCP:
             authority=authority,
             doc_slug=doc_slug,
             ingest_mode=ingest_mode,
+            ingest_depth=ingest_depth,
             force=bool(args.get("force", False)),
         )
 

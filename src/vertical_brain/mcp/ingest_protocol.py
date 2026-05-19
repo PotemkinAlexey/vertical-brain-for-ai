@@ -13,13 +13,45 @@ INGEST_MODE_ROUTING = "routing"
 INGEST_MODE_AUDIT = "audit"
 DEFAULT_INGEST_MODE = INGEST_MODE_ANSWER_COMPLETE
 
-# answer_complete: document must be answerable without the source file
+INGEST_DEPTH_QUICK = "quick"
+INGEST_DEPTH_STANDARD = "standard"
+INGEST_DEPTH_THOROUGH = "thorough"
+DEFAULT_INGEST_DEPTH = INGEST_DEPTH_STANDARD
+
+DEPTH_THRESHOLDS: dict[str, dict[str, float | int]] = {
+    INGEST_DEPTH_QUICK: {
+        "max_skip_ratio": 0.50,
+        "min_extracted_ratio": 0.30,
+        "min_bronze_facts": 1,
+        "min_inventory_probe_count": 0,
+        "min_inventory_probe_ratio": 0.0,
+        "min_inventory_coverage": 0.60,
+    },
+    INGEST_DEPTH_STANDARD: {
+        "max_skip_ratio": 0.25,
+        "min_extracted_ratio": 0.50,
+        "min_bronze_facts": 1,
+        "min_inventory_probe_count": 3,
+        "min_inventory_probe_ratio": 0.30,
+        "min_inventory_coverage": 0.90,
+    },
+    INGEST_DEPTH_THOROUGH: {
+        "max_skip_ratio": 0.10,
+        "min_extracted_ratio": 0.75,
+        "min_bronze_facts": 1,
+        "min_inventory_probe_count": 5,
+        "min_inventory_probe_ratio": 0.50,
+        "min_inventory_coverage": 0.95,
+    },
+}
+
+# kept for backward compat — standard preset values
 MAX_SKIP_RATIO_ANSWER_COMPLETE = 0.25
 MIN_EXTRACTED_RATIO_ANSWER_COMPLETE = 0.50
 MIN_BRONZE_FACTS_ANSWER_COMPLETE = 1
 MIN_INVENTORY_PROBE_COUNT = 3
 MIN_INVENTORY_PROBE_RATIO = 0.30
-MIN_INVENTORY_COVERAGE = 0.90   # 90% of inventory items must have probe citation
+MIN_INVENTORY_COVERAGE = 0.90
 
 INVENTORY_PREFIX = "[INVENTORY]"
 
@@ -63,6 +95,21 @@ def normalize_ingest_mode(mode: str | None) -> str:
             f"or {INGEST_MODE_AUDIT!r}, got {mode!r}"
         )
     return value
+
+
+def normalize_ingest_depth(depth: str | None) -> str:
+    value = (depth or DEFAULT_INGEST_DEPTH).strip().lower()
+    if value not in DEPTH_THRESHOLDS:
+        raise ValueError(
+            f"ingest depth must be {INGEST_DEPTH_QUICK!r}, {INGEST_DEPTH_STANDARD!r}, "
+            f"or {INGEST_DEPTH_THOROUGH!r}, got {depth!r}"
+        )
+    return value
+
+
+def get_session_thresholds(session: dict[str, Any]) -> dict[str, float | int]:
+    depth = session.get("ingest_depth") or DEFAULT_INGEST_DEPTH
+    return DEPTH_THRESHOLDS.get(depth, DEPTH_THRESHOLDS[DEFAULT_INGEST_DEPTH])
 
 
 def validate_skip_reason(skip_reason: str, *, mode: str) -> None:
@@ -209,24 +256,28 @@ def validate_service_chunk_coverage(session: dict[str, Any], *, phase: str) -> N
     if pending:
         return  # finish_bronze_extraction handles pending explicitly
 
+    thresholds = get_session_thresholds(session)
+    max_skip = float(thresholds["max_skip_ratio"])
+    min_extracted = float(thresholds["min_extracted_ratio"])
+
     if extracted == 0:
         raise ValueError(
             f"Cannot {phase}: answer_complete ingest requires at least one extracted service chunk. "
             "Substantive source knowledge must be written to Bronze, not skipped."
         )
 
-    if float(stats["skip_ratio"]) > MAX_SKIP_RATIO_ANSWER_COMPLETE:
+    if float(stats["skip_ratio"]) > max_skip:
         raise ValueError(
             f"Cannot {phase}: too many service chunks skipped "
             f"({skipped}/{total} = {stats['skip_ratio']:.0%}). "
-            f"Max skip ratio is {MAX_SKIP_RATIO_ANSWER_COMPLETE:.0%} in answer_complete mode."
+            f"Max skip ratio is {max_skip:.0%} for depth={session.get('ingest_depth', DEFAULT_INGEST_DEPTH)}."
         )
 
-    if float(stats["extracted_ratio"]) < MIN_EXTRACTED_RATIO_ANSWER_COMPLETE:
+    if float(stats["extracted_ratio"]) < min_extracted:
         raise ValueError(
             f"Cannot {phase}: too few service chunks extracted "
             f"({extracted}/{total} = {stats['extracted_ratio']:.0%}). "
-            f"Min extracted ratio is {MIN_EXTRACTED_RATIO_ANSWER_COMPLETE:.0%} in answer_complete mode."
+            f"Min extracted ratio is {min_extracted:.0%} for depth={session.get('ingest_depth', DEFAULT_INGEST_DEPTH)}."
         )
 
 
@@ -260,11 +311,19 @@ def parse_inventory_items(inventory_content: str) -> list[str]:
     return items
 
 
-def inventory_probe_requirement(item_count: int) -> int:
+def inventory_probe_requirement(
+    item_count: int,
+    thresholds: dict[str, float | int] | None = None,
+) -> int:
     if item_count <= 0:
         return 0
-    ratio_based = int(item_count * MIN_INVENTORY_PROBE_RATIO + 0.999)
-    return min(item_count, max(MIN_INVENTORY_PROBE_COUNT, ratio_based))
+    t = thresholds or DEPTH_THRESHOLDS[DEFAULT_INGEST_DEPTH]
+    min_count = int(t["min_inventory_probe_count"])
+    ratio = float(t["min_inventory_probe_ratio"])
+    if min_count == 0 and ratio == 0.0:
+        return 0
+    ratio_based = int(item_count * ratio + 0.999)
+    return min(item_count, max(min_count, ratio_based))
 
 
 def _inventory_item_matches(probe_item: str, inventory_items: list[str]) -> bool:
@@ -297,7 +356,8 @@ def validate_inventory_probes(
         )
 
     inventory_items = parse_inventory_items(inventory.content)
-    required = inventory_probe_requirement(len(inventory_items))
+    thresholds = get_session_thresholds(session)
+    required = inventory_probe_requirement(len(inventory_items), thresholds)
     probes: list[dict[str, Any]] = list(session.get("inventory_probes") or [])
     if len(probes) < required:
         raise ValueError(
@@ -406,7 +466,8 @@ def calculate_coverage_score(
     total = len(session_chunks)
     skipped = sum(1 for c in session_chunks if c["status"] == "skipped")
     skip_ratio = skipped / total if total else 0.0
-    skip_ratio_ok = skip_ratio <= MAX_SKIP_RATIO_ANSWER_COMPLETE
+    thresholds = get_session_thresholds(session)
+    skip_ratio_ok = skip_ratio <= float(thresholds["max_skip_ratio"])
 
     return {
         "inventory_coverage": round(inventory_coverage, 3),
@@ -508,9 +569,11 @@ def validate_namespace_ready_for_complete(
             f"missing Bronze inventory chunk at {path} — content must start with {INVENTORY_PREFIX!r} "
             "listing every answer-critical entity (countries, fields, rules, codes, …)."
         )
-    if facts < MIN_BRONZE_FACTS_ANSWER_COMPLETE:
+    thresholds = get_session_thresholds(session)
+    min_facts = int(thresholds["min_bronze_facts"])
+    if facts < min_facts:
         errors.append(
-            f"only {facts} Bronze fact(s) at {path}; need at least {MIN_BRONZE_FACTS_ANSWER_COMPLETE} "
+            f"only {facts} Bronze fact(s) at {path}; need at least {min_facts} "
             "answer-critical fact(s) besides artifact and inventory."
         )
     if silver is None:
@@ -525,10 +588,12 @@ def validate_namespace_ready_for_complete(
     probes_submitted = len(session.get("inventory_probes") or []) if session else 0
     if mode == INGEST_MODE_ANSWER_COMPLETE and probes_submitted > 0:
         cov = calculate_coverage_score(session, store)
-        if cov["inventory_coverage"] < MIN_INVENTORY_COVERAGE:
+        min_cov = float(thresholds["min_inventory_coverage"])
+        if cov["inventory_coverage"] < min_cov:
             errors.append(
                 f"inventory_coverage {cov['inventory_coverage']:.0%} is below the required "
-                f"{MIN_INVENTORY_COVERAGE:.0%}. Uncovered items: {cov['uncovered_items']}. "
+                f"{min_cov:.0%} (depth={session.get('ingest_depth', DEFAULT_INGEST_DEPTH)}). "
+                f"Uncovered items: {cov['uncovered_items']}. "
                 "Add more inventory probes via submit_inventory_probes."
             )
         if not cov["section_coverage"]:
@@ -552,6 +617,23 @@ def validate_namespace_ready_for_complete(
     }
 
 
+def _probe_step_lines(thresholds: dict[str, float | int]) -> list[str]:
+    min_count = int(thresholds["min_inventory_probe_count"])
+    ratio = float(thresholds["min_inventory_probe_ratio"])
+    min_cov = float(thresholds["min_inventory_coverage"])
+    if min_count == 0 and ratio == 0.0:
+        return [
+            "  Inventory probes are optional at this depth but recommended.",
+            "  If submitted: each probe names an inventory line and cites active Bronze chunk_id(s).",
+        ]
+    return [
+        f"  Spot-check ≥{ratio:.0%} of inventory items (min {min_count}). Submit all probes in one call or across",
+        "  multiple calls — probes accumulate (re-submitting the same item updates its chunk_ids). Each probe",
+        "  names an inventory line and cites active Bronze chunk_id(s) that contain the answer.",
+        f"  Server blocks complete_ingest until ≥{min_cov:.0%} inventory coverage is reached.",
+    ]
+
+
 def build_protocol_lines(session: dict[str, Any]) -> list[str]:
     """Inline protocol returned by ingest_file / ingest_url."""
     if session.get("ingest_mode") == INGEST_MODE_AUDIT:
@@ -573,6 +655,8 @@ def build_protocol_lines(session: dict[str, Any]) -> list[str]:
     session_key = session["session_key"]
     source_ns = session["source_namespace"]
     mode = session.get("ingest_mode", DEFAULT_INGEST_MODE)
+    depth = session.get("ingest_depth", DEFAULT_INGEST_DEPTH)
+    thresholds = get_session_thresholds(session)
     chunks = session["chunks"]
     size_kb = session["content_size"] / 1024
     atomic_count = sum(1 for c in chunks if c["chunk_type"] == "atomic")
@@ -584,6 +668,7 @@ def build_protocol_lines(session: dict[str, Any]) -> list[str]:
         "",
         f"session_key: {session_key}",
         f"ingest_mode: {mode}",
+        f"ingest_depth: {depth}",
         f"file: {file_name} ({size_kb:.1f} KB)",
         f"content_sha256: {session['content_hash']}",
         f"authority: {session.get('authority') or '(infer from content)'}",
@@ -644,7 +729,8 @@ def build_protocol_lines(session: dict[str, Any]) -> list[str]:
         "  c. batch_mark_service_chunks(session_key, marks=[{chunk_id, status}, ...])",
         "",
         "STEP 5 — finish_bronze_extraction(session_key)",
-        "  Server rejects if: pending chunks, >25% skipped, <50% extracted, zero extracted.",
+        f"  Server rejects if: pending chunks, >{thresholds['max_skip_ratio']:.0%} skipped, "
+        f"<{thresholds['min_extracted_ratio']:.0%} extracted, zero extracted.",
         "",
         "STEP 6 — Write Silver per sub-namespace (index format)",
         "  For each sub-namespace that received Bronze chunks:",
@@ -656,10 +742,7 @@ def build_protocol_lines(session: dict[str, Any]) -> list[str]:
         f"    \"[{source_ns}/section1] description\\n[{source_ns}/section2] description\\n...\"",
         "",
         "STEP 6b — submit_inventory_probes(session_key, probes=[{item, chunk_ids}, ...])",
-        "  Spot-check ≥30% of inventory items (min 3). Submit all probes in one call or across multiple",
-        "  calls — probes accumulate (re-submitting the same item updates its chunk_ids). Each probe",
-        "  names an inventory line and cites active Bronze chunk_id(s) that contain the answer.",
-        "  Server blocks complete_ingest until the required number of probes is reached.",
+        *_probe_step_lines(thresholds),
         "",
         "STEP 7 — complete_ingest(session_key)",
         "  Server verifies: artifact + inventory + facts + Silver + inventory probes in storage.",

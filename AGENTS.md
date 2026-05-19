@@ -53,9 +53,17 @@ Gold = routing only (short search tags, not answers). Use Gold to find which nam
 
 When user writes `ingest_file` or `ingest_url`, call the tool and follow the **IRON RULES** protocol it returns inline. Do not respond to the user until `complete_ingest` succeeds.
 
-- PDF: `ingest_file(source_path=<path>, authority=<inferred>)` — default `mode=answer_complete`
-- Other formats: agent reads file → `ingest_file(content=<text>, file_name=<name>, authority=<inferred>)`
-- URL: `ingest_url(url=<url>)` — same stateful session as `ingest_file`
+**Before calling `ingest_file` or `ingest_url`, ask the user:**
+> "How thoroughly should I ingest this?
+> - **quick** — fast scan, up to 50% skip allowed, 60% coverage required
+> - **standard** — balanced (default), 25% max skip, 90% coverage
+> - **thorough** — deep extraction, 10% max skip, 95% coverage, stricter probes"
+
+If the user already said something like "quickly", "just route it", or "full extraction" — infer the depth without asking.
+
+- PDF/DOCX/DOC/HTML/ODT: `ingest_file(source_path=<path>, authority=<inferred>, depth=<chosen>)`
+- Other formats: agent reads file → `ingest_file(content=<text>, file_name=<name>, authority=<inferred>, depth=<chosen>)`
+- URL: `ingest_url(url=<url>, depth=<chosen>)` — same stateful session as `ingest_file`
 
 **Success criterion:** the source file will not exist later. Any question the document should answer must be answerable from brain alone.
 
@@ -67,9 +75,9 @@ When user writes `ingest_file` or `ingest_url`, call the tool and follow the **I
 4. Process **every** service chunk in batches by section (`get_service_chunks` + `batch_mark_service_chunks`); write Bronze into the section sub-namespace:
    - `content_type="reference"`, `immutable=True` — normative tables, SWIFT/BIC/IBAN/routing/account numbers
    - `content_type="fact"`, `immutable=True` recommended — prose instructions, rules, constraints
-5. `finish_bronze_extraction` — max 25% skipped, min 50% extracted, zero extracted forbidden
+5. `finish_bronze_extraction` — thresholds depend on `depth` (shown in session header)
 6. Silver per sub-namespace = `[chunk_id] one-line summary` index (pointer map, not synthesis); root Silver = `[SOURCES/{slug}/section] description` section index
-7. `submit_inventory_probes` — cite Bronze `chunk_id` for **≥90% of inventory items** (min 3). This is the primary quality gate: `complete_ingest` will fail if `inventory_coverage < 90%`.
+7. `submit_inventory_probes` — coverage requirement depends on `depth` (shown in session header). Primary quality gate: `complete_ingest` will fail if coverage is below threshold.
 8. `complete_ingest` — verifies artifact + inventory + facts + Silver + probes + coverage score; returns `coverage_score.uncovered_items` if any gaps remain
 9. `append_gold_aspect` — **MANDATORY** after complete_ingest: add routing tags on source namespace and all sub-namespaces. Without Gold the document is invisible to routing.
 
