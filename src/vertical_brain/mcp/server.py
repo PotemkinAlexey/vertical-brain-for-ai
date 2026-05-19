@@ -40,6 +40,24 @@ _PROTOCOL_VERSION = "2025-03-26"
 _SERVER_VERSION = "0.1.0"
 
 
+class ToolAccessDenied(Exception):
+    """Raised from `_before_tool` to reject a tool call with a custom error.
+
+    Surfaces as a JSON-RPC error with the given ``code`` (default -32004,
+    "access denied") and ``message`` (the exception's ``str``). Use this to
+    gate calls on RBAC, rate limits, schema policies, geofencing, etc.,
+    without dressing up validation errors as 500s.
+
+    The default code -32004 is reserved by Vertical Brain for application-
+    level denial; enterprise may use any negative integer outside the
+    JSON-RPC reserved range (-32700..-32600 reserved by the spec).
+    """
+
+    def __init__(self, message: str, *, code: int = -32004) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 class MessageParseError(ValueError):
     """Raised when stdio framing or JSON payload parsing fails."""
 
@@ -75,6 +93,57 @@ class VerticalBrainMCP(_IngestHandlers):
     # ------------------------------------------------------------------
     # Per-request extension hooks (overridden by enterprise subclasses)
     # ------------------------------------------------------------------
+
+    def _before_tool(
+        self,
+        name: str,
+        args: dict[str, Any],
+        *,
+        request_id: Any,
+    ) -> dict[str, Any]:
+        """Middleware hook invoked before schema validation and dispatch.
+
+        v1.13 extension point. Default returns ``args`` unchanged. Enterprise
+        subclasses override to:
+
+        - mutate ``args`` (e.g. inject ``root_path`` scoping from a tenant
+          claim, attach correlation ids, redact PII in queries),
+        - raise :class:`ToolAccessDenied` to reject the call with a custom
+          JSON-RPC error code/message (rate-limit, RBAC, policy gate),
+        - stash per-request state (e.g. for ``_current_chunk_filter``) on
+          ``self`` or a contextvars binding.
+
+        The return value MUST be a dict; it replaces ``args`` for the rest of
+        the dispatch pipeline (validation, tool body, audit log).
+
+        ``request_id`` is the JSON-RPC ``id`` of the calling request — useful
+        for log correlation. Hooks should not assume it is unique or non-null.
+        """
+        return args
+
+    def _after_tool(
+        self,
+        name: str,
+        args: dict[str, Any],
+        response: dict[str, Any],
+        *,
+        request_id: Any,
+    ) -> dict[str, Any]:
+        """Middleware hook invoked after the tool body returns successfully.
+
+        v1.13 extension point. Default returns ``response`` unchanged.
+        Enterprise subclasses override to:
+
+        - decorate responses (e.g. add a watermark, a billing usage record),
+        - scrub fields the open core surfaces but the enterprise must hide,
+        - emit external audit events alongside the durable audit_log row.
+
+        Errors raised here become JSON-RPC ``-32603`` internal errors;
+        successful tool bodies that crash the after-hook still surface as an
+        error to the client. Hook authors should swallow non-critical
+        failures internally to keep the read path resilient.
+        """
+        return response
 
     def _current_chunk_filter(self):  # noqa: ANN001 — Callable[[Chunk], bool] | None
         """Return the ACL filter to apply to read-path APIs for this request.
@@ -145,16 +214,30 @@ class VerticalBrainMCP(_IngestHandlers):
         args = params.get("arguments") or {}
         if not isinstance(args, dict):
             return self._error(req_id, -32602, "tool arguments must be an object")
+        try:
+            args = self._before_tool(name, dict(args), request_id=req_id)
+        except ToolAccessDenied as exc:
+            return self._error(req_id, exc.code, str(exc))
+        if not isinstance(args, dict):
+            return self._error(
+                req_id, -32603,
+                f"_before_tool must return a dict, got {type(args).__name__}",
+            )
         validation = validate_json_schema(args, _TOOLS_BY_NAME[name].get("inputSchema", {"type": "object"}))
         if not validation.valid:
             return self._error(req_id, -32602, f"Invalid tool arguments: {format_json_schema_errors(validation)}")
         try:
             text = self._call_tool(name, args)
-            return self._reply(req_id, {"content": [{"type": "text", "text": text}]})
+            response = self._reply(req_id, {"content": [{"type": "text", "text": text}]})
         except KeyError as exc:
             return self._error(req_id, -32602, f"Invalid tool arguments: missing {exc}")
         except Exception as exc:
             return self._error(req_id, -32603, f"{type(exc).__name__}: {exc}")
+        try:
+            response = self._after_tool(name, args, response, request_id=req_id)
+        except Exception as exc:
+            return self._error(req_id, -32603, f"_after_tool failed: {type(exc).__name__}: {exc}")
+        return response
 
     def _call_tool(self, name: str, args: dict[str, Any]) -> str:  # noqa: PLR0912
         # ── Read / orientation ──────────────────────────────────────────
