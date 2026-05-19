@@ -8,6 +8,7 @@ from vertical_brain.core.models import (
     StorageOperation,
     StorageOperationBatch,
 )
+from vertical_brain.core.errors import DuplicateBronzeError
 from vertical_brain.core.operations import StorageOperationExecutor
 from vertical_brain.storage.json_store import JsonStore
 
@@ -362,7 +363,7 @@ def test_append_bronze_duplicate_raises_error(tmp_path):
         chunk=ChunkInput(content="Databricks uses Delta Lake.", layer="bronze"),
     ))
 
-    with pytest.raises(ValueError, match="identical content already exists"):
+    with pytest.raises(DuplicateBronzeError, match="identical content already exists"):
         executor.apply(StorageOperation(
             operation="append_chunk",
             target_path="WORK/DataArt",
@@ -371,6 +372,24 @@ def test_append_bronze_duplicate_raises_error(tmp_path):
 
     # Only one chunk must exist
     assert len(store.get_chunks_by_path("WORK/DataArt")) == 1
+
+
+def test_typed_errors_remain_value_errors(tmp_path):
+    """Typed domain errors must still subclass ValueError so existing callers
+    (and the MCP server's catch-all) keep working."""
+    store = JsonStore(tmp_path)
+    executor = StorageOperationExecutor(store)
+    executor.apply(StorageOperation(
+        operation="append_chunk",
+        target_path="WORK/DataArt",
+        chunk=ChunkInput(content="Databricks uses Delta Lake.", layer="bronze"),
+    ))
+    with pytest.raises(ValueError):
+        executor.apply(StorageOperation(
+            operation="append_chunk",
+            target_path="WORK/DataArt",
+            chunk=ChunkInput(content="Databricks uses Delta Lake.", layer="bronze"),
+        ))
 
 
 def test_append_bronze_duplicate_does_not_write_chunk(tmp_path):

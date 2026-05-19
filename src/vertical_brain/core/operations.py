@@ -6,6 +6,15 @@ from contextlib import nullcontext
 from dataclasses import replace as dc_replace
 from typing import TYPE_CHECKING, Any, get_args
 
+from vertical_brain.core.errors import (
+    ChunkNotFoundError,
+    DuplicateBronzeError,
+    GoldGroundingError,
+    ImmutableChunkError,
+    SilverConflictError,
+    SilverUpdateError,
+    ValidationError,
+)
 from vertical_brain.core.gold import (
     MAX_GOLD_ASPECTS,
     GoldAspect,
@@ -71,7 +80,7 @@ class StorageOperationExecutor:
     def apply(self, operation: StorageOperation) -> OperationResult:
         validation = self.validate(operation)
         if not validation.valid:
-            raise ValueError(self._format_validation_errors(validation))
+            raise ValidationError(self._format_validation_errors(validation))
 
         result = self._apply_validated(operation)
         self._log_audit(operation, result)
@@ -80,7 +89,7 @@ class StorageOperationExecutor:
     def apply_batch(self, batch: StorageOperationBatch) -> OperationBatchResult:
         validation = self.validate_batch(batch)
         if not validation.valid:
-            raise ValueError(self._format_validation_errors(validation))
+            raise ValidationError(self._format_validation_errors(validation))
 
         transaction = getattr(self.store, "transaction", None)
         context = transaction() if callable(transaction) else nullcontext()
@@ -187,7 +196,7 @@ class StorageOperationExecutor:
         if is_bronze and not is_immutable and self.store.has_active_chunk_with_hash(
             operation.target_path, candidate.content_hash
         ):
-            raise ValueError(
+            raise DuplicateBronzeError(
                 f"Bronze chunk with identical content already exists at '{operation.target_path}'. "
                 f"Do not write duplicates — Silver stays clean when Bronze is unique. "
                 f"If the fact changed, mark the old chunk stale first with "
@@ -199,7 +208,7 @@ class StorageOperationExecutor:
                 if c.layer == "silver" and c.status == "active"
             ]
             if existing_silver:
-                raise ValueError(
+                raise SilverConflictError(
                     f"append_chunk(layer=silver) rejected at '{operation.target_path}': "
                     f"an active Silver already exists (id: {existing_silver[0].id}). "
                     f"Use update_silver with current_silver_id='{existing_silver[0].id}' to replace it. "
@@ -282,21 +291,21 @@ class StorageOperationExecutor:
             (c for c in self.store.list_chunks() if c.id == operation.current_silver_id), None
         )
         if old_chunk is None:
-            raise ValueError(
+            raise ChunkNotFoundError(
                 f"update_silver rejected: chunk '{operation.current_silver_id}' not found. "
                 f"Call read_context('{operation.target_path}') to get the current Silver id."
             )
         if old_chunk.status != "active":
-            raise ValueError(
+            raise SilverUpdateError(
                 f"update_silver rejected: chunk '{operation.current_silver_id}' is {old_chunk.status}, not active. "
                 f"Call read_context('{operation.target_path}') to get the current Silver id."
             )
         if old_chunk.layer != "silver":
-            raise ValueError(
+            raise SilverUpdateError(
                 f"update_silver rejected: chunk '{operation.current_silver_id}' is layer={old_chunk.layer}, not silver."
             )
         if old_chunk.node_path != operation.target_path:
-            raise ValueError(
+            raise SilverUpdateError(
                 f"update_silver rejected: chunk '{operation.current_silver_id}' belongs to "
                 f"'{old_chunk.node_path}', not '{operation.target_path}'."
             )
@@ -307,9 +316,9 @@ class StorageOperationExecutor:
                 (c for c in self.store.list_chunks() if c.id == src_id), None
             )
             if src is None:
-                raise ValueError(f"update_silver rejected: source chunk '{src_id}' not found.")
+                raise ChunkNotFoundError(f"update_silver rejected: source chunk '{src_id}' not found.")
             if src.layer == "gold":
-                raise ValueError(
+                raise SilverUpdateError(
                     f"update_silver rejected: source chunk '{src_id}' is Gold. "
                     f"Gold cannot be used as source evidence for Silver."
                 )
@@ -351,7 +360,7 @@ class StorageOperationExecutor:
         all_chunks = self.store.get_chunks_by_path(path, include_children=False)
         active_silver = [c for c in all_chunks if c.layer == "silver" and c.status == "active"]
         if not active_silver:
-            raise ValueError(
+            raise GoldGroundingError(
                 f"append_gold_aspect rejected for '{path}': no active Silver chunk found. "
                 f"Gold must be grounded in Silver. "
                 f"Call update_silver('{path}', ...) first to write a Silver summary, "
@@ -534,11 +543,11 @@ class StorageOperationExecutor:
         for chunk_id in operation.chunk_ids:
             chunk = self.store.get_chunk(chunk_id)
             if chunk is None:
-                raise ValueError(f"Chunk not found: {chunk_id}")
+                raise ChunkNotFoundError(f"Chunk not found: {chunk_id}")
             if chunk.node_path != operation.target_path:
                 raise ValueError(f"Chunk {chunk_id} does not belong to {operation.target_path}")
             if getattr(chunk, "immutable", False) and not getattr(operation, "force_immutable", False):
-                raise ValueError(
+                raise ImmutableChunkError(
                     f"Cannot mark immutable chunk '{chunk_id}' as {status} — immutable artifacts are "
                     f"protected from modification. To replace this artifact, create a new chunk and link to it."
                 )
