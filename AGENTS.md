@@ -29,7 +29,7 @@ Gold = routing only (short search tags, not answers). Use Gold to find which nam
 1. **Search before every Bronze write.** If a matching chunk exists — stop, do not duplicate.
 2. **One fact per chunk.** Each chunk must be independently meaningful and stale-able.
 3. **Bronze → Silver → Gold, always in this order.** After every Bronze write, update Silver. Never write Gold as the first record of a new idea.
-4. **Call `read_context` before every `update_silver`** to get `current_silver_id`.
+4. **Call `read_context` before every `update_silver`** — the Silver item's `chunk_id` in the response is the `current_silver_id` to pass.
 5. **For `batch_append`:** call `update_silver` once after the entire batch, not per chunk.
 6. **To correct wrong memory:** write a Bronze chunk with `content_type="correction"`, then update Silver. Do not overwrite Gold directly.
 7. **Canonical namespace first.** Durable knowledge belongs in its canonical topic namespace. Facts about a current storage, project, source, workstream, or other concrete topic must be written inside that topic's context. `META/agent-contract` is only for general operating rules; `META/sessions/*` is only a trace. `session_end` does not replace Bronze → Silver → Gold updates in the relevant namespace. If placement is unclear, route/read context before writing.
@@ -39,7 +39,7 @@ Gold = routing only (short search tags, not answers). Use Gold to find which nam
 - `append_chunk` rejected (identical content) — do not retry. Fact already recorded, or mark_stale the old one first.
 - `similar_bronze` returned — review. Mark stale only if the older chunk is superseded.
 - `chunk_too_large: true` — split into single-fact chunks, then update Silver once.
-- `aspect_too_long: true` — split into shorter search tags (target 30–100 chars each).
+- `aspects_too_long` returned (list of tags) — split each into shorter search tags (target 30–100 chars each).
 
 ## Destructive operations
 
