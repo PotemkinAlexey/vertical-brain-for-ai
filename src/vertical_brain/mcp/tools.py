@@ -175,9 +175,11 @@ _TOOLS: list[dict[str, Any]] = [
         "name": "route",
         "description": (
             "Find best-matching namespaces by comparing text against Gold summaries. "
-            "Returns `{candidates, semantic_endpoint, next_hint}`. "
-            "Use the hint to chain into `read_context` and, when needed, "
-            "`search_semantic` scoped to the top candidate. "
+            "Returns `{candidates, semantic_endpoint, next_hint}`. Each candidate "
+            "includes `match_source`: 'gold' for Gold-aspect hits, "
+            "'content_fallback' when the namespace was rescued by a Bronze/Silver "
+            "match (v1.7 deep-fallback). Use the hint to chain into `read_context` "
+            "and, when needed, `search_semantic` scoped to the top candidate. "
             "When `semantic_endpoint` is false, matching is overlap-based; "
             "behaviour improves automatically once an embedding endpoint is set."
         ),
@@ -187,6 +189,15 @@ _TOOLS: list[dict[str, Any]] = [
                 "text": {"type": "string"},
                 "limit": {"type": "integer"},
                 "threshold": {"type": "number"},
+                "fallback_threshold": {
+                    "type": "number",
+                    "description": (
+                        "When the top Gold score is below this value (default 0.55), "
+                        "the router falls back to a Bronze/Silver semantic search and "
+                        "merges those namespaces with the Gold candidates. Catches "
+                        "queries phrased in a language Gold was not authored in."
+                    ),
+                },
             },
             "required": ["text"],
         },

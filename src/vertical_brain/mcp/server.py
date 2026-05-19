@@ -261,15 +261,18 @@ class VerticalBrainMCP(_IngestHandlers):
             return result.to_json()
 
         if name == "route":
-            candidates = EmbeddingRouter(self._store, self._provider).find_candidates(
+            router = EmbeddingRouter(self._store, self._provider)
+            candidates = router.find_candidates_with_fallback(
                 args["text"],
                 threshold=args.get("threshold", 0.0),
                 limit=args.get("limit", 5),
+                fallback_threshold=args.get("fallback_threshold", 0.55),
             )
             semantic = is_semantic_provider(self._provider)
             payload = {
                 "candidates": [
-                    {"path": c.path, "score": round(c.score, 4), "gold_summary": c.gold_summary}
+                    {"path": c.path, "score": round(c.score, 4),
+                     "gold_summary": c.gold_summary, "match_source": c.match_source}
                     for c in candidates
                 ],
                 "semantic_endpoint": semantic,

@@ -371,3 +371,8 @@ class EmbeddingRouteCandidate:
     path: str
     score: float
     gold_summary: str
+    # v1.7: routing match provenance. "gold" — top score came from a Gold aspect
+    # (or path-token fallback for nodes without Gold); "content_fallback" — the
+    # namespace was promoted by a Bronze/Silver chunk match when no Gold candidate
+    # cleared the fallback_threshold. Defaults preserve v1.5/v1.6 behaviour.
+    match_source: str = "gold"

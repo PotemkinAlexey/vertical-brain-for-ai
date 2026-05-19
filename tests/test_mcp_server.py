@@ -246,6 +246,7 @@ def test_route_returns_namespace_candidates(tmp_path):
     assert len(candidates) >= 1
     assert candidates[0]["path"] == "WORK/DataArt"
     assert "score" in candidates[0]
+    assert candidates[0]["match_source"] in {"gold", "content_fallback"}
     assert data["semantic_endpoint"] is False
     assert "next_hint" in data
     assert "WORK/DataArt" in data["next_hint"]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from vertical_brain.core.embedding_search import EmbeddingSearch
 from vertical_brain.core.gold import gold_aspect_embed_key, normalize_gold_aspect_text, parse_gold_content
 from vertical_brain.core.models import EmbeddingRouteCandidate
 from vertical_brain.llm.embedding import EmbeddingProvider, cosine_similarity
@@ -112,6 +113,64 @@ class EmbeddingRouter:
         ]
         candidates.sort(key=lambda c: (-c.score, c.path))
         return candidates[:limit]
+
+    def find_candidates_with_fallback(
+        self,
+        text: str,
+        *,
+        threshold: float = 0.0,
+        limit: int = 5,
+        fallback_threshold: float = 0.55,
+    ) -> list[EmbeddingRouteCandidate]:
+        """Gold-first routing with a Bronze/Silver semantic fallback.
+
+        When the best Gold candidate scores below ``fallback_threshold`` (default
+        0.55, tuned so confident Gold-routed queries skip the extra work), this
+        method runs a semantic search over Bronze and Silver chunks and merges
+        the resulting namespaces with the Gold candidates. Each candidate carries
+        ``match_source`` so callers can distinguish a Gold hit from a content
+        rescue.
+
+        This costs at most one extra EmbeddingSearch pass (which itself relies on
+        cached chunk vectors after a reindex). When Gold is confident, this method
+        behaves identically to ``find_candidates``.
+        """
+        gold = self.find_candidates(text, threshold=threshold, limit=max(limit * 2, limit))
+        top_score = gold[0].score if gold else -1.0
+        if top_score >= fallback_threshold:
+            return gold[:limit]
+
+        # Gold did not produce a confident match — consult Bronze/Silver.
+        search = EmbeddingSearch(self._store, self._provider)
+        fallback_hits = search.search(
+            text,
+            limit=max(limit * 3, limit),
+            threshold=threshold,
+        )
+        fallback_by_path: dict[str, tuple[float, str]] = {}
+        for hit in fallback_hits:
+            if hit.layer == "gold":
+                # Gold was already considered upstream; avoid double-counting.
+                continue
+            existing = fallback_by_path.get(hit.path)
+            if existing is None or hit.score > existing[0]:
+                fallback_by_path[hit.path] = (hit.score, hit.snippet)
+
+        merged: dict[str, EmbeddingRouteCandidate] = {
+            c.path: c for c in gold
+        }
+        for path, (score, snippet) in fallback_by_path.items():
+            current = merged.get(path)
+            if current is None or score > current.score:
+                merged[path] = EmbeddingRouteCandidate(
+                    path=path,
+                    score=score,
+                    gold_summary=snippet,
+                    match_source="content_fallback",
+                )
+
+        ordered = sorted(merged.values(), key=lambda c: (-c.score, c.path))
+        return ordered[:limit]
 
     def _get_aspect_vector(self, aspect_text: str, *, expected_dimension: int) -> list[float]:
         embed_text = normalize_gold_aspect_text(aspect_text)
