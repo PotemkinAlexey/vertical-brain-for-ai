@@ -145,7 +145,9 @@ Install [Ollama](https://ollama.ai), pull an embedding model, then point Vertica
 }
 ```
 
-Vectors are cached persistently — embeddings are computed once and reused across sessions. Switching models triggers automatic cache invalidation.
+Vectors are cached persistently — each chunk is embedded once and reused across sessions. The cache is keyed by `(content_hash, model_name)`.
+
+Pick the embedding model before you index and keep it fixed. If you change `--embedding-model` later, semantic search fails fast with `IncompatibleEmbeddingModelError` — the cached vectors belong to the old model and are not comparable to the new one. Re-indexing under the new model (purge old vectors, re-embed every active chunk) is done programmatically via `EmbeddingSearch.trigger_reindexing(new_provider)`; there is not yet a CLI or MCP command for it.
 
 ---
 
