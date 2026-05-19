@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from vertical_brain.core.embedding_search import EmbeddingSearch
 from vertical_brain.core.gold import gold_aspect_embed_key, normalize_gold_aspect_text, parse_gold_content
-from vertical_brain.core.models import EmbeddingRouteCandidate
+from vertical_brain.core.models import Chunk, EmbeddingRouteCandidate
 from vertical_brain.llm.embedding import EmbeddingProvider, cosine_similarity
 
 if TYPE_CHECKING:
@@ -70,6 +70,8 @@ class EmbeddingRouter:
         text: str,
         threshold: float = 0.0,
         limit: int = 5,
+        *,
+        chunk_filter: Callable[[Chunk], bool] | None = None,
     ) -> list[EmbeddingRouteCandidate]:
         query_vec = self._provider.embed(text)
         expected_dimension = len(query_vec)
@@ -80,6 +82,8 @@ class EmbeddingRouter:
             c for c in self._store.list_chunks()  # type: ignore[attr-defined]
             if c.layer == "gold" and c.status == "active"
         ]
+        if chunk_filter is not None:
+            gold_chunks = [c for c in gold_chunks if chunk_filter(c)]
         gold_overflow_parents = _gold_overflow_parents(self._store)
         gold_overflow_paths = set(gold_overflow_parents)
 
@@ -121,6 +125,7 @@ class EmbeddingRouter:
         threshold: float = 0.0,
         limit: int = 5,
         fallback_threshold: float = 0.55,
+        chunk_filter: Callable[[Chunk], bool] | None = None,
     ) -> list[EmbeddingRouteCandidate]:
         """Gold-first routing with a Bronze/Silver semantic fallback.
 
@@ -134,8 +139,17 @@ class EmbeddingRouter:
         This costs at most one extra EmbeddingSearch pass (which itself relies on
         cached chunk vectors after a reindex). When Gold is confident, this method
         behaves identically to ``find_candidates``.
+
+        ``chunk_filter`` (v1.11) is applied both to the Gold-aspect scan and to
+        the Bronze/Silver fallback sweep so an ACL hides a namespace consistently
+        on both branches.
         """
-        gold = self.find_candidates(text, threshold=threshold, limit=max(limit * 2, limit))
+        gold = self.find_candidates(
+            text,
+            threshold=threshold,
+            limit=max(limit * 2, limit),
+            chunk_filter=chunk_filter,
+        )
         top_score = gold[0].score if gold else -1.0
         if top_score >= fallback_threshold:
             return gold[:limit]
@@ -146,6 +160,7 @@ class EmbeddingRouter:
             text,
             limit=max(limit * 3, limit),
             threshold=threshold,
+            chunk_filter=chunk_filter,
         )
         fallback_by_path: dict[str, tuple[float, str]] = {}
         for hit in fallback_hits:

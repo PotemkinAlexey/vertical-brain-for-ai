@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from vertical_brain.core.gold import gold_embed_text
 from vertical_brain.core.models import SearchResult
@@ -130,15 +130,18 @@ class EmbeddingSearch:
         *,
         root_path: str | None,
         include_stale: bool,
+        chunk_filter: "Callable[[Chunk], bool] | None" = None,
     ) -> list["Chunk"]:
         root_path = normalize_namespace_root_path(root_path)
         if root_path:
             chunks = self._store.get_chunks_by_path(root_path, include_children=True)  # type: ignore[attr-defined]
         else:
             chunks = self._store.list_chunks()  # type: ignore[attr-defined]
-        if include_stale:
-            return chunks
-        return [chunk for chunk in chunks if chunk.status == "active"]
+        if not include_stale:
+            chunks = [chunk for chunk in chunks if chunk.status == "active"]
+        if chunk_filter is not None:
+            chunks = [chunk for chunk in chunks if chunk_filter(chunk)]
+        return chunks
 
     def trigger_reindexing(
         self,
@@ -182,12 +185,17 @@ class EmbeddingSearch:
         include_stale: bool = False,
         threshold: float = 0.0,
         reranker: "RerankerProvider | None" = None,
+        chunk_filter: "Callable[[Chunk], bool] | None" = None,
     ) -> list[SearchResult]:
         if not query.strip() or limit <= 0:
             return []
 
         query_vec = self._embed(query)
-        candidates = self._candidate_chunks(root_path=root_path, include_stale=include_stale)
+        candidates = self._candidate_chunks(
+            root_path=root_path,
+            include_stale=include_stale,
+            chunk_filter=chunk_filter,
+        )
         keyed = [(chunk, *_chunk_embed_info(chunk)) for chunk in candidates]
         vectors = self._resolve_vectors(keyed, expected_dimension=len(query_vec))
 

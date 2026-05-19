@@ -3,10 +3,11 @@ from __future__ import annotations
 import os
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from vertical_brain.core.context_lock import ContextLock
 from vertical_brain.core.models import (
+    Chunk,
     ContextBudget,
     ContextPolicy,
     Link,
@@ -122,12 +123,14 @@ class ContextSession:
         items_per_context: int = 6,
         include_ancestors: bool = True,
         link_expansion: str = "handles_only",
+        chunk_filter: Callable[[Chunk], bool] | None = None,
     ) -> SearchContextResult:
         results = self.search.search(
             query,
             root_path=root_path,
             limit=search_limit,
             include_stale=False,
+            chunk_filter=chunk_filter,
         )
         handles = [_handle_from_result(result) for result in results]
         candidate_paths = [rank.path for rank in rank_paths_from_results(results)]
@@ -139,7 +142,9 @@ class ContextSession:
         )
         budget = ContextBudget(max_items=max(0, items_per_context))
         locked_contexts = [
-            self.lock.open_locked_context(path, policy=policy, budget=budget)
+            self.lock.open_locked_context(
+                path, policy=policy, budget=budget, chunk_filter=chunk_filter
+            )
             for path in selected_paths
         ]
 
@@ -198,6 +203,7 @@ class ContextSession:
         link_expansion: str = "handles_only",
         threshold: float = 0.0,
         reranker: "RerankerProvider | None" = None,
+        chunk_filter: Callable[[Chunk], bool] | None = None,
     ) -> SearchContextResult:
         from vertical_brain.core.embedding_search import EmbeddingSearch
         results = EmbeddingSearch(self.store, provider).search(
@@ -206,6 +212,7 @@ class ContextSession:
             limit=search_limit,
             threshold=threshold,
             reranker=reranker,
+            chunk_filter=chunk_filter,
         )
         handles = [_handle_from_result(result) for result in results]
         candidate_paths = [rank.path for rank in rank_paths_from_results(results)]
@@ -217,7 +224,9 @@ class ContextSession:
         )
         budget = ContextBudget(max_items=max(0, items_per_context))
         locked_contexts = [
-            self.lock.open_locked_context(path, policy=policy, budget=budget)
+            self.lock.open_locked_context(
+                path, policy=policy, budget=budget, chunk_filter=chunk_filter
+            )
             for path in selected_paths
         ]
         return SearchContextResult(

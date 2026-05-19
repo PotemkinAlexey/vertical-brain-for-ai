@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from vertical_brain.core.gold import parse_gold_content
 from vertical_brain.core.models import (
+    Chunk,
     ContextBudget,
     ContextItem,
     ContextPolicy,
@@ -17,6 +18,18 @@ if TYPE_CHECKING:
 
 _SYMMETRIC_LINK_TYPES = {"peer", "related_to"}
 _LAYER_PRIORITY: dict[str, int] = {"gold": 0, "silver": 1, "bronze": 2}
+
+# v1.11 ACL-style filter: receives a Chunk, returns True to keep / False to hide.
+# Default `None` = no filtering (full visibility). Enterprise uses this for
+# row-level ACL based on chunk.metadata.classification, tenant_id, etc.
+ChunkFilter = Callable[[Chunk], bool]
+
+
+def _visible(chunks: list[Chunk], chunk_filter: ChunkFilter | None) -> list[Chunk]:
+    """Apply the optional ACL filter; pure passthrough when filter is None."""
+    if chunk_filter is None:
+        return chunks
+    return [c for c in chunks if chunk_filter(c)]
 
 
 class ContextLock:
@@ -34,6 +47,8 @@ class ContextLock:
         target_path: str,
         policy: ContextPolicy | None = None,
         budget: ContextBudget | None = None,
+        *,
+        chunk_filter: ChunkFilter | None = None,
     ) -> LockedContext:
         policy = policy or ContextPolicy()
         budget = budget or ContextBudget()
@@ -44,7 +59,10 @@ class ContextLock:
         if policy.include_ancestors:
             for ancestor_path in self.store.get_ancestors(target_path):
                 gold_chunks = sorted(
-                    [c for c in self.store.get_chunks_by_path(ancestor_path) if c.layer == "gold" and c.status == "active"],
+                    _visible(
+                        [c for c in self.store.get_chunks_by_path(ancestor_path) if c.layer == "gold" and c.status == "active"],
+                        chunk_filter,
+                    ),
                     key=lambda c: c.created_at,
                 )
                 if gold_chunks:
@@ -61,7 +79,10 @@ class ContextLock:
                     )
 
         target_gold = sorted(
-            [c for c in self.store.get_chunks_by_path(target_path) if c.layer == "gold" and c.status == "active"],
+            _visible(
+                [c for c in self.store.get_chunks_by_path(target_path) if c.layer == "gold" and c.status == "active"],
+                chunk_filter,
+            ),
             key=lambda c: c.created_at,
         )
         if policy.include_target and target_gold:
@@ -78,8 +99,9 @@ class ContextLock:
             )
 
         if policy.include_target:
+            target_chunks = _visible(self.store.get_chunks_by_path(target_path), chunk_filter)
             for chunk in sorted(
-                self.store.get_chunks_by_path(target_path),
+                target_chunks,
                 key=lambda c: (_LAYER_PRIORITY.get(c.layer, 3), c.created_at),
             ):
                 if chunk.status == "active" and chunk.layer != "gold":
@@ -103,7 +125,8 @@ class ContextLock:
                 if handle.target_path in visited:
                     continue
                 visited.add(handle.target_path)
-                for chunk in self.store.get_chunks_by_path(handle.target_path):
+                linked_chunks = _visible(self.store.get_chunks_by_path(handle.target_path), chunk_filter)
+                for chunk in linked_chunks:
                     if chunk.status == "active":
                         omitted_items += self._append_with_budget(
                             items,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from vertical_brain.core.models import Chunk, SearchResult
 from vertical_brain.core.namespace_map import normalize_namespace_root_path
@@ -53,19 +53,45 @@ class BrainSearch:
         root_path: str | None = None,
         limit: int = 10,
         include_stale: bool = False,
+        chunk_filter: Callable[[Chunk], bool] | None = None,
     ) -> list[SearchResult]:
         root_path = normalize_namespace_root_path(root_path)
+        # When a filter is set, oversample so we can apply it post-search and
+        # still return up to `limit` visible results. The backend FTS index
+        # has no way to evaluate Python callables.
+        effective_limit = limit * 3 if chunk_filter is not None and limit > 0 else limit
         search = getattr(self.store, "search", None)
         if callable(search):
-            return search(query, root_path=root_path, limit=limit, include_stale=include_stale)
-        return lexical_search(
-            nodes=self.store.list_nodes(),
-            chunks=self.store.list_chunks(),
-            query=query,
-            root_path=root_path,
-            limit=limit,
-            include_stale=include_stale,
-        )
+            results = search(
+                query,
+                root_path=root_path,
+                limit=effective_limit,
+                include_stale=include_stale,
+            )
+        else:
+            results = lexical_search(
+                nodes=self.store.list_nodes(),
+                chunks=self.store.list_chunks(),
+                query=query,
+                root_path=root_path,
+                limit=effective_limit,
+                include_stale=include_stale,
+            )
+        if chunk_filter is None:
+            return results
+        get_chunk = getattr(self.store, "get_chunk", None)
+        if not callable(get_chunk):
+            return results
+        kept: list[SearchResult] = []
+        for result in results:
+            if result.chunk_id is None:
+                continue
+            chunk = get_chunk(result.chunk_id)
+            if chunk is not None and chunk_filter(chunk):
+                kept.append(result)
+            if len(kept) >= limit:
+                break
+        return kept
 
 
 def tokenize_query(query: str) -> list[str]:

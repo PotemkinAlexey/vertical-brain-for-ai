@@ -72,6 +72,26 @@ class VerticalBrainMCP(_IngestHandlers):
     # Helpers
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Per-request extension hooks (overridden by enterprise subclasses)
+    # ------------------------------------------------------------------
+
+    def _current_chunk_filter(self):  # noqa: ANN001 — Callable[[Chunk], bool] | None
+        """Return the ACL filter to apply to read-path APIs for this request.
+
+        v1.11 extension point. Default returns ``None`` (full visibility).
+        Enterprise subclasses override to inject row-level ACL — for example,
+        ``lambda c: c.metadata.get("classification") in allowed_levels`` once
+        v1.12 lands the ``metadata`` slot, or any chunk attribute filter today
+        (layer, content_type, source, node_path).
+
+        Threaded through `read_context`, `search`, `search_semantic`, `route`,
+        `context_search`, and `context_search_semantic` handlers; respected by
+        `ContextLock.open_locked_context`, `BrainSearch.search`,
+        `EmbeddingSearch.search`, and `EmbeddingRouter.find_candidates*`.
+        """
+        return None
+
     @staticmethod
     def _reply(req_id: Any, result: Any) -> dict[str, Any]:
         return {"jsonrpc": "2.0", "id": req_id, "result": result}
@@ -176,7 +196,10 @@ class VerticalBrainMCP(_IngestHandlers):
             )
             budget = ContextBudget(max_items=args.get("max_items", 20))
             locked = ContextLock(self._store).open_locked_context(  # type: ignore[arg-type]
-                args["path"], policy=policy, budget=budget
+                args["path"],
+                policy=policy,
+                budget=budget,
+                chunk_filter=self._current_chunk_filter(),
             )
             payload = locked.to_dict()
             query = args.get("query")
@@ -222,6 +245,7 @@ class VerticalBrainMCP(_IngestHandlers):
                 root_path=root_path_from_args(args),
                 limit=args.get("limit", 10),
                 include_stale=args.get("include_stale", False),
+                chunk_filter=self._current_chunk_filter(),
             )
             return json.dumps([
                 {"path": r.path, "score": r.score, "layer": r.layer,
@@ -236,6 +260,7 @@ class VerticalBrainMCP(_IngestHandlers):
                 limit=args.get("limit", 10),
                 threshold=args.get("threshold", 0.0),
                 reranker=self._reranker,
+                chunk_filter=self._current_chunk_filter(),
             )
             biased = apply_layer_bias(raw)
             payload = {
@@ -257,6 +282,7 @@ class VerticalBrainMCP(_IngestHandlers):
                 context_limit=args.get("context_limit", 3),
                 items_per_context=args.get("items_per_context", 6),
                 include_ancestors=args.get("include_ancestors", True),
+                chunk_filter=self._current_chunk_filter(),
             )
             return result.to_json()
 
@@ -271,6 +297,7 @@ class VerticalBrainMCP(_IngestHandlers):
                 include_ancestors=args.get("include_ancestors", True),
                 threshold=args.get("threshold", 0.0),
                 reranker=self._reranker,
+                chunk_filter=self._current_chunk_filter(),
             )
             return result.to_json()
 
@@ -281,6 +308,7 @@ class VerticalBrainMCP(_IngestHandlers):
                 threshold=args.get("threshold", 0.0),
                 limit=args.get("limit", 5),
                 fallback_threshold=args.get("fallback_threshold", 0.55),
+                chunk_filter=self._current_chunk_filter(),
             )
             semantic = is_semantic_provider(self._provider)
             payload = {
