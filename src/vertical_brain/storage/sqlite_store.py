@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Iterator
 from uuid import uuid4
 
 from vertical_brain.core.gold import gold_aspect_embed_key, parse_gold_content
@@ -24,6 +24,10 @@ from vertical_brain.core.search import fts_query, lexical_search, make_snippet, 
 # SQLite's busy_timeout does not reliably apply to journal mode switching on
 # all platforms/versions — a Python-level lock prevents the race entirely.
 _WAL_INIT_LOCK = threading.Lock()
+
+# Current on-disk schema version. Bump by one for every entry added to
+# SQLiteStore._migration_steps so existing databases can be upgraded in order.
+_SCHEMA_VERSION = 1
 
 
 class SQLiteStore(StorageDerivationsMixin):
@@ -145,6 +149,12 @@ class SQLiteStore(StorageDerivationsMixin):
                 session_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS schema_version (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                version INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         self.conn.commit()
@@ -157,6 +167,54 @@ class SQLiteStore(StorageDerivationsMixin):
             "CREATE INDEX IF NOT EXISTS idx_chunks_dedup ON chunks(node_path, status, content_hash)"
         )
         self.conn.commit()
+        self._apply_migrations()
+
+    def _migration_steps(self) -> list[tuple[int, Callable[[], None]]]:
+        """Ordered (target_version, step) pairs for upgrading tracked databases.
+
+        Each step upgrades a database recorded at ``target_version - 1`` to
+        ``target_version``. Version 1 is the baseline and needs no step.
+
+        When the schema next changes structurally: update the CREATE TABLE
+        baseline above, append a (2, self._migrate_v2) pair here, and bump
+        _SCHEMA_VERSION to 2. A migration author adding the first step must
+        also decide how an untracked legacy database (see _apply_migrations)
+        is brought to version 1 before the step runs.
+        """
+        return []
+
+    def _apply_migrations(self) -> None:
+        """Bring the database up to _SCHEMA_VERSION via ordered migration steps.
+
+        A database with no recorded version is assumed current — it was either
+        just created by the CREATE TABLE baseline or already patched by the
+        additive _migrate_*_columns helpers — and is simply stamped.
+        """
+        row = self.conn.execute("SELECT version FROM schema_version WHERE id = 1").fetchone()
+        if row is None:
+            self.conn.execute(
+                "INSERT INTO schema_version (id, version, updated_at) VALUES (1, ?, ?)",
+                (_SCHEMA_VERSION, utc_now()),
+            )
+            self.conn.commit()
+            return
+
+        current = row["version"]
+        for target, step in self._migration_steps():
+            if current < target:
+                step()
+                current = target
+        if current != row["version"]:
+            self.conn.execute(
+                "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+                (current, utc_now()),
+            )
+            self.conn.commit()
+
+    def schema_version(self) -> int:
+        """Return the schema version recorded in the database."""
+        row = self.conn.execute("SELECT version FROM schema_version WHERE id = 1").fetchone()
+        return int(row["version"]) if row is not None else 0
 
     def _migrate_node_columns(self) -> None:
         existing = {row["name"] for row in self.conn.execute("PRAGMA table_info(nodes)").fetchall()}

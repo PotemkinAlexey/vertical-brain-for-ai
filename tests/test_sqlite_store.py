@@ -300,6 +300,16 @@ def test_sqlite_vacuum_respects_retention_window(tmp_path):
     assert store.get_chunks_by_path("WORK/Recent")[0].id == stale.id
 
 
+def test_sqlite_records_and_keeps_schema_version(tmp_path):
+    store = SQLiteStore(tmp_path)
+    assert store.schema_version() == 1
+    store.close()
+
+    # Reopening an existing database must not change the recorded version.
+    reopened = SQLiteStore(tmp_path)
+    assert reopened.schema_version() == 1
+
+
 def test_sqlite_close_closes_connection(tmp_path):
     store = SQLiteStore(tmp_path)
     store.close()
