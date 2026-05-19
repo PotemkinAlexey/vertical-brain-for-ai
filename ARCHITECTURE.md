@@ -30,7 +30,7 @@ A node is a namespace path. It is created automatically when a chunk is written 
 | `path` | string | Slash-separated path, e.g. `WORK/DataArt` |
 | `name` | string | Last segment of the path |
 | `parent_path` | string\|null | Parent path (null for roots) |
-| `node_type` | string | `namespace` or `root` (default `"default"`) |
+| `node_type` | string | Node category — reserved; currently always `"default"` |
 | `version` | int | Monotonically increasing; incremented on every mutation |
 | `is_dirty` | bool | True if content changed since last Gold rebuild |
 | `created_at` | ISO 8601 | UTC creation time |
@@ -49,7 +49,7 @@ A chunk is a single piece of content at a node. Multiple chunks can coexist at t
 | `layer` | `bronze`\|`silver`\|`gold` | Knowledge quality layer |
 | `content` | string | The actual text |
 | `content_type` | enum | `fact`, `reference`, `decision`, `question`, `note`, `code`, `artifact`, `correction` |
-| `status` | enum | `active`, `stale`, `superseded`, `legacy`, `contradicted` |
+| `status` | enum | `active`, `stale`, `superseded`, `legacy`, `contradicted`, `uncertain` |
 | `source` | string | Who produced this: `user`, `model`, `optimizer:namespace_compaction`, etc. |
 | `confidence` | float [0,1] | Routing/quality signal |
 | `lineage` | list[UUID] | IDs of source chunks this was distilled from |
@@ -173,9 +173,10 @@ JSON Schema validation (json_schema.py)
   │
   ▼
 StorageOperationExecutor.apply_batch()
-  │   - Opens transaction (SQLite: WAL savepoint)
+  │   - Opens a transaction (SQLite: BEGIN; nested transaction()
+  │     calls use SAVEPOINT so inner blocks roll back independently)
   │   - OCC check inside transaction: branch_path + start_version
-  │   - Applies each operation in order
+  │   - Applies each operation in order via the _APPLY_DISPATCH table
   │   - Marks ancestors dirty + increments version
   │   - Commits atomically
   │
@@ -200,7 +201,8 @@ The optimizer always stamps `branch_path`/`start_version` from the snapshot it r
 vertical_brain/
 ├── core/
 │   ├── models.py             — Data classes: Chunk, Node, Link, StorageOperation, …
-│   ├── operations.py         — StorageOperationExecutor: validate + apply
+│   ├── operations.py         — StorageOperationExecutor: validate + dispatch + apply
+│   ├── errors.py             — Typed domain errors (VerticalBrainError + subclasses)
 │   ├── optimizer.py          — SimpleOptimizer: dedup + compaction + decay + link discovery
 │   ├── vector_lsh.py         — LSH candidate generation for discover_links at scale
 │   ├── gold.py               — GoldAspect v2, parse/serialize, legacy GoldDocument
@@ -216,7 +218,8 @@ vertical_brain/
 │
 ├── storage/
 │   ├── protocol.py           — StorageProvider Protocol (runtime-checkable)
-│   ├── sqlite_store.py       — SQLiteStore: WAL, FTS5, transactions, vector cache
+│   ├── derivations.py        — StorageDerivationsMixin: backend-agnostic derivations
+│   ├── sqlite_store.py       — SQLiteStore: WAL, FTS5, transactions, vector cache, schema_version
 │   ├── json_store.py         — JsonStore: human-readable files, dev/debug
 │   └── thread_local_store.py — ThreadLocalSQLiteStoreProxy: per-thread instances
 │
@@ -226,7 +229,10 @@ vertical_brain/
 │
 ├── mcp/
 │   ├── server.py             — MCP stdio server (JSON-RPC 2.0, NDJSON over stdio)
-│   └── ingest_protocol.py    — Ingest session rules, splitting, answer_complete gates
+│   ├── tools.py              — MCP tool schemas (_TOOLS) and dispatch lookup
+│   ├── ingest_handlers.py    — _IngestHandlers mixin: ingest session lifecycle
+│   ├── ingest_protocol.py    — Ingest session rules, splitting, answer_complete gates
+│   └── extractors/           — Source text extraction: pdf, docx, doc, html, odt
 │
 └── cli/
     └── main.py               — `vb` CLI entry point
@@ -266,7 +272,7 @@ tree_text() -> str
 ```
 
 Optional extension protocols:
-- `VectorCacheStorageProvider` — `get_vector`, `set_vector`, `delete_vectors_for_model`
+- `VectorCacheStorageProvider` — `get_vector`, `get_vectors`, `set_vector`, `delete_vectors_for_model`
 - `EmbeddingSchemaStorageProvider` — `get_embedding_schema`, `set_embedding_schema`
 
 `EmbeddingSearch` and `EmbeddingRouter` detect these extensions at runtime via `getattr` and degrade gracefully when absent.
@@ -295,7 +301,7 @@ Vectors are stored keyed by `(content_hash, model_name)`:
 - SQLite: `vector_cache` table (content_hash, model_name, vector_json, created_at)
 - JSON: `vector_cache.json` flat dict
 
-On `EmbeddingSearch` init, the stored model name is compared against the provider's `model_name`. Mismatches raise `IncompatibleEmbeddingModelError`. Switching providers via `trigger_reindexing(new_provider)` purges old vectors, updates the schema, and re-embeds all active chunks.
+On `EmbeddingSearch` init, the stored model name is compared against the provider's `model_name`. Mismatches raise `IncompatibleEmbeddingModelError`. To switch models, run the `vb reindex` CLI command — it purges the old model's vectors, records the new model in the embedding schema, and re-embeds all active chunks (`EmbeddingSearch.trigger_reindexing(new_provider)` is the underlying call).
 
 ---
 
@@ -310,6 +316,8 @@ These invariants are preserved by the executor and should remain covered by test
 5. **Gold aspects are upserted by text** — exact-text duplicates refresh `updated_at`, never duplicate.
 6. **OCC check is inside the transaction** — a version mismatch rolls back the entire batch.
 7. **`rename_namespace` is atomic** — wrapped in `with self.transaction()` in SQLite.
+8. **Bronze is deduplicated** — `append_chunk(layer=bronze)` rejects an exact-content duplicate at the same path with `DuplicateBronzeError` (immutable chunks are exempt).
+9. **Gold must be grounded in Silver** — `append_gold_aspect` requires an active Silver chunk at the namespace, else `GoldGroundingError`.
 
 ---
 
@@ -319,4 +327,4 @@ These invariants are preserved by the executor and should remain covered by test
 - **No real LLM routing.** `LLMRouter` expects JSON responses; plug in a real LLM via the response file mechanism or by subclassing.
 - **Gold compaction is manual.** `append_gold_aspect` is called explicitly; there is no background Gold promoter.
 - **FTS5 requires SQLite with FTS5 compiled in.** Falls back to prefix search if unavailable.
-- **Python 3.11+.** Uses `Self` and structural pattern matching in places.
+- **Python 3.11+.** `Layer`, `ChunkStatus`, and `OperationType` are `enum.StrEnum`, introduced in 3.11.

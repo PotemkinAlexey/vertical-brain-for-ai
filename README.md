@@ -1,8 +1,10 @@
 # Vertical Brain
 
-A personal context lakehouse for AI assistants — hierarchical, layered, transactional, with zero Python runtime dependencies.
+**Structured long-term memory for AI assistants.**
 
-Vertical Brain gives your AI a **structured memory** instead of a flat context window. Knowledge is organized into namespace hierarchies, promoted through Bronze → Silver → Gold quality layers, and exposed to models through locked context capsules that prevent cross-domain leakage.
+An AI's context window is flat and short-lived: the assistant forgets everything between sessions, and within a session important facts drown in raw chatter. Vertical Brain replaces that with a real knowledge base. What the assistant learns is filed under topic namespaces — folders like `WORK/DataArt/Databricks` — and each fact is progressively refined: from a raw note (**Bronze**), to a clean summary (**Silver**), to a short routing tag (**Gold**). When the model needs context, Vertical Brain hands it back one topic at a time, so unrelated domains never leak into each other.
+
+It runs as an MCP server with zero Python runtime dependencies.
 
 ---
 
