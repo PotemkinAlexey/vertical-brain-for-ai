@@ -129,6 +129,14 @@ def build_parser() -> argparse.ArgumentParser:
     mcp.add_argument("--embedding-model", default="nomic-embed-text", help="Embedding model name")
     mcp.add_argument("--embedding-api-key", default="", help="API key for the embedding endpoint")
 
+    reindex = sub.add_parser(
+        "reindex",
+        help="Rebuild the embedding vector cache under a new model (run after changing --embedding-model)",
+    )
+    reindex.add_argument("--embedding-url", default=None, help="OpenAI-compatible embeddings endpoint URL")
+    reindex.add_argument("--embedding-model", default="nomic-embed-text", help="Embedding model name")
+    reindex.add_argument("--embedding-api-key", default="", help="API key for the embedding endpoint")
+
     session_start = sub.add_parser("session-start")
     session_start.add_argument("--path", default=None, help="Limit to a namespace branch")
     session_start.add_argument("--max-depth", type=int, default=None, help="Maximum depth relative to --path")
@@ -303,6 +311,33 @@ def main() -> None:
             else MockEmbeddingProvider()
         )
         run_stdio(store, provider)
+
+    elif args.command == "reindex":
+        provider = (
+            HttpEmbeddingProvider(
+                url=args.embedding_url,
+                model=args.embedding_model,
+                api_key=args.embedding_api_key,
+            )
+            if args.embedding_url
+            else MockEmbeddingProvider()
+        )
+        new_model = getattr(provider, "model_name", None)
+        # Purge vectors cached under the previously indexed model — they belong
+        # to a different model and are not comparable to the new ones.
+        get_schema = getattr(store, "get_embedding_schema", None)
+        old_schema = get_schema() if callable(get_schema) else None
+        old_model = old_schema["model_name"] if old_schema else None
+        if old_model and old_model != new_model:
+            delete_vectors = getattr(store, "delete_vectors_for_model", None)
+            if callable(delete_vectors):
+                purged = delete_vectors(old_model)
+                print(f"Purged {purged} vector(s) cached under '{old_model}'.")
+        # validate_schema=False: reindex deliberately replaces the indexed model,
+        # so the IncompatibleEmbeddingModelError guard must not fire here.
+        search = EmbeddingSearch(store, provider, validate_schema=False)
+        count = search.trigger_reindexing(provider)
+        print(f"Re-indexed {count} active chunk(s) under '{new_model or 'mock'}'.")
 
     elif args.command == "session-start":
         print(ContextSession(store).session_prompt(

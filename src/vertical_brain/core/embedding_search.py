@@ -64,12 +64,14 @@ class EmbeddingSearch:
         if stored["model_name"] != model_name:
             raise IncompatibleEmbeddingModelError(
                 f"Provider model '{model_name}' is incompatible with indexed model "
-                f"'{stored['model_name']}'. Rebuild the embedding index before searching."
+                f"'{stored['model_name']}'. Run `vb reindex --embedding-model {model_name} "
+                f"--embedding-url <endpoint>` to rebuild the vector cache under the new model."
             )
         if dim > 0 and stored.get("vector_dimension", dim) != dim:
             raise IncompatibleEmbeddingModelError(
                 f"Provider dimension {dim} is incompatible with indexed dimension "
-                f"{stored['vector_dimension']}. Rebuild the embedding index before searching."
+                f"{stored['vector_dimension']}. Run `vb reindex --embedding-model {model_name} "
+                f"--embedding-url <endpoint>` to rebuild the vector cache under the new model."
             )
 
     def _get_vector(

@@ -165,3 +165,22 @@ Expected behavior:
 5. For apply, validate the full batch before the first write.
 6. Return strict JSON with operation results and validation status.
 ```
+
+### Reindex
+
+Rebuild the embedding vector cache after changing the embedding model.
+
+```bash
+vb reindex --embedding-url http://localhost:11434/v1/embeddings --embedding-model nomic-embed-text
+```
+
+Expected behavior:
+
+```text
+1. Purge vectors cached under the previously indexed model.
+2. Record the new model in the embedding schema.
+3. Re-embed every active chunk under the new model.
+4. Print the count of re-indexed chunks.
+```
+
+The embedding vector cache is keyed by `(content_hash, model_name)`. Switching `--embedding-model` without reindexing makes semantic search fail with `IncompatibleEmbeddingModelError` — run `vb reindex` once under the new model to recover.

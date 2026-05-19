@@ -562,6 +562,26 @@ def test_cli_search_uses_sqlite_fts_backend(monkeypatch, capsys, tmp_path):
     assert "SQLite FTS search note" in output
 
 
+def test_cli_reindex_rebuilds_vector_cache(monkeypatch, capsys, tmp_path):
+    response_file = write_llm_response(tmp_path, "ingest.json", ingest_response())
+    run_cli(
+        monkeypatch,
+        capsys,
+        tmp_path,
+        "--storage-backend",
+        "sqlite",
+        "--llm-response-file",
+        str(response_file),
+        "ingest",
+        "Reindex test note.",
+    )
+
+    output = run_cli(monkeypatch, capsys, tmp_path, "--storage-backend", "sqlite", "reindex")
+
+    assert "Re-indexed" in output
+    assert "active chunk(s)" in output
+
+
 def test_cli_context_search_opens_locked_context_from_candidate_paths(monkeypatch, capsys, tmp_path):
     structured_response_file = write_llm_response(tmp_path, "structured.json", ingest_response())
     run_cli(
