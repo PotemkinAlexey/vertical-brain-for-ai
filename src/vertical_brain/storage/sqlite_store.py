@@ -192,8 +192,12 @@ class SQLiteStore(StorageDerivationsMixin):
         """
         row = self.conn.execute("SELECT version FROM schema_version WHERE id = 1").fetchone()
         if row is None:
+            # ON CONFLICT DO NOTHING: a second connection opening the same
+            # database concurrently may insert the row between our SELECT and
+            # INSERT — the upsert keeps that race harmless.
             self.conn.execute(
-                "INSERT INTO schema_version (id, version, updated_at) VALUES (1, ?, ?)",
+                "INSERT INTO schema_version (id, version, updated_at) VALUES (1, ?, ?) "
+                "ON CONFLICT(id) DO NOTHING",
                 (_SCHEMA_VERSION, utc_now()),
             )
             self.conn.commit()
