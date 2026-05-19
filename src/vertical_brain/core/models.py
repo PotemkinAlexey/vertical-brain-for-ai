@@ -277,6 +277,12 @@ class LockedContext(JsonSerializable):
     budget: ContextBudget = field(default_factory=ContextBudget)
     policy: ContextPolicy = field(default_factory=ContextPolicy)
     omitted_items: int = 0
+    # v1.8: chunk_ids of items that were skipped because the budget was full.
+    # Gold-aggregated items (which span several Gold chunks) cannot map to a
+    # single chunk_id and are not included here — `omitted_items` remains the
+    # authoritative count. The agent can use these ids with `list_chunks` to
+    # pull just the dropped evidence without a second `read_context` call.
+    omitted_chunk_ids: list[str] = field(default_factory=list)
 
     def as_prompt_lines(self) -> list[str]:
         return [f"[{item.path}][{item.layer}] {item.content}" for item in self.items]

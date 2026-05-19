@@ -158,6 +158,92 @@ def test_append_chunk_writes_and_returns_chunk_id(tmp_path):
     assert chunks[0].content == "Delta Lake fact"
 
 
+# ── v1.8 polish: bm25_score / softened Bronze nag / omitted_chunk_ids ──
+
+
+def test_append_chunk_bronze_nag_is_batch_aware(tmp_path):
+    """Bronze fact/reference writes get the soft 'after the batch' nag, not 'now'."""
+    mcp, _ = _mcp(tmp_path)
+
+    resp = _call(mcp, "append_chunk", {
+        "path": "WORK/DataArt",
+        "content": "A long-enough bronze fact about Delta Lake architecture choices.",
+        "layer": "bronze",
+        "content_type": "fact",
+    })
+    text = _text(resp)
+
+    assert "AGENTS:" in text
+    assert "write batch is complete" in text
+    assert "per logical group" in text
+    # The old 'now' wording must be gone — batch-aware framing replaces it.
+    assert "Silver now" not in text
+
+
+def test_append_chunk_correction_nag_is_urgent(tmp_path):
+    """content_type='correction' or 'decision' keeps the urgent Silver reminder."""
+    mcp, _ = _mcp(tmp_path)
+
+    resp = _call(mcp, "append_chunk", {
+        "path": "WORK/DataArt",
+        "content": "Override previous statement: Delta Lake DOES support streaming.",
+        "layer": "bronze",
+        "content_type": "correction",
+    })
+    text = _text(resp)
+
+    assert "correction/decision" in text
+    assert "before moving on" in text
+
+
+def test_append_chunk_similar_bronze_uses_bm25_score_field(tmp_path):
+    """v1.8 rename: similar_bronze.score → similar_bronze.bm25_score."""
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(
+        node_path="WORK/DataArt",
+        content="Delta Lake autoloader streaming ingestion from Databricks notebook",
+        layer="bronze",
+    ))
+
+    # Lexically similar but not byte-identical (so the content-hash dedup
+    # guard does not reject the write outright).
+    resp = _call(mcp, "append_chunk", {
+        "path": "WORK/DataArt",
+        "content": "Delta Lake autoloader streaming ingestion using Databricks job cluster",
+        "layer": "bronze",
+        "content_type": "fact",
+    })
+    payload_text = _text(resp).split("\n\n---")[0]  # strip the AGENTS nag
+    result = json.loads(payload_text)
+
+    assert "similar_bronze" in result
+    similar = result["similar_bronze"][0]
+    assert "bm25_score" in similar
+    assert "score" not in similar  # old field name is gone
+    assert isinstance(similar["bm25_score"], (int, float))
+
+
+def test_read_context_returns_omitted_chunk_ids(tmp_path):
+    """v1.8: omitted_chunk_ids lets the agent fetch dropped items without retry."""
+    mcp, store = _mcp(tmp_path)
+    chunks = [
+        Chunk(node_path="WORK/A", content=f"Fact {i}", layer="bronze")
+        for i in range(4)
+    ]
+    for c in chunks:
+        store.save_chunk(c)
+
+    resp = _call(mcp, "read_context", {"path": "WORK/A", "max_items": 2})
+    data = json.loads(_text(resp))
+
+    assert data["omitted_items"] >= 2
+    assert isinstance(data["omitted_chunk_ids"], list)
+    assert len(data["omitted_chunk_ids"]) == data["omitted_items"]
+    # Omitted ids must be a subset of the chunks we saved.
+    saved_ids = {c.id for c in chunks}
+    assert set(data["omitted_chunk_ids"]).issubset(saved_ids)
+
+
 def test_append_gold_aspect_writes_gold_chunk(tmp_path):
     mcp, store = _mcp(tmp_path)
     store.save_chunk(Chunk(node_path="WORK/DataArt", content="silver summary", layer="silver"))

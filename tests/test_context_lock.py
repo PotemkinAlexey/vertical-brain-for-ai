@@ -110,8 +110,10 @@ def test_context_lock_can_expand_links_explicitly(tmp_path):
 
 def test_context_lock_respects_budget(tmp_path):
     store = JsonStore(tmp_path)
-    store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="First fact"))
-    store.save_chunk(Chunk(node_path="WORK/DataArt/Databricks", content="Second fact"))
+    chunk_a = Chunk(node_path="WORK/DataArt/Databricks", content="First fact")
+    chunk_b = Chunk(node_path="WORK/DataArt/Databricks", content="Second fact")
+    store.save_chunk(chunk_a)
+    store.save_chunk(chunk_b)
 
     locked_context = ContextLock(store).open_locked_context(
         "WORK/DataArt/Databricks",
@@ -120,6 +122,9 @@ def test_context_lock_respects_budget(tmp_path):
 
     assert len(locked_context.items) == 1
     assert locked_context.omitted_items == 1
+    # v1.8: omitted chunk_ids are surfaced so the agent can fetch dropped
+    # evidence with `list_chunks` instead of re-running `read_context`.
+    assert locked_context.omitted_chunk_ids == [chunk_b.id]
 
 
 # ── cycle guard ───────────────────────────────────────────────────────────────

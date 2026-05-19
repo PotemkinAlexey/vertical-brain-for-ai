@@ -39,6 +39,7 @@ class ContextLock:
         budget = budget or ContextBudget()
         items: list[ContextItem] = []
         omitted_items = 0
+        omitted_chunk_ids: list[str] = []
 
         if policy.include_ancestors:
             for ancestor_path in self.store.get_ancestors(target_path):
@@ -56,6 +57,7 @@ class ContextLock:
                             source="chunk",
                         ),
                         budget,
+                        omitted_chunk_ids,
                     )
 
         target_gold = sorted(
@@ -72,6 +74,7 @@ class ContextLock:
                     source="chunk",
                 ),
                 budget,
+                omitted_chunk_ids,
             )
 
         if policy.include_target:
@@ -90,6 +93,7 @@ class ContextLock:
                             chunk_id=chunk.id,
                         ),
                         budget,
+                        omitted_chunk_ids,
                     )
 
         link_handles = self._link_handles(target_path) if policy.link_expansion != "none" else []
@@ -111,6 +115,7 @@ class ContextLock:
                                 chunk_id=chunk.id,
                             ),
                             budget,
+                            omitted_chunk_ids,
                         )
 
         return LockedContext(
@@ -120,6 +125,7 @@ class ContextLock:
             budget=budget,
             policy=policy,
             omitted_items=omitted_items,
+            omitted_chunk_ids=omitted_chunk_ids,
         )
 
     def build_context(
@@ -180,8 +186,11 @@ class ContextLock:
         items: list[ContextItem],
         item: ContextItem,
         budget: ContextBudget,
+        omitted_chunk_ids: list[str] | None = None,
     ) -> int:
         if len(items) >= budget.max_items:
+            if omitted_chunk_ids is not None and item.chunk_id:
+                omitted_chunk_ids.append(item.chunk_id)
             return 1
         items.append(item)
         return 0

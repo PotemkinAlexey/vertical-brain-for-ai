@@ -298,8 +298,11 @@ class VerticalBrainMCP(_IngestHandlers):
             result = self._executor.apply(op)
             out: dict[str, Any] = {"chunk_id": result.chunk_id, "status": result.status}
             if result.similar_bronze:
+                # v1.8: rename `score` → `bm25_score` to disambiguate from the
+                # cosine values everywhere else in the API. Similarity here is
+                # FTS5/BM25 (lexical) — unbounded; lower is more similar.
                 out["similar_bronze"] = [
-                    {"chunk_id": s.chunk_id, "score": s.score, "snippet": s.snippet[:120]}
+                    {"chunk_id": s.chunk_id, "bm25_score": s.score, "snippet": s.snippet[:120]}
                     for s in result.similar_bronze
                 ]
             if result.silver_too_large:
@@ -307,10 +310,22 @@ class VerticalBrainMCP(_IngestHandlers):
             text = json.dumps(out)
             layer = args.get("layer", "bronze")
             if layer == "bronze":
-                text += (
-                    "\n\n---\nAGENTS: Bronze written → update Silver now (update_silver). "
-                    "Write after every decision or code change — not only at session_end."
-                )
+                # v1.8: soften the nag — agents legitimately batch multiple Bronze
+                # writes before a single update_silver. The hard "now" wording made
+                # the contract feel violated even when the agent intended a batch.
+                content_type = args.get("content_type", "fact")
+                if content_type in {"correction", "decision"}:
+                    nag = (
+                        "AGENTS: Bronze written. This is a correction/decision — "
+                        "update Silver (`update_silver`) before moving on; it changes "
+                        "the canonical answer."
+                    )
+                else:
+                    nag = (
+                        "AGENTS: Bronze written. Call `update_silver` once the current "
+                        "write batch is complete — per logical group, not per chunk."
+                    )
+                text += "\n\n---\n" + nag
             return text
 
         if name == "append_gold_aspect":
