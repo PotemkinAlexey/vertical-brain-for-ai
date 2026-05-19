@@ -10,8 +10,6 @@ import html.parser
 import io
 import json
 import os
-import shutil
-import subprocess
 import sys
 import traceback
 from typing import TYPE_CHECKING, Any
@@ -440,7 +438,7 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "ingest_file",
         "description": (
-            "Start a stateful ingest session. Prefer source_path for PDFs (server runs pdftotext). "
+            "Start a stateful ingest session. Prefer source_path for binary files (PDF, DOCX, DOC). "
             "Returns session_key, numbered service chunks, and an inline IRON RULES protocol. "
             "Default mode answer_complete: server blocks complete_ingest unless the namespace can "
             "answer questions without the source file. Follow every step until complete_ingest succeeds."
@@ -462,13 +460,14 @@ _TOOLS: list[dict[str, Any]] = [
                 "source_path": {
                     "type": "string",
                     "description": (
-                        "Local path to the original source file. Required for PDFs so the server "
-                        "extracts complete text and prevents summarized payloads."
+                        "Local path to the original source file. Required for binary formats "
+                        "(.pdf, .docx, .doc) so the server extracts complete text and prevents "
+                        "summarized payloads."
                     ),
                 },
                 "content": {
                     "type": "string",
-                    "description": "Full text content of the attached non-PDF file.",
+                    "description": "Full text content of the attached plain-text file.",
                 },
                 "file_name": {
                     "type": "string",
@@ -737,48 +736,7 @@ def _strip_html(raw: str) -> str:
     return extractor.get_text()
 
 
-def _extract_source_text(source_path: str) -> tuple[str, str, int]:
-    """Read source_path and return extracted text plus raw-file integrity data."""
-    if not os.path.isfile(source_path):
-        raise ValueError(f"source_path does not exist or is not a file: {source_path!r}")
-
-    with open(source_path, "rb") as f:
-        raw = f.read()
-
-    source_hash = hashlib.sha256(raw).hexdigest()
-    source_size = len(raw)
-    ext = os.path.splitext(source_path)[1].lower()
-
-    if ext == ".pdf":
-        pdftotext = shutil.which("pdftotext")
-        if not pdftotext:
-            raise ValueError("PDF ingestion from source_path requires the pdftotext command")
-        try:
-            proc = subprocess.run(
-                [pdftotext, source_path, "-"],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-        except subprocess.CalledProcessError as exc:
-            detail = exc.stderr.strip() or exc.stdout.strip()
-            raise ValueError(f"pdftotext failed for source_path {source_path!r}: {detail}") from exc
-        except subprocess.TimeoutExpired as exc:
-            raise ValueError(f"pdftotext timed out for source_path {source_path!r}") from exc
-
-        content = proc.stdout
-        if not content.strip():
-            raise ValueError(f"pdftotext extracted no text from source_path {source_path!r}")
-        return content, source_hash, source_size
-
-    try:
-        return raw.decode("utf-8"), source_hash, source_size
-    except UnicodeDecodeError as exc:
-        raise ValueError(
-            "source_path is not valid UTF-8 text. PDF files are supported via pdftotext; "
-            "other binary formats need a dedicated extractor."
-        ) from exc
+from vertical_brain.mcp.extractors import extract_source_text as _extract_source_text
 
 
 class MessageParseError(ValueError):
@@ -1424,10 +1382,10 @@ class VerticalBrainMCP:
             content = args["content"]
             file_name = args["file_name"]
             ext = os.path.splitext(file_name)[1].lower()
-            if ext == ".pdf":
+            if ext in {".pdf", ".docx", ".doc"}:
                 raise ValueError(
-                    "PDF ingestion must use source_path so the server extracts the complete text. "
-                    "Passing caller-supplied content for PDFs is rejected to prevent summarized payloads."
+                    f"{ext} ingestion must use source_path so the server extracts the complete text. "
+                    "Passing caller-supplied content for binary formats is rejected to prevent summarized payloads."
                 )
 
         file_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()

@@ -1113,7 +1113,7 @@ def test_ingest_file_rejects_pdf_content_without_source_path(tmp_path):
 
     assert resp.get("error") or (resp.get("result", {}).get("isError"))
     text = json.dumps(resp)
-    assert "PDF ingestion must use source_path" in text
+    assert "ingestion must use source_path" in text
 
 
 def test_ingest_file_rejects_integrity_mismatch(tmp_path):
