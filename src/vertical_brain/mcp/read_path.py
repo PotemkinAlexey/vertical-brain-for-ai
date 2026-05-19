@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Iterable
 
 from vertical_brain.core.search import tokenize_query
-from vertical_brain.llm.embedding import MockEmbeddingProvider
+from vertical_brain.llm.embedding import MockEmbeddingProvider, cosine_similarity
 
 if TYPE_CHECKING:
     from vertical_brain.core.models import ContextItem, SearchResult
@@ -73,6 +73,39 @@ def silver_item_for_target(items: Iterable["ContextItem"], target_path: str) -> 
         if item.layer == "silver" and item.path == target_path:
             return item
     return None
+
+
+# Cosine threshold above which the semantic upgrade promotes a lexical 'weak'
+# Silver confidence to 'ok'. Tuned for nomic-embed-text — related-topic chunks
+# typically score 0.55-0.85, off-topic chunks 0.1-0.4. 0.5 is conservative
+# enough to avoid promoting unrelated Silvers while catching synonyms.
+SILVER_SEMANTIC_UPGRADE_THRESHOLD = 0.5
+
+
+def semantic_silver_upgrade(
+    lexical: str,
+    query_vec: list[float] | None,
+    silver_vec: list[float] | None,
+    *,
+    threshold: float = SILVER_SEMANTIC_UPGRADE_THRESHOLD,
+) -> str:
+    """Promote a lexical 'weak' to 'ok' when the query and Silver are semantically close.
+
+    Pure function — no I/O. The caller is responsible for providing the vectors
+    (cached embeddings from the store + a fresh `provider.embed(query)`), and
+    for skipping this call entirely when no real embedding endpoint is present.
+
+    Only the `weak` path can be upgraded. `missing` (no Silver) and `low` (Silver
+    too short) reflect content shortcomings that cosine cannot fix; `ok` is
+    already the best outcome.
+    """
+    if lexical != "weak":
+        return lexical
+    if not query_vec or not silver_vec:
+        return lexical
+    if cosine_similarity(query_vec, silver_vec) >= threshold:
+        return "ok"
+    return lexical
 
 
 def route_next_hint(candidates: list, semantic: bool) -> str | None:

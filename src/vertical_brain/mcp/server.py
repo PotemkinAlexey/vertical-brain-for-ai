@@ -28,6 +28,7 @@ from vertical_brain.mcp.read_path import (
     is_semantic_provider,
     read_context_next_hint,
     route_next_hint,
+    semantic_silver_upgrade,
     silver_confidence,
     silver_item_for_target,
     suggested_paths,
@@ -169,10 +170,35 @@ class VerticalBrainMCP(_IngestHandlers):
             query = args.get("query")
             silver_item = silver_item_for_target(locked.items, args["path"])
             confidence = silver_confidence(query, silver_item)
+            semantic = is_semantic_provider(self._provider)
+            # v1.6 semantic upgrade: only on the lexical 'weak' branch, only when
+            # we have both a real provider and an indexed Silver vector — costs
+            # exactly one provider.embed(query) call (~30ms on local Ollama).
+            if (
+                confidence == "weak"
+                and semantic
+                and query
+                and silver_item is not None
+                and silver_item.chunk_id
+            ):
+                try:
+                    silver_chunk = self._store.get_chunk(silver_item.chunk_id)  # type: ignore[attr-defined]
+                    model_name = getattr(self._provider, "model_name", None)
+                    get_vector = getattr(self._store, "get_vector", None)
+                    if silver_chunk and model_name and callable(get_vector):
+                        cached = get_vector(silver_chunk.content_hash, model_name)
+                        if cached:
+                            silver_vec = [float(x) for x in cached]
+                            query_vec = self._provider.embed(query)
+                            confidence = semantic_silver_upgrade(
+                                confidence, query_vec, silver_vec
+                            )
+                except Exception:
+                    # Provider/network errors must never break the read path —
+                    # fall back to the lexical 'weak' verdict.
+                    pass
             payload["silver_confidence"] = confidence
-            hint = read_context_next_hint(
-                args["path"], confidence, semantic=is_semantic_provider(self._provider)
-            )
+            hint = read_context_next_hint(args["path"], confidence, semantic=semantic)
             if hint:
                 payload["next_hint"] = hint
             return json.dumps(payload, ensure_ascii=False, sort_keys=True)

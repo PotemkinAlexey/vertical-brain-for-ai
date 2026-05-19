@@ -21,6 +21,7 @@ from vertical_brain.mcp.read_path import (
     is_semantic_provider,
     read_context_next_hint,
     route_next_hint,
+    semantic_silver_upgrade,
     silver_confidence,
     silver_item_for_target,
     suggested_paths,
@@ -84,12 +85,23 @@ def test_silver_item_for_target_returns_none_when_missing():
 
 
 class _StubHttpProvider(EmbeddingProvider):
-    """Stand-in for `HttpEmbeddingProvider`; not the Mock, so semantic=True."""
+    """Stand-in for `HttpEmbeddingProvider`; not the Mock, so semantic=True.
 
-    dim = 4
+    Provider is deterministic: a `mapping` of text → vector is consulted first,
+    otherwise a fixed default vector is returned. Lets tests stage cosine values
+    without spinning up Ollama.
+    """
 
-    def embed(self, text: str):  # pragma: no cover - not exercised
-        return [0.0, 0.0, 0.0, 0.0]
+    model_name = "stub-v1"
+    embed_dimension = 4
+
+    def __init__(self, mapping: dict[str, list[float]] | None = None) -> None:
+        self.mapping = mapping or {}
+        self.calls: list[str] = []
+
+    def embed(self, text: str) -> list[float]:
+        self.calls.append(text)
+        return list(self.mapping.get(text, [0.0, 0.0, 0.0, 1.0]))
 
 
 def test_is_semantic_provider_false_for_mock():
@@ -102,6 +114,35 @@ def test_is_semantic_provider_false_for_none():
 
 def test_is_semantic_provider_true_for_non_mock():
     assert is_semantic_provider(_StubHttpProvider()) is True
+
+
+# ── semantic_silver_upgrade ────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("lexical", ["ok", "missing", "low"])
+def test_semantic_silver_upgrade_noop_when_not_weak(lexical):
+    assert semantic_silver_upgrade(lexical, [1.0, 0.0], [1.0, 0.0]) == lexical
+
+
+def test_semantic_silver_upgrade_promotes_weak_when_cosine_high():
+    assert semantic_silver_upgrade("weak", [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]) == "ok"
+
+
+def test_semantic_silver_upgrade_keeps_weak_when_cosine_low():
+    assert semantic_silver_upgrade("weak", [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]) == "weak"
+
+
+def test_semantic_silver_upgrade_respects_threshold():
+    # Identical unit vectors → cosine = 1.0; threshold above that blocks the upgrade.
+    assert (
+        semantic_silver_upgrade("weak", [1.0, 0.0], [1.0, 0.0], threshold=1.01) == "weak"
+    )
+
+
+def test_semantic_silver_upgrade_keeps_weak_when_no_vectors():
+    assert semantic_silver_upgrade("weak", None, [1.0, 0.0]) == "weak"
+    assert semantic_silver_upgrade("weak", [1.0, 0.0], None) == "weak"
+    assert semantic_silver_upgrade("weak", [], []) == "weak"
 
 
 # ── hint builders ──────────────────────────────────────────────────────
@@ -291,3 +332,108 @@ def test_route_response_carries_semantic_flag_and_hint(tmp_path):
     assert data["semantic_endpoint"] is True
     assert "next_hint" in data
     assert "no embedding endpoint configured" not in data["next_hint"]
+
+
+# ── v1.6 semantic silver upgrade — MCP integration ─────────────────────
+
+
+def _save_silver_with_cached_vector(
+    store, path: str, content: str, model_name: str, vector: list[float]
+):
+    """Create a Silver chunk and seed its embedding cache under `model_name`."""
+    chunk = Chunk(node_path=path, content=content, layer="silver")
+    store.save_chunk(chunk)
+    set_vector = getattr(store, "set_vector", None)
+    assert callable(set_vector), "store must support set_vector for this test"
+    set_vector(chunk.content_hash, model_name, vector)
+    return chunk
+
+
+def test_read_context_semantic_upgrade_promotes_weak_to_ok(tmp_path):
+    """Lexical 'weak' (no term overlap) + high cosine via real provider → 'ok'."""
+    query = "payment transfer EMEA"
+    silver_text = (
+        "An extensive note about wire instructions across European countries " * 4
+    )
+    same_vec = [1.0, 0.0, 0.0, 0.0]
+    provider = _StubHttpProvider(mapping={query: same_vec})
+
+    from vertical_brain.storage.json_store import JsonStore
+    store = JsonStore(tmp_path)
+    _save_silver_with_cached_vector(
+        store, "WORK/F", silver_text, provider.model_name, same_vec
+    )
+    mcp = VerticalBrainMCP(store, embedding_provider=provider)
+
+    resp = _call(mcp, "read_context", {"path": "WORK/F", "query": query})
+    data = json.loads(_text(resp))
+
+    assert data["silver_confidence"] == "ok"
+    assert "next_hint" not in data
+    # The upgrade path must have actually consulted the provider.
+    assert provider.calls == [query]
+
+
+def test_read_context_semantic_upgrade_keeps_weak_when_cosine_low(tmp_path):
+    """Lexical 'weak' + low cosine → stays 'weak' (no false promotion)."""
+    query = "payment transfer EMEA"
+    silver_text = (
+        "An extensive note about completely unrelated topic spanning several lines " * 4
+    )
+    provider = _StubHttpProvider(
+        mapping={query: [1.0, 0.0, 0.0, 0.0]},
+    )
+
+    from vertical_brain.storage.json_store import JsonStore
+    store = JsonStore(tmp_path)
+    # Silver cached vector is orthogonal to query vector → cosine = 0.
+    _save_silver_with_cached_vector(
+        store, "WORK/G", silver_text, provider.model_name, [0.0, 1.0, 0.0, 0.0]
+    )
+    mcp = VerticalBrainMCP(store, embedding_provider=provider)
+
+    resp = _call(mcp, "read_context", {"path": "WORK/G", "query": query})
+    data = json.loads(_text(resp))
+
+    assert data["silver_confidence"] == "weak"
+    assert "next_hint" in data
+    assert "search_semantic" in data["next_hint"]
+
+
+def test_read_context_skips_semantic_upgrade_on_mock_provider(tmp_path):
+    """Mock provider must NOT trigger the upgrade path (saves an Ollama RTT)."""
+    mcp, store = _mcp(tmp_path)
+    silver_text = (
+        "An extensive note about unrelated topic that is long enough to look fine " * 4
+    )
+    store.save_chunk(Chunk(node_path="WORK/H", content=silver_text, layer="silver"))
+
+    resp = _call(mcp, "read_context", {"path": "WORK/H", "query": "payment transfer EMEA"})
+    data = json.loads(_text(resp))
+
+    # Lexical still says 'weak' (no overlap); Mock provider must not upgrade it.
+    assert data["silver_confidence"] == "weak"
+    assert "no embedding endpoint configured" in data["next_hint"]
+
+
+def test_read_context_semantic_upgrade_survives_provider_exception(tmp_path):
+    """If provider.embed() raises, fall back to the lexical verdict instead of crashing."""
+
+    class _BrokenProvider(_StubHttpProvider):
+        def embed(self, text: str) -> list[float]:
+            raise RuntimeError("Ollama is down")
+
+    provider = _BrokenProvider()
+    from vertical_brain.storage.json_store import JsonStore
+    store = JsonStore(tmp_path)
+    _save_silver_with_cached_vector(
+        store, "WORK/I",
+        "An extensive note about unrelated topic that is long enough to look fine " * 4,
+        provider.model_name, [1.0, 0.0, 0.0, 0.0]
+    )
+    mcp = VerticalBrainMCP(store, embedding_provider=provider)
+
+    resp = _call(mcp, "read_context", {"path": "WORK/I", "query": "payment transfer EMEA"})
+    data = json.loads(_text(resp))
+
+    assert data["silver_confidence"] == "weak"  # not crashed, not upgraded
