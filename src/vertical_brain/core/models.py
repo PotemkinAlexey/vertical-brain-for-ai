@@ -4,25 +4,40 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from enum import StrEnum
 from typing import Any, Literal
 from uuid import uuid4
 
 
-Layer = Literal["bronze", "silver", "gold"]
+class Layer(StrEnum):
+    BRONZE = "bronze"
+    SILVER = "silver"
+    GOLD = "gold"
+
+
+class ChunkStatus(StrEnum):
+    ACTIVE = "active"
+    STALE = "stale"
+    LEGACY = "legacy"
+    SUPERSEDED = "superseded"
+    CONTRADICTED = "contradicted"
+    UNCERTAIN = "uncertain"
+
+
+class OperationType(StrEnum):
+    CREATE_NODE = "create_node"
+    APPEND_CHUNK = "append_chunk"
+    CREATE_LINK = "create_link"
+    MARK_STALE = "mark_stale"
+    SUPERSEDE_CHUNK = "supersede_chunk"
+    APPEND_GOLD_ASPECT = "append_gold_aspect"
+    RENAME_NAMESPACE = "rename_namespace"
+    UPDATE_SILVER = "update_silver"
+
+
 ContentType = Literal["fact", "reference", "correction", "decision", "question", "note", "code", "artifact"]
-ChunkStatus = Literal["active", "stale", "legacy", "superseded", "contradicted", "uncertain"]
 QueryType = Literal["explanation", "lookup", "comparison", "summary", "unknown"]
 LinkExpansionPolicy = Literal["handles_only", "expanded", "none"]
-OperationType = Literal[
-    "create_node",
-    "append_chunk",
-    "create_link",
-    "mark_stale",
-    "supersede_chunk",
-    "append_gold_aspect",
-    "rename_namespace",
-    "update_silver",
-]
 Action = Literal[
     "append_bronze",
     "append_silver",
@@ -70,9 +85,9 @@ class Node:
 class Chunk:
     node_path: str
     content: str
-    layer: Layer = "bronze"
+    layer: Layer = Layer.BRONZE
     content_type: ContentType = "note"
-    status: ChunkStatus = "active"
+    status: ChunkStatus = ChunkStatus.ACTIVE
     source: str = "manual"
     confidence: float = 1.0
     lineage: list[str] = field(default_factory=list)
@@ -106,7 +121,7 @@ class Link:
 @dataclass
 class ChunkInput:
     content: str
-    layer: Layer = "bronze"
+    layer: Layer = Layer.BRONZE
     content_type: ContentType = "note"
     source: str = "model"
     confidence: float = 1.0

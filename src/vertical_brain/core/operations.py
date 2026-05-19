@@ -46,8 +46,8 @@ if TYPE_CHECKING:
 
 
 VALID_CONTENT_TYPES = set(get_args(ContentType))
-VALID_LAYERS = set(get_args(Layer))
-VALID_OPERATIONS = set(get_args(OperationType))
+VALID_LAYERS = set(Layer)
+VALID_OPERATIONS = set(OperationType)
 
 # Minimum lexical score to surface a chunk as a Bronze near-duplicate warning.
 # The lexical scorer gives 2 pts per term hit in content and 3 pts per term hit in path.
