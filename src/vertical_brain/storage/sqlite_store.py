@@ -49,7 +49,7 @@ class SQLiteStore:
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self._init_schema()
         self._fts_enabled = self._init_search_index()
-        if self._fts_enabled:
+        if self._fts_enabled and self._search_index_needs_rebuild():
             self.rebuild_search_index()
         self._seed_namespace_roots()
 
@@ -252,6 +252,18 @@ class SQLiteStore:
             return False
         self.conn.commit()
         return True
+
+    def _search_index_needs_rebuild(self) -> bool:
+        """True only when chunks exist but the persistent FTS index is empty.
+
+        The FTS index is a real table kept in sync incrementally by _index_chunk;
+        rebuilding it on every connection open is pure waste (and a concurrency
+        hazard). The one case that still needs a rebuild is an existing database
+        that predates the FTS table — chunks present, index empty.
+        """
+        if self.conn.execute("SELECT EXISTS(SELECT 1 FROM search_index)").fetchone()[0]:
+            return False
+        return bool(self.conn.execute("SELECT EXISTS(SELECT 1 FROM chunks)").fetchone()[0])
 
     def _seed_namespace_roots(self) -> None:
         if not self.namespace_roots_file.exists():
@@ -762,6 +774,13 @@ class SQLiteStore:
         if row is None:
             return None
         return Link(**dict(row))
+
+    def get_links_by_source(self, source_path: str) -> list[Link]:
+        rows = self.conn.execute(
+            "SELECT * FROM links WHERE source_path = ? ORDER BY rowid",
+            (source_path,),
+        ).fetchall()
+        return [Link(**dict(row)) for row in rows]
 
     def get_peer_links(self, path: str) -> list[Link]:
         rows = self.conn.execute(

@@ -224,6 +224,9 @@ class JsonStore:
             return None
         return Link(**existing)
 
+    def get_links_by_source(self, source_path: str) -> list[Link]:
+        return [link for link in self.list_links() if link.source_path == source_path]
+
     def get_peer_links(self, path: str) -> list[Link]:
         return [
             link

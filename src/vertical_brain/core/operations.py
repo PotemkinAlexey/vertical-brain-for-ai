@@ -399,8 +399,8 @@ class StorageOperationExecutor:
         visited: set[str] = {path}
         while True:
             links = [
-                lnk for lnk in self.store.list_links()
-                if lnk.source_path == current and lnk.link_type == "gold_overflow"
+                lnk for lnk in self.store.get_links_by_source(current)
+                if lnk.link_type == "gold_overflow"
             ]
             if not links:
                 return current
@@ -510,9 +510,8 @@ class StorageOperationExecutor:
         if not operation.chunk_ids:
             raise ValueError(f"{operation.operation} operation requires chunk_ids")
 
-        chunks_by_id = {chunk.id: chunk for chunk in self.store.list_chunks()}
         for chunk_id in operation.chunk_ids:
-            chunk = chunks_by_id.get(chunk_id)
+            chunk = self.store.get_chunk(chunk_id)
             if chunk is None:
                 raise ValueError(f"Chunk not found: {chunk_id}")
             if chunk.node_path != operation.target_path:
@@ -696,7 +695,6 @@ class StorageOperationExecutor:
             issues.append(ValidationIssue(path=path, message=f"{operation.operation} requires chunk_ids"))
             return
 
-        chunks_by_id = {chunk.id: chunk for chunk in self.store.list_chunks()}
         seen_ids: set[str] = set()
         for index, chunk_id in enumerate(operation.chunk_ids):
             chunk_id_path = f"{path}[{index}]"
@@ -707,7 +705,7 @@ class StorageOperationExecutor:
                 issues.append(ValidationIssue(path=chunk_id_path, message=f"Duplicate chunk id: {chunk_id}"))
                 continue
             seen_ids.add(chunk_id)
-            chunk = chunks_by_id.get(chunk_id)
+            chunk = self.store.get_chunk(chunk_id)
             if chunk is None:
                 issues.append(ValidationIssue(path=chunk_id_path, message=f"Chunk not found: {chunk_id}"))
                 continue
