@@ -86,6 +86,21 @@ def test_sqlite_store_transaction_rolls_back_storage_writes(tmp_path):
     assert store.list_chunks() == []
 
 
+def test_sqlite_nested_transaction_rolls_back_independently(tmp_path):
+    """An inner transaction can roll back its own writes while the outer commits."""
+    store = SQLiteStore(tmp_path)
+
+    with store.transaction():
+        store.save_chunk(Chunk(node_path="WORK/Outer", content="kept"))
+        with pytest.raises(RuntimeError, match="inner rollback"):
+            with store.transaction():
+                store.save_chunk(Chunk(node_path="WORK/Inner", content="discarded"))
+                raise RuntimeError("inner rollback")
+
+    paths = {c.node_path for c in store.list_chunks()}
+    assert paths == {"WORK/Outer"}
+
+
 def test_sqlite_operation_batch_runs_inside_transaction(tmp_path, monkeypatch):
     store = SQLiteStore(tmp_path)
     executor = StorageOperationExecutor(store)

@@ -276,9 +276,18 @@ class SQLiteStore:
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
+        """Atomic unit of work, safely nestable.
+
+        The outermost level drives a real BEGIN/COMMIT/ROLLBACK. Inner levels
+        use SAVEPOINTs so a nested block can roll back its own writes
+        independently — even if the surrounding level goes on to commit.
+        """
         outermost = self._transaction_depth == 0
+        savepoint = None if outermost else f"sp_{self._transaction_depth}"
         if outermost:
             self.conn.execute("BEGIN")
+        else:
+            self.conn.execute(f"SAVEPOINT {savepoint}")
         self._transaction_depth += 1
         try:
             yield
@@ -286,11 +295,16 @@ class SQLiteStore:
             self._transaction_depth -= 1
             if outermost:
                 self.conn.rollback()
+            else:
+                self.conn.execute(f"ROLLBACK TO {savepoint}")
+                self.conn.execute(f"RELEASE {savepoint}")
             raise
         else:
             self._transaction_depth -= 1
             if outermost:
                 self.conn.commit()
+            else:
+                self.conn.execute(f"RELEASE {savepoint}")
 
     def _commit_if_needed(self) -> None:
         if self._transaction_depth == 0:
