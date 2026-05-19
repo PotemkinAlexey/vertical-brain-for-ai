@@ -217,8 +217,9 @@ class EmbeddingSearch:
         """Return ``{cache_key: vector}`` for every keyed chunk.
 
         Cached vectors are read in a single batch query; only cache misses are
-        embedded individually and written back. This replaces one DB round-trip
-        per chunk with one round-trip per search.
+        embedded in one provider batch call (v1.9), collapsing N HTTP round-trips
+        into one. Providers without `embed_batch` fall back to N×embed silently
+        — pre-v1.9 providers keep working.
         """
         model_name = getattr(self._provider, "model_name", None)
         vectors: dict[str, list[float]] = {}
@@ -232,15 +233,38 @@ class EmbeddingSearch:
                     if coerced is not None:
                         vectors[key] = coerced
 
-        set_vector = getattr(self._store, "set_vector", None) if model_name else None
+        miss_keys: list[str] = []
+        miss_texts: list[str] = []
+        seen_misses: set[str] = set()
         for _chunk, cache_key, embed_text in keyed:
-            if cache_key in vectors:
+            if cache_key in vectors or cache_key in seen_misses:
                 continue
-            vector = self._embed(embed_text, expected_dimension=expected_dimension)
-            vectors[cache_key] = vector
-            if callable(set_vector):
-                set_vector(cache_key, model_name, vector)
+            seen_misses.add(cache_key)
+            miss_keys.append(cache_key)
+            miss_texts.append(embed_text)
+
+        if miss_texts:
+            miss_vectors = self._provider_embed_batch(miss_texts)
+            set_vector = getattr(self._store, "set_vector", None) if model_name else None
+            for cache_key, raw_vec in zip(miss_keys, miss_vectors):
+                vector = _coerce_vector(raw_vec, expected_dimension=expected_dimension)
+                if vector is None:
+                    continue
+                vectors[cache_key] = vector
+                if callable(set_vector):
+                    set_vector(cache_key, model_name, vector)
         return vectors
+
+    def _provider_embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Call ``provider.embed_batch`` when available, else fall back to N×embed.
+
+        Backward-compat shim for any pre-v1.9 `EmbeddingProvider` that only
+        defines ``embed``.
+        """
+        batch = getattr(self._provider, "embed_batch", None)
+        if callable(batch):
+            return batch(texts)
+        return [self._provider.embed(text) for text in texts]
 
 
 def _coerce_vector(vector: object, *, expected_dimension: int | None = None) -> list[float] | None:

@@ -116,6 +116,40 @@ def test_is_semantic_provider_true_for_non_mock():
     assert is_semantic_provider(_StubHttpProvider()) is True
 
 
+def test_is_semantic_provider_reads_is_semantic_attribute():
+    """v1.9: providers can declare `is_semantic = False` without being Mock."""
+
+    class _CustomBagOfWords:
+        model_name = "custom-bag"
+        embed_dimension = 4
+        is_semantic = False
+        def embed(self, text):
+            return [1.0, 0.0, 0.0, 0.0]
+
+    class _CustomSemantic:
+        model_name = "custom-semantic"
+        embed_dimension = 4
+        is_semantic = True
+        def embed(self, text):
+            return [0.0, 1.0, 0.0, 0.0]
+
+    assert is_semantic_provider(_CustomBagOfWords()) is False
+    assert is_semantic_provider(_CustomSemantic()) is True
+
+
+def test_is_semantic_provider_legacy_fallback_without_attribute():
+    """Pre-v1.9 providers without `is_semantic` are treated as semantic if they
+    are not a MockEmbeddingProvider — preserves prior behaviour."""
+
+    class _LegacyProvider:
+        model_name = "legacy"
+        embed_dimension = 4
+        def embed(self, text):
+            return [0.0, 0.0, 1.0, 0.0]
+
+    assert is_semantic_provider(_LegacyProvider()) is True
+
+
 # ── semantic_silver_upgrade ────────────────────────────────────────────
 
 

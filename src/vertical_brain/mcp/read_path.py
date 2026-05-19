@@ -38,13 +38,17 @@ _SILVER_MIN_INFORMATIVE_CHARS = 120
 
 
 def is_semantic_provider(provider: "EmbeddingProvider | None") -> bool:
-    """Return True when the provider is something other than the in-process Mock.
+    """Return True when the provider performs meaning-based embedding.
 
-    The Mock provider is a bag-of-words hash and does not capture meaning, so
-    the read-path treats it as the no-endpoint baseline.
+    Reads the v1.9 `is_semantic` attribute from the provider; falls back to
+    an isinstance check against `MockEmbeddingProvider` for pre-v1.9
+    implementations that pre-date the attribute.
     """
     if provider is None:
         return False
+    is_sem = getattr(provider, "is_semantic", None)
+    if isinstance(is_sem, bool):
+        return is_sem
     return not isinstance(provider, MockEmbeddingProvider)
 
 
