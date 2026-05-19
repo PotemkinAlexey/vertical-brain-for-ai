@@ -277,7 +277,9 @@ Detects exact duplicates, compacts Bronze/Silver variants into canonical Silver,
 
 ### `doctor`
 
-Run storage integrity checks and return a list of issues (orphan links, invalid fields, staging items older than 3 days, etc.).
+Run storage integrity checks and return a list of issues. Each issue has a `severity` of `error`, `warning`, or `info`. Checks include orphan links, invalid fields, multiple active Silver, broken Gold-overflow chains, stale FTS leaks, and staging items older than 3 days.
+
+It also runs an advisory `namespace_overloaded` check (severity `info`): when a namespace's Silver is oversized or its Gold nears the 20-aspect cap, its active Bronze is clustered by embedding similarity — if the chunks fall into distinct topic groups, `doctor` suggests decomposing the namespace into sub-namespaces. This check is skipped if no embedding provider is configured.
 
 No parameters.
 

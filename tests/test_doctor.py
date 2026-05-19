@@ -183,3 +183,50 @@ def test_doctor_no_false_positive_when_content_differs(tmp_path):
     store.save_chunk(c2)
     issues = Doctor(store).run()
     assert not any(i.check == "duplicate_active_chunk" for i in issues)
+
+
+def test_doctor_suggests_split_for_overloaded_multi_topic_namespace(tmp_path):
+    from vertical_brain.llm.embedding import MockEmbeddingProvider
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/Big", content="s" * 2100, layer="silver"))
+    for i in range(3):
+        store.save_chunk(Chunk(
+            node_path="WORK/Big",
+            content=f"databricks delta lake streaming subject{i}",
+            layer="bronze",
+        ))
+    for i in range(3):
+        store.save_chunk(Chunk(
+            node_path="WORK/Big",
+            content=f"python pytest ruff testing topic{i}",
+            layer="bronze",
+        ))
+
+    issues = Doctor(store, MockEmbeddingProvider()).run()
+    overload = [i for i in issues if i.check == "namespace_overloaded"]
+    assert len(overload) == 1
+    assert overload[0].severity == "info"
+    assert overload[0].path == "WORK/Big"
+
+
+def test_doctor_split_check_skipped_without_embedding_provider(tmp_path):
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/Big", content="s" * 2100, layer="silver"))
+    for i in range(6):
+        store.save_chunk(Chunk(node_path="WORK/Big", content=f"distinct fact {i}", layer="bronze"))
+
+    issues = Doctor(store).run()  # no embedding provider
+    assert not any(i.check == "namespace_overloaded" for i in issues)
+
+
+def test_doctor_no_split_suggestion_for_non_overloaded_namespace(tmp_path):
+    from vertical_brain.llm.embedding import MockEmbeddingProvider
+    store = JsonStore(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/Small", content="short silver summary", layer="silver"))
+    for i in range(3):
+        store.save_chunk(Chunk(node_path="WORK/Small", content=f"databricks delta subject{i}", layer="bronze"))
+    for i in range(3):
+        store.save_chunk(Chunk(node_path="WORK/Small", content=f"python pytest topic{i}", layer="bronze"))
+
+    issues = Doctor(store, MockEmbeddingProvider()).run()
+    assert not any(i.check == "namespace_overloaded" for i in issues)

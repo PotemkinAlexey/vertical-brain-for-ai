@@ -5,13 +5,26 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from vertical_brain.core.gold import parse_gold_content
 from vertical_brain.core.models import STAGING_PATH
+# Overload thresholds are owned by the executor — import them so doctor's
+# advice and the executor's silver_too_large / gold_near_limit signals agree.
+from vertical_brain.core.operations import _GOLD_NEAR_LIMIT, _SILVER_MAX_CHARS
+from vertical_brain.core.vector_lsh import cluster_by_similarity
 
 if TYPE_CHECKING:
+    from vertical_brain.llm.embedding import EmbeddingProvider
     from vertical_brain.storage.protocol import StorageProvider
 
 
 STAGING_AGE_WARNING_DAYS = 3
+
+# A namespace needs at least this many active Bronze chunks before a split is
+# worth suggesting, and its Bronze must fall into at least this many sizeable
+# clusters. Similarity above this cosine threshold puts two chunks in one cluster.
+_MIN_BRONZE_FOR_SPLIT = 4
+_MIN_SPLIT_CLUSTERS = 2
+_SPLIT_CLUSTER_THRESHOLD = 0.5
 
 
 _VALID_LAYERS = {"bronze", "silver", "gold"}
@@ -25,7 +38,7 @@ _VALID_STATUSES = {
 
 @dataclass
 class DoctorIssue:
-    severity: str  # "error" | "warning"
+    severity: str  # "error" | "warning" | "info"
     check: str
     message: str
     path: str | None = None
@@ -34,8 +47,13 @@ class DoctorIssue:
 class Doctor:
     """Runs integrity checks against a storage backend."""
 
-    def __init__(self, store: "StorageProvider") -> None:
+    def __init__(
+        self,
+        store: "StorageProvider",
+        embedding_provider: "EmbeddingProvider | None" = None,
+    ) -> None:
         self._store = store
+        self._embedding_provider = embedding_provider
 
     def run(self) -> list[DoctorIssue]:
         issues: list[DoctorIssue] = []
@@ -50,6 +68,7 @@ class Doctor:
         issues += self._check_links_missing_reason()
         issues += self._check_fts_index_stale_leak()
         issues += self._check_stale_staging_chunks()
+        issues += self._check_namespace_overloaded()
         return issues
 
     def _node_paths(self) -> set[str]:
@@ -255,3 +274,68 @@ class Doctor:
                     path=STAGING_PATH,
                 ))
         return issues
+
+    def _check_namespace_overloaded(self) -> list[DoctorIssue]:
+        """Advisory: an overloaded namespace whose Bronze splits into distinct
+        topic clusters should be decomposed into sub-namespaces.
+
+        Skipped without an embedding provider — clustering needs vectors.
+        """
+        if self._embedding_provider is None:
+            return []
+
+        by_node: dict[str, list] = defaultdict(list)
+        for chunk in self._store.list_chunks():
+            if chunk.status == "active":
+                by_node[chunk.node_path].append(chunk)
+
+        issues: list[DoctorIssue] = []
+        for path, chunks in sorted(by_node.items()):
+            silver_len = max(
+                (len(c.content) for c in chunks if c.layer == "silver"), default=0
+            )
+            gold_count = max(
+                (len(parse_gold_content(c.content)) for c in chunks if c.layer == "gold"),
+                default=0,
+            )
+            if silver_len <= _SILVER_MAX_CHARS and gold_count < _GOLD_NEAR_LIMIT:
+                continue  # not overloaded — no split advice
+
+            bronze = [c for c in chunks if c.layer == "bronze"]
+            if len(bronze) < _MIN_BRONZE_FOR_SPLIT:
+                continue
+
+            vectors: dict[str, list[float]] = {}
+            for chunk in bronze:
+                vec = self._embed(chunk)
+                if vec is not None:
+                    vectors[chunk.id] = vec
+            if len(vectors) < _MIN_BRONZE_FOR_SPLIT:
+                continue
+
+            clusters = cluster_by_similarity(vectors, threshold=_SPLIT_CLUSTER_THRESHOLD)
+            sizeable = [group for group in clusters if len(group) >= 2]
+            if len(sizeable) >= _MIN_SPLIT_CLUSTERS:
+                issues.append(DoctorIssue(
+                    severity="info",
+                    check="namespace_overloaded",
+                    message=(
+                        f"namespace is overloaded and its Bronze splits into "
+                        f"{len(sizeable)} topic clusters — consider decomposing it "
+                        f"into sub-namespaces, each with its own focused Silver"
+                    ),
+                    path=path,
+                ))
+        return issues
+
+    def _embed(self, chunk) -> "list[float] | None":  # type: ignore[no-untyped-def]
+        """Embed a chunk, preferring a cached vector to avoid network calls."""
+        assert self._embedding_provider is not None
+        model_name = getattr(self._embedding_provider, "model_name", None)
+        get_vector = getattr(self._store, "get_vector", None)
+        if model_name and callable(get_vector):
+            cached = get_vector(chunk.content_hash, model_name)
+            if isinstance(cached, list) and cached:
+                return cached
+        vec = self._embedding_provider.embed(chunk.content)
+        return vec if isinstance(vec, list) and vec else None

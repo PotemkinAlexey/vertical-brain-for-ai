@@ -17,6 +17,11 @@ For machine-readable output:
 vb --data-dir /path/to/brain doctor --json
 ```
 
+Issues carry a `severity` of `error`, `warning`, or `info`. The advisory
+`namespace_overloaded` check (severity `info`) — which suggests splitting an
+overloaded namespace into sub-namespaces — needs an embedding provider and
+therefore runs from the MCP server (`vb mcp`), not the bare `vb doctor` CLI.
+
 ## Backup
 
 Create a consistent SQLite backup with the SQLite backup API:

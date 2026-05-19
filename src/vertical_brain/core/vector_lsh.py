@@ -55,6 +55,39 @@ def find_similar_pairs(
     return pairs, SimilaritySearchStats(count, "lsh", len(candidates), len(pairs))
 
 
+def cluster_by_similarity(
+    vectors: dict[str, list[float]],
+    *,
+    threshold: float,
+) -> list[list[str]]:
+    """Group keys into clusters by cosine similarity.
+
+    Two keys join the same cluster when their vectors are at least *threshold*
+    similar; clusters are the connected components of that graph. Every input
+    key appears in exactly one returned list (singletons included). Components
+    are sorted largest-first, then by first key.
+    """
+    keys = sorted(key for key, vec in vectors.items() if vec)
+    parent = {key: key for key in keys}
+
+    def find(node: str) -> str:
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    pairs, _stats = find_similar_pairs(vectors, threshold=threshold)
+    for key_a, key_b, _score in pairs:
+        root_a, root_b = find(key_a), find(key_b)
+        if root_a != root_b:
+            parent[root_a] = root_b
+
+    groups: dict[str, list[str]] = defaultdict(list)
+    for key in keys:
+        groups[find(key)].append(key)
+    return sorted(groups.values(), key=lambda group: (-len(group), group[0]))
+
+
 def _pair_count(n: int) -> int:
     return n * (n - 1) // 2
 

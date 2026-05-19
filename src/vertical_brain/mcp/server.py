@@ -541,7 +541,7 @@ class VerticalBrainMCP(_IngestHandlers):
 
         if name == "doctor":
             from vertical_brain.core.doctor import Doctor
-            issues = Doctor(self._store).run()  # type: ignore[arg-type]
+            issues = Doctor(self._store, self._provider).run()  # type: ignore[arg-type]
             return json.dumps([
                 {"severity": i.severity, "check": i.check, "message": i.message, "path": i.path}
                 for i in issues

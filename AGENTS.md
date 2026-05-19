@@ -41,7 +41,7 @@ Gold = routing only (short search tags, not answers). Use Gold to find which nam
 - `similar_bronze` returned — review. Mark stale only if the older chunk is superseded.
 - `chunk_too_large: true` — split into single-fact chunks, then update Silver once.
 - `aspects_too_long` returned (list of tags) — split each into shorter search tags (target 30–100 chars each).
-- `silver_too_large` / `gold_near_limit` — the namespace is overloaded. Decompose it: move detail into sub-namespaces, each with its own focused Silver, and leave a Silver index of the children here.
+- `silver_too_large` / `gold_near_limit` — the namespace is overloaded. Decompose it: move detail into sub-namespaces, each with its own focused Silver, and leave a Silver index of the children here. Call `doctor` for cluster-based split suggestions (its `namespace_overloaded` finding).
 
 ## Destructive operations
 
