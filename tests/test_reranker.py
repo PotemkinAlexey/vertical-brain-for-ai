@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from vertical_brain.core.embedding_search import EmbeddingSearch
 from vertical_brain.core.models import Chunk, SearchResult
 from vertical_brain.llm.embedding import MockEmbeddingProvider

@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 
 from vertical_brain.core.context_lock import ContextLock
-from vertical_brain.core.context_session import ContextSession
 from vertical_brain.core.embedding_router import EmbeddingRouter
 from vertical_brain.core.embedding_search import EmbeddingSearch
 from vertical_brain.core.models import Chunk, ContextBudget, ContextPolicy

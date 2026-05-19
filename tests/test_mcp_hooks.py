@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from vertical_brain.core.models import Chunk
 from vertical_brain.mcp.server import ToolAccessDenied, VerticalBrainMCP
 from vertical_brain.storage.sqlite_store import SQLiteStore
