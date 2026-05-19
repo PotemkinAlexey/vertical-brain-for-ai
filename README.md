@@ -157,6 +157,16 @@ vb --data-dir /Users/you/.brain reindex \
   --embedding-model <new-model>
 ```
 
+### First session
+
+Once the server is connected, the assistant must begin every session by calling **`session_start`**. It returns the operating contract (`AGENTS.md`) plus an orientation map — all namespaces, their Gold summaries, and chunk counts. Without it the model has no picture of what is already stored and will write to the wrong place or duplicate existing facts.
+
+Make it automatic by telling the assistant once — in your system prompt, project instructions, or a Claude Code `CLAUDE.md`:
+
+> At the start of every session, call `session_start` before anything else, and follow the contract it returns.
+
+After that, a normal flow is: `session_start` → `search` / `read_context` to recall → `append_chunk` / `update_silver` to write.
+
 ---
 
 ## How it works
