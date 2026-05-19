@@ -180,7 +180,21 @@ def test_append_gold_aspect_reports_aspect_too_long(tmp_path):
     result = json.loads(_text(resp))
 
     assert result["status"] == "applied"
-    assert result["aspect_too_long"] is True
+    assert result["aspects_too_long"] == ["x" * 151]
+
+
+def test_append_gold_aspect_accepts_multiple_aspects(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="WORK/DataArt", content="silver summary", layer="silver"))
+
+    resp = _call(mcp, "append_gold_aspect", {
+        "path": "WORK/DataArt",
+        "aspects": ["routing tag one", "routing tag two", "routing tag three"],
+    })
+    result = json.loads(_text(resp))
+
+    assert result["status"] == "applied"
+    assert result["aspects_added"] == 3
 
 
 def test_search_returns_ranked_results(tmp_path):
@@ -390,6 +404,9 @@ def test_read_context_returns_chunks_and_links(tmp_path):
 
     assert "items" in data
     assert any(item["content"] == "Delta Lake fact" for item in data["items"])
+    # Single-chunk items must carry their chunk_id so callers can feed update_silver.
+    fact_item = next(item for item in data["items"] if item["content"] == "Delta Lake fact")
+    assert fact_item["chunk_id"] == store.get_chunks_by_path("WORK/DataArt")[0].id
 
 
 def test_create_link_connects_two_namespaces(tmp_path):
@@ -448,7 +465,7 @@ def test_append_gold_aspect_reports_overflow_path(tmp_path):
     resp = _call(mcp, "append_gold_aspect", {"path": "WORK/DataArt", "aspect": "overflow aspect"})
     result = json.loads(_text(resp))
 
-    assert result["overflow_path"] == "WORK/DataArt_2"
+    assert result["overflow_paths"] == ["WORK/DataArt_2"]
 
 
 def test_batch_append_writes_all_chunks(tmp_path):
@@ -501,6 +518,32 @@ def test_session_end_with_notes_writes_bronze_then_silver(tmp_path):
     silver = next(c for c in chunks if c.layer == "silver")
     assert "Raw session facts" in bronze.content
     assert "mergeSchema" in silver.content
+
+
+def test_session_end_updates_existing_silver(tmp_path):
+    """A second session_end on a namespace must rewrite the Silver, not fail
+    on the append_chunk(layer=silver) guard."""
+    mcp, store = _mcp(tmp_path)
+
+    _call(mcp, "session_end", {
+        "path": "WORK/DataArt",
+        "notes": "First session raw notes.",
+        "summary": "First Silver summary.",
+    })
+    resp = _call(mcp, "session_end", {
+        "path": "WORK/DataArt",
+        "notes": "Second session raw notes.",
+        "summary": "Second Silver summary.",
+    })
+    result = json.loads(_text(resp))
+
+    assert result["status"] == "applied"
+    active_silver = [
+        c for c in store.get_chunks_by_path("WORK/DataArt")
+        if c.layer == "silver" and c.status == "active"
+    ]
+    assert len(active_silver) == 1
+    assert active_silver[0].content == "Second Silver summary."
 
 
 def test_session_end_with_gold_aspect(tmp_path):

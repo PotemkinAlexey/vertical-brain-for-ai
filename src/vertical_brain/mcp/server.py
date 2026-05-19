@@ -252,18 +252,38 @@ class VerticalBrainMCP(_IngestHandlers):
             return text
 
         if name == "append_gold_aspect":
-            op = StorageOperation(
-                operation="append_gold_aspect",
-                target_path=args["path"],
-                gold_aspect=args["aspect"],
-                reasoning_summary=args.get("reasoning_summary", "Updated Gold aspect via MCP."),
+            aspects: list[str] = []
+            if args.get("aspect"):
+                aspects.append(args["aspect"])
+            aspects.extend(args.get("aspects") or [])
+            if not aspects:
+                raise ValueError("append_gold_aspect requires 'aspect' or 'aspects'")
+            reasoning = args.get("reasoning_summary", "Updated Gold aspect via MCP.")
+            batch = StorageOperationBatch(
+                operations=[
+                    StorageOperation(
+                        operation="append_gold_aspect",
+                        target_path=args["path"],
+                        gold_aspect=aspect,
+                    )
+                    for aspect in aspects
+                ],
+                reasoning_summary=reasoning,
             )
-            result = self._executor.apply(op)
-            out2: dict[str, Any] = {"status": result.status, "path": result.target_path}
-            if result.overflow_path:
-                out2["overflow_path"] = result.overflow_path
-            if result.aspect_too_long:
-                out2["aspect_too_long"] = True
+            batch_result = self._executor.apply_batch(batch)
+            out2: dict[str, Any] = {
+                "status": batch_result.status,
+                "path": args["path"],
+                "aspects_added": len(aspects),
+            }
+            overflow_paths = [r.overflow_path for r in batch_result.results if r.overflow_path]
+            too_long = [
+                aspect for aspect, r in zip(aspects, batch_result.results) if r.aspect_too_long
+            ]
+            if overflow_paths:
+                out2["overflow_paths"] = overflow_paths
+            if too_long:
+                out2["aspects_too_long"] = too_long
             return json.dumps(out2)
 
         if name == "create_link":
@@ -353,10 +373,11 @@ class VerticalBrainMCP(_IngestHandlers):
         if name == "session_end":
             notes = args.get("notes")
             summary = args["summary"]
+            path = args["path"]
             ops: list[StorageOperation] = []
             ops.append(StorageOperation(
                 operation="append_chunk",
-                target_path=args["path"],
+                target_path=path,
                 chunk=ChunkInput(
                     content=notes if notes else summary,
                     layer="bronze",
@@ -366,17 +387,33 @@ class VerticalBrainMCP(_IngestHandlers):
                 reasoning_summary="Persisted session Bronze notes.",
             ))
             if notes or args.get("gold_aspect"):
-                ops.append(StorageOperation(
-                    operation="append_chunk",
-                    target_path=args["path"],
-                    chunk=ChunkInput(
-                        content=summary,
-                        layer="silver",
-                        content_type="note",
-                        source=self._client_source,
-                    ),
-                    reasoning_summary="Persisted session Silver summary.",
-                ))
+                silver_chunk = ChunkInput(
+                    content=summary,
+                    layer="silver",
+                    content_type="note",
+                    source=self._client_source,
+                )
+                active_silver = [
+                    c for c in self._store.get_chunks_by_path(path, include_children=False)  # type: ignore[attr-defined]
+                    if c.layer == "silver" and c.status == "active"
+                ]
+                if active_silver:
+                    # append_chunk(layer=silver) is rejected when a Silver already
+                    # exists — rewrite the existing one instead.
+                    ops.append(StorageOperation(
+                        operation="update_silver",
+                        target_path=path,
+                        current_silver_id=active_silver[0].id,
+                        chunk=silver_chunk,
+                        reasoning_summary="Updated session Silver summary.",
+                    ))
+                else:
+                    ops.append(StorageOperation(
+                        operation="append_chunk",
+                        target_path=path,
+                        chunk=silver_chunk,
+                        reasoning_summary="Persisted session Silver summary.",
+                    ))
             batch = StorageOperationBatch(
                 operations=ops,
                 reasoning_summary="session_end: Bronze → Silver layering.",

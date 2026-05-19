@@ -48,7 +48,7 @@ List all chunks at a namespace path. Returns full content. Use this to read what
 
 ### `read_context`
 
-Open a locked context capsule for a namespace path. Returns chunk content (Gold → Silver → Bronze priority), ancestor Gold summaries, and link handles. Budget-capped to prevent context overflow.
+Open a locked context capsule for a namespace path. Returns chunk content (Gold → Silver → Bronze priority), ancestor Gold summaries, and link handles. Budget-capped to prevent context overflow. Each single-chunk item carries its `chunk_id` (Gold items are aggregated from several chunks and have `chunk_id: null`) — read the Silver item's `chunk_id` here to pass as `current_silver_id` to `update_silver`.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -157,14 +157,17 @@ Silver and Gold are exempt from both checks.
 
 ### `append_gold_aspect`
 
-Add or refresh a short semantic routing tag in the Gold index of a namespace. Exact-text duplicates refresh `updated_at` without creating a new aspect. Returns `overflow_path` if a new sibling namespace was created (when the 20-aspect limit is reached). Returns `aspect_too_long: true` if the aspect exceeds 150 characters.
+Add or refresh one or more short semantic routing tags in the Gold index of a namespace. Exact-text duplicates refresh `updated_at` without creating a new aspect. Returns `aspects_added` (count), `overflow_paths` (sibling namespaces created when the 20-aspect limit is reached), and `aspects_too_long` (tags exceeding 150 characters).
 
 > **Prerequisite:** An active Silver chunk must exist at `path`. Call `update_silver` first if it doesn't.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `path` | string | **required** Target namespace |
-| `aspect` | string | **required** Short search tag; target ~30–100 characters |
+| `aspect` | string | A single short search tag; target ~30–100 characters |
+| `aspects` | string[] | Several short search tags appended in one call |
+
+Pass `aspect` for a single tag or `aspects` for several; at least one is required.
 
 > **Naming note:** This MCP tool accepts the argument as `aspect`. The underlying `StorageOperation` field is `gold_aspect`. When building operation batches for the `operations` tool or `vb operation apply`, use `gold_aspect`.
 
@@ -209,7 +212,7 @@ Each chunk object accepts: `path` (required), `content` (required), `layer`, `co
 
 ### `session_end`
 
-Persist a session summary following Bronze → Silver → Gold layering. Always writes a Bronze note chunk. Also writes Silver when `notes` is provided or when `gold_aspect` is requested. If only `summary` is passed without `notes` or `gold_aspect`, Silver promotion remains the agent's responsibility.
+Persist a session summary following Bronze → Silver → Gold layering. Always writes a Bronze note chunk. Also writes Silver when `notes` is provided or when `gold_aspect` is requested — if an active Silver already exists at `path` it is rewritten in place via `update_silver`, otherwise the first Silver is created. If only `summary` is passed without `notes` or `gold_aspect`, Silver promotion remains the agent's responsibility.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|

@@ -19,7 +19,6 @@ from vertical_brain.core.models import Chunk, StorageOperation
 from vertical_brain.mcp.extractors import extract_source_text as _extract_source_text
 from vertical_brain.mcp.extractors.html import strip_html as _strip_html
 from vertical_brain.mcp.ingest_protocol import (
-    DEFAULT_INGEST_DEPTH,
     DEFAULT_INGEST_MODE,
     INGEST_MODE_ROUTING,
     build_protocol_lines,

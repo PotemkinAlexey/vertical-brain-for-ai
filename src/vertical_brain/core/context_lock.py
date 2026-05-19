@@ -87,6 +87,7 @@ class ContextLock:
                             layer=chunk.layer,
                             content=chunk.content,
                             source="chunk",
+                            chunk_id=chunk.id,
                         ),
                         budget,
                     )
@@ -107,6 +108,7 @@ class ContextLock:
                                 layer=f"linked:{chunk.layer}",
                                 content=chunk.content,
                                 source="linked_chunk",
+                                chunk_id=chunk.id,
                             ),
                             budget,
                         )

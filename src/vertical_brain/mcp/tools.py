@@ -194,8 +194,9 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "append_gold_aspect",
         "description": (
-            "Add a short semantic routing tag to the Gold chunk of a namespace. "
-            "Returns overflow_path if a new sibling namespace was created."
+            "Add one or more short semantic routing tags to the Gold chunk of a "
+            "namespace. Pass 'aspect' for a single tag or 'aspects' for several "
+            "in one call. Returns overflow_paths if new sibling namespaces were created."
         ),
         "inputSchema": {
             "type": "object",
@@ -203,10 +204,15 @@ _TOOLS: list[dict[str, Any]] = [
                 "path": {"type": "string"},
                 "aspect": {
                     "type": "string",
-                    "description": "Short search tag, ideally 30-100 characters.",
+                    "description": "A single short search tag, ideally 30-100 characters.",
+                },
+                "aspects": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Several short search tags to append in one call.",
                 },
             },
-            "required": ["path", "aspect"],
+            "required": ["path"],
         },
     },
     {

@@ -250,6 +250,9 @@ class ContextItem:
     layer: str
     content: str
     source: str = "chunk"
+    # Set for single-chunk items (Silver/Bronze/linked); None for aggregated
+    # Gold items, which are rendered from several Gold chunks at once.
+    chunk_id: str | None = None
 
 
 @dataclass
