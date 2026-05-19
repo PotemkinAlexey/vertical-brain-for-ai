@@ -20,7 +20,7 @@ src/vertical_brain/
 │   ├── gold.py               — GoldAspect v2, parse/serialize, legacy GoldDocument
 │   ├── search.py             — BrainSearch: lexical FTS + path ranking
 │   ├── embedding_search.py   — EmbeddingSearch: cosine + persistent vector cache
-│   ├── embedding_router.py   — EmbeddingRouter: route by embedding similarity
+│   ├── embedding_router.py   — EmbeddingRouter: route by embedding similarity + v1.7 Bronze/Silver deep-fallback (`find_candidates_with_fallback`)
 │   ├── context_lock.py       — ContextLock: builds locked context capsules
 │   ├── context_session.py    — ContextSession: map + search + lock orchestration
 │   ├── namespace_map.py      — NamespaceMapBuilder: model-facing orientation map
@@ -42,6 +42,7 @@ src/vertical_brain/
 ├── mcp/
 │   ├── server.py             — MCP stdio server (JSON-RPC 2.0, NDJSON over stdio)
 │   ├── tools.py              — MCP tool schemas (_TOOLS) + dispatch helpers
+│   ├── read_path.py          — Read-path helpers: silver_confidence (v1.5) + semantic upgrade (v1.6), next_hint builders, apply_layer_bias, suggested_paths, is_semantic_provider
 │   ├── ingest_handlers.py    — _IngestHandlers mixin: ingest session lifecycle
 │   ├── ingest_protocol.py    — Ingest IRON RULES, splitting, answer_complete gates
 │   └── extractors/           — Source text extraction: pdf, docx, doc, html, odt
@@ -57,7 +58,7 @@ Test files mirror `src/` — there is one test file per module, plus cross-cutti
 ## Running Tests
 
 ```bash
-pytest                                    # full suite (536 tests)
+pytest                                    # full suite (592 tests)
 pytest tests/test_operations.py -v       # single file
 pytest -k "occ or version" -v            # keyword filter
 pytest --tb=short 2>&1 | tail -20        # summary view
@@ -133,6 +134,30 @@ Use `parse_gold_aspects(content)` → `list[GoldAspect]` to read, and `serialize
 Vectors are keyed by `(content_hash, model_name)`. The model name is recorded in the store schema (`set_embedding_schema`). If you change the embedding model, run the `vb reindex` CLI command to purge old vectors and re-embed (`EmbeddingSearch.trigger_reindexing(new_provider)` is the underlying call).
 
 `EmbeddingSearch.__init__` raises `IncompatibleEmbeddingModelError` if the provider's model name doesn't match what's stored — this is intentional and should not be silenced.
+
+---
+
+## Read-Path Helpers (v1.5–v1.8)
+
+`mcp/read_path.py` contains the small pure helpers wired into `server.py` to make the read path provider-agnostic. They have no I/O of their own — server.py supplies the inputs.
+
+- **`silver_confidence(query, silver_item)`** → `"missing" | "low" | "weak" | "ok"`. Returns `weak` only when **lexical token overlap is below ~30%** — server.py then layers v1.6 semantic upgrade on top.
+- **`semantic_silver_upgrade(lexical, query_vec, silver_vec, threshold=0.5)`** (v1.6) — **only** promotes `weak` → `ok`, never any other state. Any other state is returned unchanged. No-op when vectors are missing.
+- **`is_semantic_provider(provider)`** — `True` for anything that isn't `MockEmbeddingProvider`. Used to gate `semantic_silver_upgrade` and to populate `semantic_endpoint` in `route` / `search_semantic` responses.
+- **`route_next_hint(...)` / `read_context_next_hint(...)`** — build agent-facing hints; emitted only when the answer needs help (low Gold confidence, weak/missing Silver).
+- **`apply_layer_bias(results)`** — stable reorder of semantic search hits to put Bronze evidence above Silver above Gold within the same score band. No result is dropped.
+- **`suggested_paths(results)`** — unique namespaces in result order (post-bias), used as `read_context` suggestions in the `search_semantic` response.
+
+**Where the v1.7 deep-fallback lives:** `EmbeddingRouter.find_candidates_with_fallback(text, fallback_threshold)` in `embedding_router.py`. It calls `find_candidates` first, then — only if the top Gold score is below `fallback_threshold` — runs `EmbeddingSearch` over Bronze/Silver and merges those namespaces in with `match_source="content_fallback"`. Negative `fallback_threshold` disables the rescue entirely.
+
+**Read-path invariants (don't break):**
+
+10. **Only `weak` is upgraded by cosine** — `semantic_silver_upgrade` must never promote `missing`/`low`/`ok`. Tested in `test_read_path_hints.py::test_semantic_upgrade_*`.
+11. **`next_hint` is emitted only when help is needed** — `route_next_hint` returns `None` when Gold is confident; `read_context_next_hint` returns `None` when `silver_confidence == "ok"`. Don't add hints to the happy path.
+12. **`apply_layer_bias` is stable and total** — same input order is preserved within a bucket, no result is filtered out. The bias only reorders.
+13. **`route` response carries `match_source` for every candidate** — `"gold"` for Gold/path-token hits, `"content_fallback"` only for v1.7 rescue. Bumping anything else into `content_fallback` would mislead agents.
+14. **`omitted_chunk_ids` only contains real chunk IDs** — Gold-aggregated items have no single `chunk_id`; they go into `omitted_items` only. The list must stay safe to feed into `list_chunks` or chunk-id lookups.
+15. **`similar_bronze` returns `bm25_score`, not `score`** — FTS5/BM25 is unbounded and lower = more similar. The whole rest of the API uses `[0, 1]` cosine, so the v1.8 rename is load-bearing.
 
 ---
 

@@ -165,7 +165,7 @@ Make it automatic by telling the assistant once — in your system prompt, proje
 
 > At the start of every session, call `session_start` before anything else, and follow the contract it returns.
 
-After that, a normal flow is: `session_start` → `search` / `read_context` to recall → `append_chunk` / `update_silver` to write.
+After that, a normal flow is: `session_start` → `route` / `read_context` to recall (Silver answers, with `silver_confidence` + `next_hint` to widen via `search_semantic` when needed) → `append_chunk` / `update_silver` to write. Wire an OpenAI-compatible embedding endpoint with `--embedding-url` (e.g. Ollama's `nomic-embed-text`) and the same recall path automatically becomes semantic — no client-side changes needed.
 
 ---
 

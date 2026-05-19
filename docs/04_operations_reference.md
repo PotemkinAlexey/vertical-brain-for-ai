@@ -67,7 +67,7 @@ Add a new chunk to a namespace. Creates the node chain if nodes do not exist.
 **Bronze dedup enforcement (layer `bronze` only):**
 
 - **Hard block — exact duplicate.** If an active Bronze chunk with byte-for-byte identical content already exists at `target_path`, the operation is rejected with a `DuplicateBronzeError` before any I/O. The error directs you to `mark_stale` the existing chunk first.
-- **Soft warning — similar content.** If the write succeeds but the FTS search finds lexically similar active Bronze chunks at `target_path` (score ≥ 8), `OperationResult.similar_bronze` is populated with up to 3 matches. Review and `mark_stale` any that are superseded by the new chunk.
+- **Soft warning — similar content.** If the write succeeds but the FTS search finds lexically similar active Bronze chunks at `target_path` (BM25 score ≥ 8 — note: FTS5/BM25 is unbounded and **lower is more similar**), `OperationResult.similar_bronze` is populated with up to 3 matches. Review and `mark_stale` any that are superseded by the new chunk.
 
 ```json
 {
@@ -75,10 +75,12 @@ Add a new chunk to a namespace. Creates the node chain if nodes do not exist.
   "status": "applied",
   "chunk_id": "new-id...",
   "similar_bronze": [
-    { "chunk_id": "old-id...", "snippet": "Databricks uses Delta Lake...", "score": 10 }
+    { "chunk_id": "old-id...", "snippet": "Databricks uses Delta Lake...", "bm25_score": 10 }
   ]
 }
 ```
+
+> The MCP-facing field name is `bm25_score` (v1.8 rename from `score`), to disambiguate from the [0, 1] cosine scores everywhere else in the API.
 
 **`layer=silver` guard:** if an active Silver chunk already exists at `target_path`, `append_chunk(layer=silver)` is rejected with a `SilverConflictError`. Use `append_chunk(layer=silver)` only to create the **first** Silver summary at a new namespace. All subsequent Silver updates must use `update_silver`.
 

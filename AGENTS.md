@@ -20,13 +20,18 @@ Gold = routing only (short search tags, not answers). Use Gold to find which nam
 
 `session_start` surfaces Gold. Always follow with `read_context` on relevant namespaces before answering questions about stored knowledge.
 
-### Read-path with recall assist (v1.5)
+### Read-path with recall assist (v1.5–v1.8)
 
 The full flow is **Gold routes → Silver answers → Bronze cites → Vector assists**:
 
-1. `route(text=...)` → namespace candidates from Gold. Read the `next_hint`.
-2. `read_context(path=<top>, query=<user question>)` → Silver answer + ancestor Gold. The response carries `silver_confidence` (`missing` | `low` | `weak` | `ok`). If it is not `ok`, the response also includes a `next_hint`.
-3. When Silver is `missing/low/weak`, call `search_semantic(query=..., root_path=<top>)`. Results are biased toward Bronze evidence (reference > fact > decision); read the suggested namespace and cite the Bronze `chunk_id` in your answer.
+1. `route(text=...)` → namespace candidates from Gold. Each candidate carries `match_source`:
+   - `"gold"` — hit came from a Gold aspect (or path-token overlap fallback).
+   - `"content_fallback"` — v1.7 rescue: Gold missed, but a Bronze/Silver semantic sweep found the namespace. Tunable via `fallback_threshold` (default 0.55; set negative to disable). Read the `next_hint`.
+2. `read_context(path=<top>, query=<user question>)` → Silver answer + ancestor Gold. The response carries `silver_confidence` (`missing` | `low` | `weak` | `ok`):
+   - `weak` means **both** lexical token overlap **and** (when an embedding endpoint is configured) cosine `>= 0.5` agreed the Silver is off-topic — a safe signal to widen, no false positives on synonyms.
+   - `ok` means the Silver answers — do not run extra searches.
+   - Items dropped by the budget come back as `omitted_chunk_ids`; pull them with `list_chunks` instead of re-issuing `read_context` with a higher `max_items`.
+3. When Silver is `missing/low/weak`, call `search_semantic(query=..., root_path=<top>)`. The response is `{results, suggested_paths, semantic_endpoint}`. Results are biased toward Bronze evidence (reference > fact > decision); read the suggested namespace and cite the Bronze `chunk_id` in your answer.
 4. Vector search never replaces Gold/Silver — it only helps you find the right Bronze across the namespace tree.
 
 Both `route` and `search_semantic` report `semantic_endpoint: true|false`. When `false`, no embedding endpoint is configured and recall is bag-of-words overlap; the same calls become real semantic matching automatically once an endpoint (e.g. Ollama) is set, with no client changes needed.

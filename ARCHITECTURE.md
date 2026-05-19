@@ -140,17 +140,33 @@ session_start / namespace_map
   │   chunk counts, link handles. No raw content.
   │
   ▼
-search / context_search
-  │   Lexical (FTS5) or semantic (cosine similarity) search.
-  │   Returns ranked handles — path + score + snippet.
+route (recall assist)
+  │   Embeds the question, matches against Gold aspect vectors,
+  │   returns ranked namespace candidates with match_source
+  │   ("gold" or "content_fallback" when v1.7 Bronze/Silver
+  │   rescue fires below fallback_threshold).
+  │   Response also carries semantic_endpoint and next_hint.
   │
   ▼
-read_context / context_search
+read_context (with `query`)
   │   Opens a locked context capsule for the target path:
   │   - Full content at the node (Gold → Silver → Bronze priority)
   │   - Ancestor Gold summaries
   │   - Link handles (not expanded)
+  │   - silver_confidence (missing|low|weak|ok); 'weak' is set
+  │     when both lexical and (when available) cosine agree
+  │     Silver is off-topic — v1.6 semantic upgrade promotes
+  │     'weak' to 'ok' when cosine >= 0.5.
+  │   - next_hint (only when silver_confidence != 'ok')
+  │   - omitted_chunk_ids when items get budget-trimmed
   │   Budget enforced: items_per_context cap.
+  │
+  ▼
+search / search_semantic / context_search (when Silver is weak)
+  │   Lexical (FTS5) or semantic (cosine) search.
+  │   search_semantic biases results toward Bronze evidence
+  │   (reference > fact > decision) within each score band and
+  │   returns suggested_paths + semantic_endpoint.
   │
   ▼
 context_expand (optional)
@@ -159,6 +175,8 @@ context_expand (optional)
 ```
 
 **Why handles, not content?** Link handles let the model decide whether to expand. Automatic expansion would flood the context with potentially irrelevant cross-domain content.
+
+**Why the silver_confidence / next_hint signals?** The recall path is provider-agnostic: with `MockEmbeddingProvider` you still get lexical 'weak' detection; with an HTTP embedding provider the same fields become semantic-grade automatically. Agents follow the same code path regardless of the deployment.
 
 ---
 
@@ -208,7 +226,7 @@ vertical_brain/
 │   ├── gold.py               — GoldAspect v2, parse/serialize, legacy GoldDocument
 │   ├── search.py             — BrainSearch: lexical FTS + path ranking
 │   ├── embedding_search.py   — EmbeddingSearch: cosine similarity + vector cache
-│   ├── embedding_router.py   — EmbeddingRouter: namespace routing by embedding
+│   ├── embedding_router.py   — EmbeddingRouter: namespace routing by embedding + v1.7 Bronze/Silver deep-fallback
 │   ├── context_lock.py       — ContextLock: builds locked context capsules
 │   ├── context_session.py    — ContextSession: map + search + lock orchestration
 │   ├── namespace_map.py      — NamespaceMapBuilder: model-facing orientation map
@@ -230,6 +248,7 @@ vertical_brain/
 ├── mcp/
 │   ├── server.py             — MCP stdio server (JSON-RPC 2.0, NDJSON over stdio)
 │   ├── tools.py              — MCP tool schemas (_TOOLS) and dispatch lookup
+│   ├── read_path.py          — Read-path helpers: silver_confidence (v1.5) + semantic upgrade (v1.6), next_hint builders, apply_layer_bias, suggested_paths
 │   ├── ingest_handlers.py    — _IngestHandlers mixin: ingest session lifecycle
 │   ├── ingest_protocol.py    — Ingest session rules, splitting, answer_complete gates
 │   └── extractors/           — Source text extraction: pdf, docx, doc, html, odt

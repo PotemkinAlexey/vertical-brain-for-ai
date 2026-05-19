@@ -53,9 +53,16 @@ Open a locked context capsule for a namespace path. Returns chunk content (Gold 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `path` | string | **required** Namespace to open |
+| `query` | string | The user question. Enables lexical `weak` detection on Silver and (v1.6) auto-upgrade to `ok` via cosine when an embedding endpoint is configured. Strongly recommended whenever a question is being answered. |
 | `include_ancestors` | boolean | Include ancestor Gold summaries (default true) |
 | `link_expansion` | `handles_only`\|`expanded`\|`none` | How to expose horizontal links (default `handles_only`) |
 | `max_items` | integer | Maximum items in the context capsule |
+
+**Response fields beyond the locked context:**
+
+- `silver_confidence` — `missing` | `low` | `weak` | `ok`. `weak` means **both** lexical token overlap **and** (when available) cosine `>= 0.5` agreed the Silver is off-topic — safe signal to widen the search via `search_semantic`. With no `query` passed, only `missing` (no Silver), `low` (Silver shorter than ~120 chars), and `ok` are reported.
+- `next_hint` — emitted only when `silver_confidence != "ok"`. Contains a ready-to-paste `search_semantic` call scoped to the same path, plus a note about the endpoint mode when Mock is active.
+- `omitted_chunk_ids` — list of Bronze/Silver/linked chunk IDs that were dropped because the budget filled. Use these directly with `list_chunks` (or by chunk_id) instead of re-issuing `read_context` with a higher `max_items`. Gold-aggregated items have no single `chunk_id` and are still counted only in `omitted_items`.
 
 ---
 
@@ -76,7 +83,7 @@ Lexical full-text search across active chunks. Uses SQLite FTS5 (or prefix match
 
 ### `search_semantic`
 
-Semantic similarity search using embedding cosine similarity. Requires the MCP server to be started with `--embedding-url`. Vectors are cached persistently.
+Semantic similarity search across active chunks using embedding cosine similarity. Vectors are cached persistently. When no `--embedding-url` is configured the server falls back to a bag-of-words `MockEmbeddingProvider`; in that mode the response carries `semantic_endpoint: false` and recall is overlap-based (cross-language and synonym recall do not work) — wire a real endpoint and the same calls become true semantic search with no client changes.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -84,6 +91,12 @@ Semantic similarity search using embedding cosine similarity. Requires the MCP s
 | `root_path` | string | Limit search to this namespace subtree |
 | `limit` | integer | Maximum results (default 10) |
 | `threshold` | number | Minimum cosine similarity score [0, 1] (default 0.0) |
+
+**Response shape:** `{results: [...], suggested_paths: [...], semantic_endpoint: bool}`.
+
+- `results` — biased so Bronze evidence floats above Silver above Gold within the same score band; inside Bronze the order is `reference > fact > decision > other`. Score is still respected within each bucket; no result is ever dropped by the bias.
+- `suggested_paths` — top unique namespaces in result order (post-bias). Use them as branches for `read_context`.
+- `semantic_endpoint` — `true` when a real `HttpEmbeddingProvider` (e.g. Ollama) is wired in, `false` for `MockEmbeddingProvider`.
 
 ---
 
@@ -120,13 +133,23 @@ Same as `context_search` but uses embedding similarity instead of lexical search
 
 ### `route`
 
-Find the best-matching namespaces for a piece of text by comparing its embedding against individual Gold aspects. Returns ranked candidates with path and the best matching Gold aspect. Aspect vectors are persisted in `vector_cache` and reused across router instances.
+Find the best-matching namespaces for a piece of text by comparing its embedding against individual Gold aspects. Aspect vectors are persisted in `vector_cache` and reused across router instances.
+
+**v1.7 deep-fallback:** when the top Gold candidate scores below `fallback_threshold` (default 0.55), the router additionally runs a Bronze/Silver semantic sweep and merges those namespaces with the Gold candidates — the typical fix for queries phrased in a language the Gold was not authored in, or fresh namespaces whose Gold is still thin. Fast path: when Gold is confident, the fallback is skipped (zero extra cost).
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `text` | string | **required** Text to route |
 | `limit` | integer | Maximum candidates (default 5) |
 | `threshold` | number | Minimum similarity score (default 0.0) |
+| `fallback_threshold` | number | Top-Gold-score cutoff for the Bronze/Silver rescue (default 0.55). Set to a negative value to disable the rescue entirely. |
+
+**Response shape:** `{candidates: [...], semantic_endpoint: bool, next_hint: string}`. Each candidate carries `path`, `score`, `gold_summary` (or top Bronze/Silver snippet on a rescue), and `match_source`:
+
+- `match_source: "gold"` — hit came from a Gold aspect (or the legacy path-token overlap fallback inside `find_candidates`).
+- `match_source: "content_fallback"` — namespace was promoted by the v1.7 Bronze/Silver rescue when no Gold candidate cleared `fallback_threshold`.
+
+`next_hint` is a ready-to-paste `read_context(path="…")` invocation for the top candidate, plus an explicit `search_semantic(...)` fallback line and an endpoint-mode note when Mock is active.
 
 ---
 
@@ -149,9 +172,11 @@ Write a new chunk to a namespace. Creates the node chain if it does not exist.
 **Bronze dedup (layer `bronze` only):**
 
 - **Hard block:** if an active Bronze chunk with byte-for-byte identical content already exists at `path`, the call returns an error. Call `mark_stale` on the old chunk first if the fact has changed, then retry.
-- **Soft warning:** if the write succeeds but similar active Bronze chunks exist at `path`, the response includes `similar_bronze` — a list of up to 3 matching chunks with snippets. Review them and `mark_stale` any that the new chunk supersedes.
+- **Soft warning:** if the write succeeds but similar active Bronze chunks exist at `path`, the response includes `similar_bronze` — a list of up to 3 matching chunks with `{chunk_id, bm25_score, snippet}`. **`bm25_score`** is FTS5/BM25, unbounded, lower = more similar (v1.8 rename from `score` to disambiguate from the [0,1] cosine values everywhere else in the API). Review the matches and `mark_stale` any that the new chunk supersedes.
 
-Silver and Gold are exempt from both checks.
+**Post-Bronze nag (v1.8 batch-aware):** every Bronze write returns an `AGENTS: …` reminder after the JSON payload (separated by `\n\n---\n`). For `fact` / `reference` / `note` / `artifact` / `code` the message is "Call `update_silver` once the current write batch is complete — per logical group, not per chunk." For `correction` / `decision` the message stays urgent: "update Silver before moving on; it changes the canonical answer."
+
+Silver and Gold are exempt from the dedup checks.
 
 ---
 
