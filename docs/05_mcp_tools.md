@@ -225,15 +225,20 @@ Persist a session summary following Bronze → Silver → Gold layering. Always 
 
 ### `update_silver`
 
-Atomically replace the active Silver summary for a namespace. Supersedes the old Silver chunk and writes a new one. Enforces OCC — the agent must pass the ID of the Silver chunk it read before synthesizing. Backed by the `update_silver` `StorageOperation`.
+Atomically replace the active Silver summary for a namespace. Supersedes the old Silver chunk and writes a new one. Backed by the `update_silver` `StorageOperation`.
+
+Two ways to supply the new content — pass exactly one:
+- **`new_content`** — the complete rewritten Silver. Requires `current_silver_id` for OCC.
+- **`patch`** — find/replace edits applied to the current Silver, so you don't resend the whole summary. Each `find` must occur exactly once in the current Silver. `current_silver_id` is optional here (resolved automatically); pass it to opt into OCC.
 
 > **First Silver:** if no active Silver exists yet, create it with `append_chunk(layer="silver")`. After that, all Silver updates must use `update_silver`.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `path` | string | **required** Namespace to update |
-| `new_content` | string | **required** Complete rewritten Silver summary |
-| `current_silver_id` | string | **required** ID of the active Silver chunk you read before synthesizing |
+| `new_content` | string | Complete rewritten Silver summary (use this **or** `patch`) |
+| `patch` | array | `{find, replace}` edits against the current Silver (use this **or** `new_content`) |
+| `current_silver_id` | string | ID of the active Silver chunk you read — **required** with `new_content`, optional with `patch` |
 | `source_chunk_ids` | array | Optional IDs of Bronze chunks incorporated into this Silver (used for lineage) |
 | `confidence` | number | Quality signal [0, 1] (default 1.0) |
 | `reasoning_summary` | string | Why this Silver was rewritten (goes to audit log) |

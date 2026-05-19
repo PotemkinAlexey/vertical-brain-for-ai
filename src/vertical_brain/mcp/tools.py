@@ -313,21 +313,35 @@ _TOOLS: list[dict[str, Any]] = [
         "description": (
             "Atomically rewrite the Silver summary for a namespace. "
             "Supersedes the existing Silver chunk and writes a new one. "
-            "Requires current_silver_id — the ID of the active Silver chunk you read before synthesizing. "
-            "Fails if Silver has changed since you read it (OCC protection). "
-            "Use append_chunk(layer=silver) only for the very first Silver at a namespace."
+            "Pass 'new_content' for a full rewrite, or 'patch' for find/replace edits "
+            "against the current Silver (patch avoids resending the whole summary). "
+            "'current_silver_id' is required with new_content (OCC protection) and "
+            "optional with patch. Use append_chunk(layer=silver) only for the very "
+            "first Silver at a namespace."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Namespace to update"},
-                "new_content": {"type": "string", "description": "Complete rewritten Silver summary"},
-                "current_silver_id": {"type": "string", "description": "ID of the active Silver chunk you read"},
+                "new_content": {"type": "string", "description": "Complete rewritten Silver summary. Use this OR patch."},
+                "patch": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "find": {"type": "string", "description": "Exact text in the current Silver; must occur exactly once"},
+                            "replace": {"type": "string", "description": "Text to replace the matched span with"},
+                        },
+                        "required": ["find", "replace"],
+                    },
+                    "description": "Find/replace edits applied to the current Silver. Use this OR new_content.",
+                },
+                "current_silver_id": {"type": "string", "description": "ID of the active Silver chunk you read (required with new_content, optional with patch)"},
                 "source_chunk_ids": {"type": "array", "items": {"type": "string"}, "description": "Optional IDs of Bronze chunks incorporated into this Silver"},
                 "confidence": {"type": "number", "description": "Confidence score (default: 1.0)"},
                 "reasoning_summary": {"type": "string", "description": "Optional reasoning summary for the audit log"},
             },
-            "required": ["path", "new_content", "current_silver_id"],
+            "required": ["path"],
         },
     },
     {

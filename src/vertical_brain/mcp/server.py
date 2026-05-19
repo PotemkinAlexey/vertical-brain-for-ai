@@ -437,13 +437,57 @@ class VerticalBrainMCP(_IngestHandlers):
             return json.dumps(out3)
 
         if name == "update_silver":
+            path = args["path"]
+            patch = args.get("patch")
+            new_content = args.get("new_content")
+            if (patch is None) == (new_content is None):
+                raise ValueError("update_silver requires exactly one of 'new_content' or 'patch'")
+            current_silver_id = args.get("current_silver_id")
+
+            if patch is not None:
+                if not patch:
+                    raise ValueError("update_silver: 'patch' must contain at least one edit")
+                active_silver = [
+                    c for c in self._store.get_chunks_by_path(path, include_children=False)  # type: ignore[attr-defined]
+                    if c.layer == "silver" and c.status == "active"
+                ]
+                if not active_silver:
+                    raise ValueError(
+                        f"update_silver(patch) rejected: no active Silver at '{path}'. "
+                        f"Create the first Silver with append_chunk(layer=silver)."
+                    )
+                silver = active_silver[0]
+                # OCC stays opt-in for patch mode: resolve the id if the caller
+                # omitted it; honour it (and let the executor reject staleness)
+                # if provided.
+                if current_silver_id is None:
+                    current_silver_id = silver.id
+                content = silver.content
+                for index, edit in enumerate(patch):
+                    find = edit["find"]
+                    occurrences = content.count(find)
+                    if occurrences == 0:
+                        raise ValueError(
+                            f"update_silver patch[{index}]: 'find' text not found in the current Silver."
+                        )
+                    if occurrences > 1:
+                        raise ValueError(
+                            f"update_silver patch[{index}]: 'find' text occurs {occurrences} times — "
+                            f"it must be unique. Include more surrounding context."
+                        )
+                    content = content.replace(find, edit["replace"], 1)
+            else:
+                content = new_content
+                if current_silver_id is None:
+                    raise ValueError("update_silver requires current_silver_id when using 'new_content'")
+
             op = StorageOperation(
                 operation="update_silver",
-                target_path=args["path"],
-                current_silver_id=args["current_silver_id"],
+                target_path=path,
+                current_silver_id=current_silver_id,
                 source_chunk_ids=args.get("source_chunk_ids") or [],
                 chunk=ChunkInput(
-                    content=args["new_content"],
+                    content=content,
                     layer="silver",
                     content_type="note",
                     source=self._client_source,

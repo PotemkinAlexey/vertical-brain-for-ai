@@ -951,6 +951,65 @@ def test_update_silver_occ_rejects_null_current_silver_id(tmp_path):
     assert "error" in resp
 
 
+def test_update_silver_patch_applies_single_edit(tmp_path):
+    """patch mode edits the current Silver in place — no full resend, no current_silver_id."""
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="PROJECTS/alpha", content="State: alpha. Tests: 10 pass.", layer="silver"))
+
+    resp = _call(mcp, "update_silver", {
+        "path": "PROJECTS/alpha",
+        "patch": [{"find": "10 pass", "replace": "11 pass"}],
+    })
+    result = json.loads(_text(resp))
+
+    assert result["status"] == "applied"
+    active = [c for c in store.get_chunks_by_path("PROJECTS/alpha") if c.layer == "silver" and c.status == "active"]
+    assert len(active) == 1
+    assert active[0].content == "State: alpha. Tests: 11 pass."
+
+
+def test_update_silver_patch_rejects_missing_find(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="PROJECTS/alpha", content="alpha summary", layer="silver"))
+
+    resp = _call(mcp, "update_silver", {
+        "path": "PROJECTS/alpha",
+        "patch": [{"find": "not in the silver", "replace": "x"}],
+    })
+    assert "error" in resp
+
+
+def test_update_silver_patch_rejects_ambiguous_find(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="PROJECTS/alpha", content="fact one. fact two.", layer="silver"))
+
+    resp = _call(mcp, "update_silver", {
+        "path": "PROJECTS/alpha",
+        "patch": [{"find": "fact", "replace": "note"}],
+    })
+    assert "error" in resp
+
+
+def test_update_silver_rejects_both_patch_and_new_content(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="PROJECTS/alpha", content="summary", layer="silver"))
+
+    resp = _call(mcp, "update_silver", {
+        "path": "PROJECTS/alpha",
+        "new_content": "full rewrite",
+        "patch": [{"find": "summary", "replace": "x"}],
+    })
+    assert "error" in resp
+
+
+def test_update_silver_rejects_neither_patch_nor_new_content(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    store.save_chunk(Chunk(node_path="PROJECTS/alpha", content="summary", layer="silver"))
+
+    resp = _call(mcp, "update_silver", {"path": "PROJECTS/alpha"})
+    assert "error" in resp
+
+
 def test_update_silver_audit_record_has_correct_operation_type(tmp_path):
     """MCP update_silver audit record must have operation_type='update_silver', not two records."""
     mcp, store = _mcp(tmp_path)
