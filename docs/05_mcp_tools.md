@@ -299,9 +299,17 @@ deletion.
 
 Starts a **stateful ingest session** with inline **IRON RULES** (server-enforced). Default `mode=answer_complete`: the document must be answerable from brain alone after ingest — the source file will not exist later.
 
-For PDFs, use `source_path` — the server runs `pdftotext`. For other formats, the agent reads the file and passes `content`. Do not respond to the user until `complete_ingest` succeeds.
+For binary formats (`.pdf`, `.docx`, `.doc`, `.html`, `.htm`, `.odt`), use `source_path` — the server extracts text internally. For plain-text files, the agent reads the file and passes `content`. Passing binary-format content directly is rejected to prevent summarized payloads. Do not respond to the user until `complete_ingest` succeeds.
 
-**answer_complete gates:** `[INVENTORY]` Bronze, Bronze facts, Silver (either `chunk_id` citations or sub-namespace path references), max 25% service chunks skipped, min 50% extracted, `submit_inventory_probes`, and `complete_ingest` storage verification. Inventory probes must satisfy both the minimum submission count and `inventory_coverage ≥90%`.
+**answer_complete gates** (thresholds vary by `depth`): `[INVENTORY]` Bronze, Bronze facts, Silver (either `chunk_id` citations or sub-namespace path references), skip/extracted ratio limits, `submit_inventory_probes`, and `complete_ingest` storage verification. The session header shows the exact thresholds for the chosen depth.
+
+**Depth presets:**
+
+| `depth` | max skip | min extracted | min coverage | min probes |
+|---------|----------|---------------|--------------|------------|
+| `quick` | 50% | 30% | 60% | 0 (optional) |
+| `standard` (default) | 25% | 50% | 90% | 3 |
+| `thorough` | 10% | 75% | 95% | 5 |
 
 **Recommended ingest flow for structured documents:**
 1. Scan `section_header` service chunks → plan sub-namespace map (`SOURCES/{slug}/section-slug/`)
@@ -318,20 +326,22 @@ Source documents are stored under `SOURCES/{slug}`. `authority` is metadata in t
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `mode` | string | `answer_complete` (default) or `routing` |
-| `source_path` | string | Local path to the original file; required for PDFs |
-| `content` | string | Full text content of the attached non-PDF file |
+| `mode` | string | `answer_complete` (default), `routing`, or `audit` |
+| `depth` | string | `quick`, `standard` (default), or `thorough` — sets skip/coverage thresholds |
+| `source_path` | string | Local path to the original file; required for binary formats (`.pdf`, `.docx`, `.doc`, `.html`, `.htm`, `.odt`) |
+| `content` | string | Full text content of the attached plain-text file |
 | `file_name` | string | Original file name, e.g. `MT103.txt`; defaults to `source_path` basename |
 | `expected_sha256` | string | Optional SHA-256 expected for the text payload; mismatches are rejected |
 | `expected_size_bytes` | integer | Optional UTF-8 byte count expected for the text payload; mismatches are rejected |
 | `authority` | string | Issuing authority (e.g. `SWIFT`, `ISO`), stored as metadata |
 | `doc_slug` | string | Short namespace identifier. Defaults to filename without extension |
+| `force` | boolean | Wipe the target namespace (including immutable chunks) and cancel prior sessions before starting (default false) |
 
 ---
 
 ### `submit_inventory_probes`
 
-Before `complete_ingest` in `answer_complete` mode, submit probes that map inventory lines to active Bronze `chunk_id`s. Minimum submission count: `max(3, ceil(30% × inventory lines))`. Completion also requires `inventory_coverage ≥90%`, so most inventories need probes for at least 90% of listed items.
+Before `complete_ingest` in `answer_complete` mode, submit probes that map inventory lines to active Bronze `chunk_id`s. Minimum count and required coverage depend on `depth` — the session header shows the exact thresholds. For `quick` depth, probes are optional. For `standard`, minimum is `max(3, ceil(30% × inventory lines))` with 90% coverage. For `thorough`, minimum is `max(5, ceil(50% × inventory lines))` with 95% coverage. Probes accumulate across calls — re-submitting the same item updates its `chunk_ids`.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -410,8 +420,9 @@ Fetches a URL and starts the **same stateful ingest session** as `ingest_file` (
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `url` | string (required) | `http` or `https` URL to fetch |
-| `mode` | string | `answer_complete` (default) or `routing` |
-| `force` | boolean | Bypass duplicate `content_hash` check |
+| `mode` | string | `answer_complete` (default), `routing`, or `audit` |
+| `depth` | string | `quick`, `standard` (default), or `thorough` — same presets as `ingest_file` |
+| `force` | boolean | Bypass duplicate `content_hash` check and wipe prior namespace |
 | `authority` | string | Issuing authority metadata. Defaults to the URL hostname |
 | `doc_slug` | string | Short namespace identifier. Defaults to the last URL path segment |
 
