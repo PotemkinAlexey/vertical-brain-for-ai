@@ -6,7 +6,6 @@ No external dependencies — pure stdlib.
 from __future__ import annotations
 
 import hashlib
-import html.parser
 import io
 import json
 import os
@@ -438,7 +437,7 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "ingest_file",
         "description": (
-            "Start a stateful ingest session. Prefer source_path for binary files (PDF, DOCX, DOC). "
+            "Start a stateful ingest session. Prefer source_path for binary files (PDF, DOCX, DOC, HTML, ODT). "
             "Returns session_key, numbered service chunks, and an inline IRON RULES protocol. "
             "Default mode answer_complete: server blocks complete_ingest unless the namespace can "
             "answer questions without the source file. Follow every step until complete_ingest succeeds."
@@ -461,8 +460,8 @@ _TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": (
                         "Local path to the original source file. Required for binary formats "
-                        "(.pdf, .docx, .doc) so the server extracts complete text and prevents "
-                        "summarized payloads."
+                        "(.pdf, .docx, .doc, .html, .htm, .odt) so the server extracts complete "
+                        "text and prevents summarized payloads."
                     ),
                 },
                 "content": {
@@ -702,38 +701,7 @@ _TOOLS: list[dict[str, Any]] = [
 _TOOLS_BY_NAME: dict[str, dict[str, Any]] = {tool["name"]: tool for tool in _TOOLS}
 
 
-class _HTMLTextExtractor(html.parser.HTMLParser):
-    """Strip HTML tags and return visible text."""
-
-    _SKIP_TAGS = {"script", "style", "noscript", "head"}
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._parts: list[str] = []
-        self._skip_depth = 0
-
-    def handle_starttag(self, tag: str, attrs: object) -> None:
-        if tag.lower() in self._SKIP_TAGS:
-            self._skip_depth += 1
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag.lower() in self._SKIP_TAGS:
-            self._skip_depth = max(0, self._skip_depth - 1)
-
-    def handle_data(self, data: str) -> None:
-        if self._skip_depth == 0:
-            stripped = data.strip()
-            if stripped:
-                self._parts.append(stripped)
-
-    def get_text(self) -> str:
-        return "\n".join(self._parts)
-
-
-def _strip_html(raw: str) -> str:
-    extractor = _HTMLTextExtractor()
-    extractor.feed(raw)
-    return extractor.get_text()
+from vertical_brain.mcp.extractors.html import strip_html as _strip_html
 
 
 from vertical_brain.mcp.extractors import extract_source_text as _extract_source_text
@@ -1382,7 +1350,7 @@ class VerticalBrainMCP:
             content = args["content"]
             file_name = args["file_name"]
             ext = os.path.splitext(file_name)[1].lower()
-            if ext in {".pdf", ".docx", ".doc"}:
+            if ext in {".pdf", ".docx", ".doc", ".html", ".htm", ".odt"}:
                 raise ValueError(
                     f"{ext} ingestion must use source_path so the server extracts the complete text. "
                     "Passing caller-supplied content for binary formats is rejected to prevent summarized payloads."

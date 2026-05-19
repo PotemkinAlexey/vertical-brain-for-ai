@@ -29,10 +29,18 @@ def extract_source_text(source_path: str) -> tuple[str, str, int]:
         from .docx import extract_doc
         return extract_doc(source_path), source_hash, source_size
 
+    if ext in {".html", ".htm"}:
+        from .html import extract_html
+        return extract_html(source_path), source_hash, source_size
+
+    if ext == ".odt":
+        from .odt import extract_odt
+        return extract_odt(source_path), source_hash, source_size
+
     try:
         return raw.decode("utf-8"), source_hash, source_size
     except UnicodeDecodeError as exc:
         raise ValueError(
             "source_path is not valid UTF-8 text. "
-            "Supported binary formats: .pdf, .docx, .doc"
+            "Supported binary formats: .pdf, .docx, .doc, .html, .htm, .odt"
         ) from exc
