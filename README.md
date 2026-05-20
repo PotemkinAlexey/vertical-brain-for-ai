@@ -200,7 +200,7 @@ Silver is a living document: the agent creates the first summary, then keeps it 
 
 ### MCP tools
 
-The MCP server exposes **27 tools** to agents. Call `session_start` first, then use the groups below. Full parameters: [docs/05_mcp_tools.md](docs/05_mcp_tools.md).
+The MCP server exposes **29 tools** to agents. Call `session_start` first, then use the groups below. Full parameters: [docs/05_mcp_tools.md](docs/05_mcp_tools.md).
 
 | Group | Tools |
 |-------|--------|
@@ -238,7 +238,7 @@ vb --data-dir ./brain --storage-backend json ...
 
 ```bash
 pip install -e .
-.venv/bin/python -m pytest                              # full suite (530 tests)
+.venv/bin/python -m pytest                              # full suite (654 tests)
 .venv/bin/python -m pytest tests/test_operations.py -v  # single file
 ```
 
