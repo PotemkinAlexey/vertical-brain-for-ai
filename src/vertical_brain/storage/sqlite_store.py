@@ -101,6 +101,9 @@ class SQLiteStore(StorageDerivationsMixin):
                 valid_from TEXT NOT NULL DEFAULT '',
                 valid_to TEXT,
                 decay_factor REAL NOT NULL DEFAULT 1.0,
+                access_count INTEGER NOT NULL DEFAULT 0,
+                last_accessed TEXT,
+                last_positive_use TEXT,
                 metadata_json TEXT NOT NULL DEFAULT '{}'
             );
 
@@ -253,6 +256,9 @@ class SQLiteStore(StorageDerivationsMixin):
             "decay_factor": "ALTER TABLE chunks ADD COLUMN decay_factor REAL NOT NULL DEFAULT 1.0",
             "immutable": "ALTER TABLE chunks ADD COLUMN immutable INTEGER NOT NULL DEFAULT 0",
             "metadata_json": "ALTER TABLE chunks ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'",
+            "access_count": "ALTER TABLE chunks ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0",
+            "last_accessed": "ALTER TABLE chunks ADD COLUMN last_accessed TEXT",
+            "last_positive_use": "ALTER TABLE chunks ADD COLUMN last_positive_use TEXT",
         }
         changed = False
         for column, ddl in migrations.items():
@@ -633,13 +639,13 @@ class SQLiteStore(StorageDerivationsMixin):
                 id, node_path, content, layer, content_type, status, source,
                 confidence, lineage_json, created_at, updated_at,
                 chunk_key, content_hash, supersedes, valid_from, valid_to, decay_factor,
-                immutable, metadata_json
+                immutable, access_count, last_accessed, last_positive_use, metadata_json
             )
             VALUES (
                 :id, :node_path, :content, :layer, :content_type, :status, :source,
                 :confidence, :lineage_json, :created_at, :updated_at,
                 :chunk_key, :content_hash, :supersedes, :valid_from, :valid_to, :decay_factor,
-                :immutable, :metadata_json
+                :immutable, :access_count, :last_accessed, :last_positive_use, :metadata_json
             )
             """,
             row,
@@ -693,6 +699,9 @@ class SQLiteStore(StorageDerivationsMixin):
                 valid_to = :valid_to,
                 decay_factor = :decay_factor,
                 immutable = :immutable,
+                access_count = :access_count,
+                last_accessed = :last_accessed,
+                last_positive_use = :last_positive_use,
                 metadata_json = :metadata_json
             WHERE id = :id
             """,
@@ -769,6 +778,34 @@ class SQLiteStore(StorageDerivationsMixin):
             WHERE path IN ({placeholders})
             """,
             (utc_now(), *paths),
+        )
+        self._commit_if_needed()
+
+    def bump_chunk_access(self, chunk_ids: list[str], accessed_at: str) -> None:
+        """Step 3 usage telemetry: increment access_count and refresh
+        last_accessed for each chunk in *chunk_ids* in a single UPDATE.
+
+        Unknown ids are silently ignored (no row matches). Pass `utc_now()`
+        as *accessed_at* unless replaying historical reads. Callers are
+        the read-path handlers in `mcp/server.py`; user-facing read tools
+        should bump exactly the chunk_ids they returned in their response.
+        """
+        if not chunk_ids:
+            return
+        # De-duplicate within a single response so one merged hit isn't
+        # double-counted just because it surfaced in two places (e.g.
+        # `candidate_handles` + `locked_contexts.items` in context_search).
+        deduped = list({cid for cid in chunk_ids if cid})
+        if not deduped:
+            return
+        placeholders = ",".join("?" for _ in deduped)
+        self.conn.execute(
+            f"""
+            UPDATE chunks
+            SET access_count = access_count + 1, last_accessed = ?
+            WHERE id IN ({placeholders})
+            """,
+            (accessed_at, *deduped),
         )
         self._commit_if_needed()
 

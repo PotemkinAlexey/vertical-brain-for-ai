@@ -212,6 +212,25 @@ class JsonStore(StorageDerivationsMixin):
         if changed:
             self._write(self.nodes_file, nodes)
 
+    def bump_chunk_access(self, chunk_ids: list[str], accessed_at: str) -> None:
+        """Step 3 usage telemetry — see SQLiteStore.bump_chunk_access. JSON
+        backend is dev/debug only so this is a load-mutate-write loop, not
+        an atomic UPDATE."""
+        if not chunk_ids:
+            return
+        target = {cid for cid in chunk_ids if cid}
+        if not target:
+            return
+        chunks = self._read(self.chunks_file)
+        changed = False
+        for row in chunks:
+            if row.get("id") in target:
+                row["access_count"] = int(row.get("access_count") or 0) + 1
+                row["last_accessed"] = accessed_at
+                changed = True
+        if changed:
+            self._write(self.chunks_file, chunks)
+
     def get_chunk(self, chunk_id: str) -> Chunk | None:
         row = next((r for r in self._read(self.chunks_file) if r["id"] == chunk_id), None)
         return self._chunk_from_row(row) if row is not None else None
@@ -225,6 +244,7 @@ class JsonStore(StorageDerivationsMixin):
             "confidence", "lineage", "id", "created_at", "updated_at",
             "chunk_key", "content_hash", "supersedes", "valid_from", "valid_to",
             "decay_factor", "immutable", "metadata",
+            "access_count", "last_accessed", "last_positive_use",
         }
         data = {k: v for k, v in row.items() if k in known}
         data.setdefault("chunk_key", None)
@@ -234,6 +254,9 @@ class JsonStore(StorageDerivationsMixin):
         data.setdefault("valid_to", None)
         data.setdefault("decay_factor", 1.0)
         data.setdefault("immutable", False)
+        data.setdefault("access_count", 0)
+        data.setdefault("last_accessed", None)
+        data.setdefault("last_positive_use", None)
         metadata = data.get("metadata")
         data["metadata"] = metadata if isinstance(metadata, dict) else {}
         return Chunk(**data)

@@ -19,7 +19,7 @@ from vertical_brain.core.context_session import ContextSession
 from vertical_brain.core.embedding_router import EmbeddingRouter
 from vertical_brain.core.embedding_search import EmbeddingSearch
 from vertical_brain.core.json_schema import format_json_schema_errors, validate_json_schema
-from vertical_brain.core.models import ChunkInput, LinkInput, StorageOperation, StorageOperationBatch
+from vertical_brain.core.models import ChunkInput, LinkInput, StorageOperation, StorageOperationBatch, utc_now
 from vertical_brain.core.operations import StorageOperationExecutor
 from vertical_brain.core.search import BrainSearch
 from vertical_brain.llm.embedding import EmbeddingProvider, MockEmbeddingProvider
@@ -38,6 +38,25 @@ from vertical_brain.mcp.tools import _TOOLS, _TOOLS_BY_NAME, root_path_from_args
 
 _PROTOCOL_VERSION = "2025-03-26"
 _SERVER_VERSION = "0.1.0"
+
+
+def _chunk_ids_from_search_context(result: Any) -> list[str]:
+    """Collect chunk_ids surfaced by a `SearchContextResult` for Step 3
+    usage telemetry. Pulls from both `candidate_handles` (ranked results)
+    and `locked_contexts[*].items` (full content shown to the caller).
+    `bump_chunk_access` dedupes so an id appearing in both is bumped once.
+    """
+    ids: list[str] = []
+    for handle in getattr(result, "candidate_handles", None) or []:
+        cid = getattr(handle, "chunk_id", None)
+        if cid:
+            ids.append(cid)
+    for ctx in getattr(result, "locked_contexts", None) or []:
+        for item in getattr(ctx, "items", None) or []:
+            cid = getattr(item, "chunk_id", None)
+            if cid:
+                ids.append(cid)
+    return ids
 
 
 class ToolAccessDenied(Exception):
@@ -161,6 +180,25 @@ class VerticalBrainMCP(_IngestHandlers):
         """
         return None
 
+    def _bump_chunk_reads(self, chunk_ids: Any) -> None:
+        """Step 3 usage telemetry hook.
+
+        Increment `access_count` and refresh `last_accessed` for each chunk
+        id surfaced by a read-tool response. Backends without
+        `bump_chunk_access` (e.g. minimal test doubles) are skipped silently
+        — telemetry must never break the read path. Same rule for any
+        storage-side exception: log nothing, swallow, return.
+        """
+        bumper = getattr(self._store, "bump_chunk_access", None)
+        if not callable(bumper):
+            return
+        try:
+            ids = [cid for cid in chunk_ids if cid]
+            if ids:
+                bumper(ids, utc_now())
+        except Exception:
+            pass
+
     @staticmethod
     def _reply(req_id: Any, result: Any) -> dict[str, Any]:
         return {"jsonrpc": "2.0", "id": req_id, "result": result}
@@ -261,6 +299,7 @@ class VerticalBrainMCP(_IngestHandlers):
                 chunks = [c for c in chunks if c.status == "active"]
             if "layer" in args:
                 chunks = [c for c in chunks if c.layer == args["layer"]]
+            self._bump_chunk_reads([c.id for c in chunks])
             return json.dumps([
                 {"id": c.id, "layer": c.layer, "content_type": c.content_type,
                  "status": c.status, "source": c.source, "confidence": c.confidence,
@@ -275,6 +314,7 @@ class VerticalBrainMCP(_IngestHandlers):
                 return json.dumps(None)
             if chunk.status != "active" and not args.get("include_stale", False):
                 return json.dumps(None)
+            self._bump_chunk_reads([chunk.id])
             return json.dumps({
                 "chunk_id": chunk.id,
                 "path": chunk.node_path,
@@ -339,6 +379,11 @@ class VerticalBrainMCP(_IngestHandlers):
             hint = read_context_next_hint(args["path"], confidence, semantic=semantic)
             if hint:
                 payload["next_hint"] = hint
+            # Bump usage for the single-chunk items returned (Gold aggregates
+            # have chunk_id=None and are skipped). Step 3 / D.b decision.
+            self._bump_chunk_reads(
+                item.chunk_id for item in locked.items if item.chunk_id
+            )
             return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
         # ── Search ──────────────────────────────────────────────────────
@@ -387,6 +432,7 @@ class VerticalBrainMCP(_IngestHandlers):
                 include_ancestors=args.get("include_ancestors", True),
                 chunk_filter=self._current_chunk_filter(),
             )
+            self._bump_chunk_reads(_chunk_ids_from_search_context(result))
             return result.to_json()
 
         if name == "context_search_semantic":
@@ -402,6 +448,7 @@ class VerticalBrainMCP(_IngestHandlers):
                 reranker=self._reranker,
                 chunk_filter=self._current_chunk_filter(),
             )
+            self._bump_chunk_reads(_chunk_ids_from_search_context(result))
             return result.to_json()
 
         if name == "route":

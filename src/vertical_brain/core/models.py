@@ -105,6 +105,16 @@ class Chunk:
     valid_to: str | None = None
     decay_factor: float = 1.0
     immutable: bool = False
+    # Step 3 usage telemetry: counters bumped by the read path so that
+    # promotion decisions (Bronze→Silver→Gold) and Step 4 reputation
+    # scoring can use observed usefulness instead of operator intuition.
+    # `access_count` and `last_accessed` are updated on every read that
+    # surfaces this chunk's id via `bump_chunk_access`. `last_positive_use`
+    # is reserved for Step 4 — wired from the Birch resonance-feedback
+    # path; Step 3 only ships the column.
+    access_count: int = 0
+    last_accessed: str | None = None
+    last_positive_use: str | None = None
     # v1.12 extension slot for enterprise (classification, tenant_id, retention
     # policy id, geo zone, source-system record id, etc.). The open core does
     # not read or interpret these fields — they survive write/read round-trips
