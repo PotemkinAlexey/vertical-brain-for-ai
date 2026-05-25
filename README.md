@@ -256,6 +256,17 @@ pip install -e .
 
 ---
 
+## See also
+
+**[MemoryBricks](https://github.com/PotemkinAlexey/memorybricks)** —
+umbrella architecture combining Vertical Brain (this repo, the
+*governance* layer) with [Birch Rings Memory](https://github.com/PotemkinAlexey/birch_rings_memory)
+(dynamics layer: resonance, decay, reputation-weighted retrieval)
+under a unified MCP surface. Pattern is documented in the
+MemoryBricks [`STRUCTURED_LIVING_MEMORY.md`](https://github.com/PotemkinAlexey/memorybricks/blob/main/docs/STRUCTURED_LIVING_MEMORY.md).
+
+---
+
 ## Advanced: manual CLI operations
 
 For scripting, debugging, or batch imports. Most users will never need this.
