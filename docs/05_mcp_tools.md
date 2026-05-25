@@ -46,6 +46,17 @@ List all chunks at a namespace path. Returns full content. Use this to read what
 
 ---
 
+### `get_chunk`
+
+Read one chunk by `chunk_id` without an ingest session. Returns full content + metadata (`chunk_id`, `path`, `layer`, `content_type`, `status`, `source`, `confidence`, `content`, `created_at`). Use this to resolve cross-references — e.g. a Birch fact whose `object` is a VB `chunk_id` (see Birch AGENTS.md). Returns `null` for unknown ids or for stale chunks unless `include_stale=true`.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `chunk_id` | string | **required** Chunk id (UUID) |
+| `include_stale` | boolean | Return stale chunks too (default false) |
+
+---
+
 ### `read_context`
 
 Open a locked context capsule for a namespace path. Returns chunk content (Gold → Silver → Bronze priority), ancestor Gold summaries, and link handles. Budget-capped to prevent context overflow. Each single-chunk item carries its `chunk_id` (Gold items are aggregated from several chunks and have `chunk_id: null`) — read the Silver item's `chunk_id` here to pass as `current_silver_id` to `update_silver`.

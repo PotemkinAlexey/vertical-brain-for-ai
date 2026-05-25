@@ -63,6 +63,27 @@ _TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "get_chunk",
+        "description": (
+            "Read one chunk by chunk_id without an ingest session. "
+            "Returns full content + metadata (chunk_id, path, layer, "
+            "content_type, status, source, confidence, content, "
+            "created_at). Skips stale chunks by default; set "
+            "`include_stale=true` to include them. Returns null when no "
+            "chunk has that id (or when it is stale and include_stale is "
+            "false). Pair with Birch's `fact.object = chunk_id` "
+            "convention to resolve cross-references."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "chunk_id": {"type": "string"},
+                "include_stale": {"type": "boolean"},
+            },
+            "required": ["chunk_id"],
+        },
+    },
+    {
         "name": "read_context",
         "description": (
             "Open a locked context capsule for a namespace path. "

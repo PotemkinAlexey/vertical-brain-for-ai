@@ -76,7 +76,7 @@ def test_tools_list_contains_expected_tools(tmp_path):
     resp = mcp.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     names = {t["name"] for t in resp["result"]["tools"]}
     assert names == {
-        "session_start", "namespace_map", "list_chunks", "read_context",
+        "session_start", "namespace_map", "list_chunks", "get_chunk", "read_context",
         "search", "search_semantic", "context_search", "context_search_semantic",
         "route", "append_chunk", "append_gold_aspect", "create_link",
         "mark_stale", "batch_append", "session_end", "update_silver", "optimize",
@@ -488,6 +488,57 @@ def test_list_chunks_filter_by_layer(tmp_path):
 
     assert len(chunks) == 1
     assert chunks[0]["layer"] == "gold"
+
+
+def test_get_chunk_returns_single_chunk(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    saved = store.save_chunk(
+        Chunk(node_path="WORK/DataArt", content="Delta Lake fact", layer="silver")
+    )
+
+    resp = _call(mcp, "get_chunk", {"chunk_id": saved.id})
+    payload = json.loads(_text(resp))
+
+    assert payload is not None
+    assert payload["chunk_id"] == saved.id
+    assert payload["path"] == "WORK/DataArt"
+    assert payload["content"] == "Delta Lake fact"
+    assert payload["layer"] == "silver"
+    assert payload["status"] == "active"
+
+
+def test_get_chunk_unknown_id_returns_null(tmp_path):
+    mcp, _store = _mcp(tmp_path)
+
+    resp = _call(mcp, "get_chunk", {"chunk_id": "00000000-0000-0000-0000-000000000000"})
+
+    assert json.loads(_text(resp)) is None
+
+
+def test_get_chunk_skips_stale_by_default(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    saved = store.save_chunk(
+        Chunk(node_path="WORK/DataArt", content="stale body", status="stale")
+    )
+
+    resp = _call(mcp, "get_chunk", {"chunk_id": saved.id})
+
+    assert json.loads(_text(resp)) is None
+
+
+def test_get_chunk_include_stale_returns_stale_chunk(tmp_path):
+    mcp, store = _mcp(tmp_path)
+    saved = store.save_chunk(
+        Chunk(node_path="WORK/DataArt", content="stale body", status="stale")
+    )
+
+    resp = _call(mcp, "get_chunk", {"chunk_id": saved.id, "include_stale": True})
+    payload = json.loads(_text(resp))
+
+    assert payload is not None
+    assert payload["chunk_id"] == saved.id
+    assert payload["status"] == "stale"
+    assert payload["content"] == "stale body"
 
 
 def test_read_context_returns_chunks_and_links(tmp_path):

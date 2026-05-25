@@ -269,6 +269,26 @@ class VerticalBrainMCP(_IngestHandlers):
                 for c in chunks
             ], ensure_ascii=False, indent=2)
 
+        if name == "get_chunk":
+            chunk = self._store.get_chunk(args["chunk_id"])  # type: ignore[attr-defined]
+            if chunk is None:
+                return json.dumps(None)
+            if chunk.status != "active" and not args.get("include_stale", False):
+                return json.dumps(None)
+            return json.dumps({
+                "chunk_id": chunk.id,
+                "path": chunk.node_path,
+                "layer": chunk.layer,
+                "content_type": chunk.content_type,
+                "status": chunk.status,
+                "source": chunk.source,
+                "confidence": chunk.confidence,
+                "content": chunk.content,
+                "created_at": chunk.created_at.isoformat()
+                if hasattr(chunk.created_at, "isoformat")
+                else str(chunk.created_at),
+            }, ensure_ascii=False, indent=2)
+
         if name == "read_context":
             from vertical_brain.core.context_lock import ContextLock
             from vertical_brain.core.models import ContextBudget, ContextPolicy
