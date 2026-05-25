@@ -265,6 +265,12 @@ umbrella architecture combining Vertical Brain (this repo, the
 under a unified MCP surface. Pattern is documented in the
 MemoryBricks [`STRUCTURED_LIVING_MEMORY.md`](https://github.com/PotemkinAlexey/memorybricks/blob/main/docs/STRUCTURED_LIVING_MEMORY.md).
 
+To talk to both backends from one MCP client, install
+[`memorybricks-mcp`](https://github.com/PotemkinAlexey/memorybricks/tree/main/packages/memorybricks-mcp) —
+it spawns the VB server (this repo) and `birch-mcp` as children and
+exposes `recall` / `remember` / `forget` that route between chunks and
+facts in one call. The native VB tools above stay available alongside.
+
 ---
 
 ## Advanced: manual CLI operations
