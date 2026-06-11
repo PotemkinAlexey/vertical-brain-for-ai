@@ -68,6 +68,39 @@ def test_doctor_finds_duplicate_active_chunks_by_hash(tmp_path):
     assert any(i.check == "duplicate_active_chunk" for i in issues)
 
 
+def test_doctor_allows_reference_content_type(tmp_path):
+    store = JsonStore(tmp_path)
+    store.ensure_node("WORK/A")
+    store.save_chunk(Chunk(
+        node_path="WORK/A",
+        content="normative reference",
+        content_type="reference",
+    ))
+
+    issues = Doctor(store).run()
+
+    assert not any(i.check == "invalid_chunk_field" for i in issues)
+
+
+def test_doctor_allows_same_content_across_bronze_and_silver(tmp_path):
+    store = JsonStore(tmp_path)
+    store.ensure_node("WORK/A")
+    store.save_chunk(Chunk(
+        node_path="WORK/A",
+        content="same text",
+        layer="bronze",
+    ))
+    store.save_chunk(Chunk(
+        node_path="WORK/A",
+        content="same text",
+        layer="silver",
+    ))
+
+    issues = Doctor(store).run()
+
+    assert not any(i.check == "duplicate_active_chunk" for i in issues)
+
+
 def test_doctor_warns_on_multiple_active_silver_chunks(tmp_path):
     store = JsonStore(tmp_path)
     store.ensure_node("WORK/A")
@@ -142,6 +175,21 @@ def test_doctor_no_fts_stale_leak_when_index_is_clean(tmp_path):
     store.save_chunk(Chunk(node_path="WORK/A", content="active fact"))
     issues = Doctor(store).run()
     assert not any(i.check == "fts_stale_leak" for i in issues)
+
+
+def test_rebuild_search_index_syncs_inactive_chunk_fts_status(tmp_path):
+    store = SQLiteStore(tmp_path)
+    chunk = store.save_chunk(Chunk(node_path="WORK/A", content="old fact"))
+    store.conn.execute(
+        "UPDATE chunks SET status = 'stale' WHERE id = ?", (chunk.id,)
+    )
+    store.conn.commit()
+
+    store.rebuild_search_index()
+
+    issues = Doctor(store).run()
+    assert not any(i.check == "fts_stale_leak" for i in issues)
+    assert store.search("old fact", include_stale=True)
 
 
 # ── Item 3: Doctor duplicate detection with content_hash-or-content fallback ──
