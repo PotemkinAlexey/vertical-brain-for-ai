@@ -29,7 +29,8 @@ _SPLIT_CLUSTER_THRESHOLD = 0.5
 
 _VALID_LAYERS = {"bronze", "silver", "gold"}
 _VALID_CONTENT_TYPES = {
-    "fact", "correction", "decision", "question", "note", "code", "artifact",
+    "fact", "reference", "correction", "decision", "question", "note", "code",
+    "artifact",
 }
 _VALID_STATUSES = {
     "active", "stale", "legacy", "superseded", "contradicted", "uncertain",
@@ -109,13 +110,15 @@ class Doctor:
 
     def _check_duplicate_active_chunks_by_hash(self) -> list[DoctorIssue]:
         issues: list[DoctorIssue] = []
-        by_key: dict[tuple[str, str], list[str]] = defaultdict(list)
+        by_key: dict[tuple[str, str, str], list[str]] = defaultdict(list)
         for chunk in self._store.list_chunks():
             if chunk.status != "active":
                 continue
             dedup_key = chunk.content_hash or chunk.content
-            by_key[(chunk.node_path, dedup_key)].append(chunk.id)
-        for (path, _key), chunk_ids in by_key.items():
+            # Bronze evidence and Silver summary can intentionally have the same
+            # text. Only same-layer duplicates are redundant active chunks.
+            by_key[(chunk.node_path, chunk.layer, dedup_key)].append(chunk.id)
+        for (path, _layer, _key), chunk_ids in by_key.items():
             if len(chunk_ids) > 1:
                 issues.append(DoctorIssue(
                     severity="warning",
@@ -235,17 +238,20 @@ class Doctor:
         issues: list[DoctorIssue] = []
         rows = conn.execute(
             """
-            SELECT s.record_id, c.status
+            SELECT s.record_id, s.status AS index_status, c.status AS chunk_status
             FROM search_index s
             JOIN chunks c ON s.record_id = c.id
-            WHERE s.record_type = 'chunk' AND c.status != 'active'
+            WHERE s.record_type = 'chunk' AND s.status != c.status
             """
         ).fetchall()
         for row in rows:
             issues.append(DoctorIssue(
                 severity="warning",
                 check="fts_stale_leak",
-                message=f"chunk {row[0]} has status '{row[1]}' but is still in the FTS search index",
+                message=(
+                    f"chunk {row[0]} has status '{row['chunk_status']}' "
+                    f"but FTS index stores '{row['index_status']}'"
+                ),
                 path=None,
             ))
         return issues
